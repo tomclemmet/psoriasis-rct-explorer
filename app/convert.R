@@ -93,6 +93,7 @@ WITH
            MAX(N)                                   AS n
     FROM   tblIntraData
     WHERE  OutcomeID IN (36, 13, 14, 38)
+      AND  COALESCE(SubgroupID, 0) = 0
     GROUP BY RefID, ArmNo, TimePeriod
   )
 SELECT

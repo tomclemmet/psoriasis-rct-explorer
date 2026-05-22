@@ -148,7 +148,9 @@ section(
     SELECT RefID AS ref_id, ArmNo AS arm_no, TimePeriod AS timepoint,
            MIN(N) AS n_min, MAX(N) AS n_max, COUNT(DISTINCT N) AS distinct_n
     FROM   tblIntraData
-    WHERE  OutcomeID IN (36, 13, 14, 38) AND N IS NOT NULL
+    WHERE  OutcomeID IN (36, 13, 14, 38)
+      AND  COALESCE(SubgroupID, 0) = 0
+      AND  N IS NOT NULL
     GROUP  BY RefID, ArmNo, TimePeriod
     HAVING COUNT(DISTINCT N) > 1
     ORDER BY ref_id, arm_no, timepoint
