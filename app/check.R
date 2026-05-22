@@ -10,15 +10,38 @@ suppressPackageStartupMessages({
   library(RSQLite)
 })
 
-args <- commandArgs(trailingOnly = FALSE)
-file_arg <- sub("^--file=", "", grep("^--file=", args, value = TRUE))
-script_path <- if (length(file_arg)) file_arg else "app/check.R"
-here     <- normalizePath(dirname(script_path), mustWork = TRUE)
-sqlite_p <- file.path(here, "revpal.sqlite")
-if (!file.exists(sqlite_p)) stop("revpal.sqlite not found - run convert.R first.")
+# Find this script's directory whether invoked via Rscript, source(), or
+# RStudio's Source button.
+find_script_dir <- function() {
+  args <- commandArgs(trailingOnly = FALSE)
+  fa <- sub("^--file=", "", grep("^--file=", args, value = TRUE))
+  if (length(fa)) return(dirname(normalizePath(fa[1], mustWork = FALSE)))
+  for (i in seq_along(sys.frames())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of)) return(dirname(normalizePath(of, mustWork = FALSE)))
+  }
+  if (requireNamespace("rstudioapi", quietly = TRUE) &&
+      rstudioapi::isAvailable()) {
+    p <- tryCatch(rstudioapi::getSourceEditorContext()$path,
+                  error = function(e) "")
+    if (nzchar(p)) return(dirname(normalizePath(p, mustWork = FALSE)))
+  }
+  NULL
+}
+
+here <- find_script_dir()
+sqlite_p <- NULL
+for (cand in c(
+  if (!is.null(here)) file.path(here, "revpal.sqlite"),
+  "app/revpal.sqlite",
+  "revpal.sqlite"
+)) {
+  if (file.exists(cand)) { sqlite_p <- normalizePath(cand); break }
+}
+if (is.null(sqlite_p))
+  stop("revpal.sqlite not found - run convert.R first.")
 
 con <- dbConnect(SQLite(), sqlite_p, flags = SQLITE_RO)
-on.exit(dbDisconnect(con), add = TRUE)
 
 options(width = 200)
 
@@ -229,4 +252,6 @@ section(
   max_rows = 20
 )
 
+dbDisconnect(con)
 cat("\nDone.\n")
+invisible(NULL)
