@@ -31,6 +31,12 @@ search/sort bar across the top.
 
 In this schema responders are stored in column **`k`** (not `TP`) for binary outcomes.
 
+## Cloning the repo
+
+The source Access database (`RevPal.accdb`) and the generated `revpal.sqlite`
+are both git-ignored. After cloning, drop your own `RevPal.accdb` into the
+project root and run `convert.R` (see below) to regenerate the SQLite file.
+
 ## One-time setup
 
 R 4.5 already has `shiny`, `DBI`, `RSQLite`, `odbc`, `dplyr` installed. The app
