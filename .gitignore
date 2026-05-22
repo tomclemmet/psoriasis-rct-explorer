@@ -1,0 +1,21 @@
+# Data — too large / sensitive to commit
+*.accdb
+*.mdb
+*.sqlite
+*.sqlite3
+*.db
+
+# R
+.Rhistory
+.Rapp.history
+.RData
+.Rproj.user/
+*.Rproj
+.Renviron
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
