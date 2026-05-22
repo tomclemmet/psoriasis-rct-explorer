@@ -1,7 +1,9 @@
-# RevPal PASI explorer
+# RevPal endpoint explorer
 
-A small R/Shiny app over a SQLite copy of `RevPal.accdb`. Shows one row per
-study arm × PASI timepoint, with a multi-select **Drug** filter.
+A small R/Shiny app over a SQLite copy of `RevPal.accdb`. Tabs for PASI
+thresholds, absolute PASI, DLQI, and safety endpoints — one row per study
+arm × timepoint in each, with a multi-select **Drug** filter that applies
+across tabs.
 
 ## Layout
 
@@ -17,10 +19,11 @@ study arm × PASI timepoint, with a multi-select **Drug** filter.
 ```
 
 `convert.R` copies the real `tbl*` source tables out of Access (dropping the
-many `qry*` views and scratch tables) and builds a flat **`v_pasi`** table
-keyed on `(ref_id, arm_no, timepoint)`.
+many `qry*` views and scratch tables) and builds four flat **`v_*`** tables,
+each keyed on `(ref_id, arm_no, timepoint)` and restricted to
+`SubgroupID = 0` (main arms only).
 
-## `v_pasi` columns
+All four views share the same context columns:
 
 | column     | source                                                       |
 |------------|--------------------------------------------------------------|
@@ -32,13 +35,36 @@ keyed on `(ref_id, arm_no, timepoint)`.
 | `dose`     | `CatID 58` (amount, numeric) + `CatID 59` (unit, lookup)     |
 | `timepoint`| `tblIntraData.TimePeriod` (numeric)                          |
 | `timepoint_unit` | `tblLongitudinalDataDefs.Unit` → `tblLongitudinalUnitDefs.strUnit` (usually `wk`, occasionally `mo`) |
-| `n`        | arm denominator (max `tblIntraData.N` across the four PASI outcomes for that timepoint) |
-| `pasi50`   | `tblIntraData.k` where `OutcomeID = 36`                      |
-| `pasi75`   | `tblIntraData.k` where `OutcomeID = 13`                      |
-| `pasi90`   | `tblIntraData.k` where `OutcomeID = 14`                      |
-| `pasi100`  | `tblIntraData.k` where `OutcomeID = 38`                      |
+| `n`        | arm denominator (max `tblIntraData.N` across the included outcomes for that timepoint) |
+
+### `v_pasi` — PASI threshold responders (binary)
+
+| column    | OutcomeID | meaning                       |
+|-----------|-----------|-------------------------------|
+| `pasi50`  | 36        | `tblIntraData.k`              |
+| `pasi75`  | 13        | `tblIntraData.k`              |
+| `pasi90`  | 14        | `tblIntraData.k`              |
+| `pasi100` | 38        | `tblIntraData.k`              |
 
 In this schema responders are stored in column **`k`** (not `TP`) for binary outcomes.
+
+### `v_pasi_abs` — absolute PASI score (continuous)
+
+Pivots OutcomeID 46 (Absolute PASI) and 34 (Absolute PASI change from
+baseline). Carries `_mean`, `_sd`, and `_median` for each; the app renders
+`mean (SD)`.
+
+### `v_dlqi` — DLQI endpoints (mixed)
+
+Binary columns (k responders): `dlqi_0_1` (id 41), `dlqi_0` (51),
+`dlqi_5pt_dec` (35), `dlqi_4pt_dec` (50), `dlqi_le5` (112). Continuous
+columns: `abs_dlqi_*` (id 43), `abs_dlqi_change_*` (id 56).
+
+### `v_safety` — safety outcomes (binary)
+
+`sae` (id 20), `disc_any` (48), `disc_ae` (37), `serious_infection` (23),
+`injection_site_rxn` (21), `malignancy` (96), `nmsc` (24),
+`malignancy_non_nmsc` (25).
 
 ## Cloning the repo
 

@@ -21,6 +21,23 @@ drugs <- read_db(
   "SELECT DISTINCT drug FROM v_pasi WHERE drug IS NOT NULL AND drug != '' ORDER BY drug"
 )$drug
 
+# SELECT every column from one of the v_* tables, optionally filtered by a
+# multi-value drug list. Each view always carries the shared id columns
+# (trial, drug, dose, timepoint, timepoint_unit, n) plus its own endpoint
+# columns, so callers can just `SELECT *` and trust the schema.
+query_view <- function(table, drugs) {
+  if (length(drugs)) {
+    ph <- paste(rep("?", length(drugs)), collapse = ", ")
+    read_db(
+      sprintf("SELECT * FROM %s WHERE drug IN (%s)
+               ORDER BY trial, arm_no, timepoint", table, ph),
+      params = as.list(drugs)
+    )
+  } else {
+    read_db(sprintf("SELECT * FROM %s ORDER BY trial, arm_no, timepoint", table))
+  }
+}
+
 # "8 (10%)"; blank if responder count missing.
 fmt_pasi <- function(k, n) {
   out <- rep("", length(k))
@@ -30,8 +47,89 @@ fmt_pasi <- function(k, n) {
   out
 }
 
+# "12.3 (4.5)"; blank if mean missing. SD optional - prints "12.3" if NA.
+fmt_mean_sd <- function(mean, sd, digits = 1) {
+  out <- rep("", length(mean))
+  ok  <- !is.na(mean)
+  m   <- formatC(mean[ok], format = "f", digits = digits)
+  s   <- ifelse(is.na(sd[ok]), "",
+                sprintf(" (%s)", formatC(sd[ok], format = "f", digits = digits)))
+  out[ok] <- paste0(m, s)
+  out
+}
+
+# "12 wks" / "3 mo" from numeric timepoint + unit code.
+fmt_timepoint <- function(timepoint, unit) {
+  unit_lbl <- ifelse(unit == "wk", "wks", unit)
+  ifelse(is.na(timepoint), "", paste(timepoint, unit_lbl))
+}
+
+# Build a `view` reactive that pulls the right table for the current drug
+# filter and runs `format_fn` (which knows how to render endpoint columns).
+make_view <- function(table, format_fn) {
+  function(input) {
+    df <- query_view(table, input$drug)
+    df$timepoint <- fmt_timepoint(df$timepoint, df$timepoint_unit)
+    df$timepoint_unit <- NULL
+    format_fn(df)
+  }
+}
+
+# Per-view formatters: format endpoint columns and drop helper columns.
+format_pasi <- function(df) {
+  for (col in c("pasi50", "pasi75", "pasi90", "pasi100"))
+    df[[col]] <- fmt_pasi(df[[col]], df$n)
+  df[, c("trial", "drug", "dose", "timepoint", "n",
+         "pasi50", "pasi75", "pasi90", "pasi100")]
+}
+
+format_pasi_abs <- function(df) {
+  df$abs_pasi        <- fmt_mean_sd(df$abs_pasi_mean,        df$abs_pasi_sd)
+  df$abs_pasi_change <- fmt_mean_sd(df$abs_pasi_change_mean, df$abs_pasi_change_sd)
+  df[, c("trial", "drug", "dose", "timepoint", "n",
+         "abs_pasi", "abs_pasi_change")]
+}
+
+format_dlqi <- function(df) {
+  for (col in c("dlqi_0_1", "dlqi_0", "dlqi_5pt_dec", "dlqi_4pt_dec", "dlqi_le5"))
+    df[[col]] <- fmt_pasi(df[[col]], df$n)
+  df$abs_dlqi        <- fmt_mean_sd(df$abs_dlqi_mean,        df$abs_dlqi_sd)
+  df$abs_dlqi_change <- fmt_mean_sd(df$abs_dlqi_change_mean, df$abs_dlqi_change_sd)
+  df[, c("trial", "drug", "dose", "timepoint", "n",
+         "dlqi_0_1", "dlqi_0", "dlqi_5pt_dec", "dlqi_4pt_dec", "dlqi_le5",
+         "abs_dlqi", "abs_dlqi_change")]
+}
+
+format_safety <- function(df) {
+  binary_cols <- c("sae", "disc_any", "disc_ae", "serious_infection",
+                   "injection_site_rxn", "malignancy", "nmsc",
+                   "malignancy_non_nmsc")
+  for (col in binary_cols) df[[col]] <- fmt_pasi(df[[col]], df$n)
+  df[, c("trial", "drug", "dose", "timepoint", "n", binary_cols)]
+}
+
+render_view <- function(df_fn, colnames) {
+  renderDT({
+    df <- df_fn()
+    n_endpoint_cols <- ncol(df) - 5  # trial, drug, dose, timepoint, n are first 5
+    datatable(
+      df,
+      rownames = FALSE,
+      filter   = "none",
+      options  = list(
+        pageLength = 25,
+        autoWidth  = TRUE,
+        dom        = "tip",
+        columnDefs = list(list(className = "dt-right",
+                               targets = 3:(4 + n_endpoint_cols)))
+      ),
+      colnames = colnames
+    )
+  })
+}
+
 ui <- fluidPage(
-  titlePanel("RevPal PASI explorer"),
+  titlePanel("RevPal endpoint explorer"),
   sidebarLayout(
     sidebarPanel(
       width = 3,
@@ -40,63 +138,46 @@ ui <- fluidPage(
                      selected = NULL,
                      multiple = TRUE,
                      options  = list(placeholder = "(all drugs)")),
-      helpText("One row per study arm × timepoint. PASI cells show",
-               "n (% of arm N).")
+      helpText("One row per study arm × timepoint. Binary cells show",
+               "n (% of arm N); continuous cells show mean (SD).")
     ),
     mainPanel(
       width = 9,
-      DTOutput("tbl")
+      tabsetPanel(
+        id   = "view",
+        type = "tabs",
+        tabPanel("PASI thresholds", DTOutput("tbl_pasi")),
+        tabPanel("Absolute PASI",   DTOutput("tbl_abs")),
+        tabPanel("DLQI",            DTOutput("tbl_dlqi")),
+        tabPanel("Safety",          DTOutput("tbl_safety"))
+      )
     )
   )
 )
 
 server <- function(input, output, session) {
-  data <- reactive({
-    if (length(input$drug)) {
-      ph <- paste(rep("?", length(input$drug)), collapse = ", ")
-      df <- read_db(
-        sprintf("SELECT trial, drug, dose, timepoint, timepoint_unit, n,
-                        pasi50, pasi75, pasi90, pasi100
-                 FROM v_pasi
-                 WHERE drug IN (%s)
-                 ORDER BY trial, arm_no, timepoint", ph),
-        params = as.list(input$drug)
-      )
-    } else {
-      df <- read_db(
-        "SELECT trial, drug, dose, timepoint, timepoint_unit, n,
-                pasi50, pasi75, pasi90, pasi100
-         FROM v_pasi
-         ORDER BY trial, arm_no, timepoint"
-      )
-    }
-    df$pasi50  <- fmt_pasi(df$pasi50,  df$n)
-    df$pasi75  <- fmt_pasi(df$pasi75,  df$n)
-    df$pasi90  <- fmt_pasi(df$pasi90,  df$n)
-    df$pasi100 <- fmt_pasi(df$pasi100, df$n)
-    # "12 wks", "3 mo"; pluralise weeks but not months.
-    unit_lbl <- ifelse(df$timepoint_unit == "wk", "wks", df$timepoint_unit)
-    df$timepoint <- ifelse(is.na(df$timepoint), "",
-                           paste(df$timepoint, unit_lbl))
-    df$timepoint_unit <- NULL
-    df
-  })
+  data_pasi   <- reactive(make_view("v_pasi",     format_pasi)(input))
+  data_abs    <- reactive(make_view("v_pasi_abs", format_pasi_abs)(input))
+  data_dlqi   <- reactive(make_view("v_dlqi",     format_dlqi)(input))
+  data_safety <- reactive(make_view("v_safety",   format_safety)(input))
 
-  output$tbl <- renderDT({
-    datatable(
-      data(),
-      rownames = FALSE,
-      filter   = "none",
-      options  = list(
-        pageLength = 25,
-        autoWidth  = TRUE,
-        dom        = "tip",   # table + info + pagination only (no search box)
-        columnDefs = list(list(className = "dt-right", targets = 3:8))
-      ),
-      colnames = c("Trial", "Drug", "Dose", "Timepoint",
-                   "N", "PASI 50", "PASI 75", "PASI 90", "PASI 100")
-    )
-  })
+  output$tbl_pasi <- render_view(data_pasi, c(
+    "Trial", "Drug", "Dose", "Timepoint", "N",
+    "PASI 50", "PASI 75", "PASI 90", "PASI 100"))
+
+  output$tbl_abs <- render_view(data_abs, c(
+    "Trial", "Drug", "Dose", "Timepoint", "N",
+    "Absolute PASI", "Δ from baseline"))
+
+  output$tbl_dlqi <- render_view(data_dlqi, c(
+    "Trial", "Drug", "Dose", "Timepoint", "N",
+    "DLQI 0/1", "DLQI 0", "5+ pt decrease", "4+ pt decrease", "DLQI ≤5",
+    "Absolute DLQI", "Δ from baseline"))
+
+  output$tbl_safety <- render_view(data_safety, c(
+    "Trial", "Drug", "Dose", "Timepoint", "N",
+    "Any SAE", "Disc. (any)", "Disc. (AE)", "Serious infection",
+    "Injection site rxn", "Malignancy", "NMSC", "Malignancy (non-NMSC)"))
 }
 
 shinyApp(ui, server)
