@@ -55,7 +55,7 @@ server <- function(input, output, session) {
     if (length(input$drug)) {
       ph <- paste(rep("?", length(input$drug)), collapse = ", ")
       df <- read_db(
-        sprintf("SELECT trial, drug, dose, timepoint, n,
+        sprintf("SELECT trial, drug, dose, timepoint, timepoint_unit, n,
                         pasi50, pasi75, pasi90, pasi100
                  FROM v_pasi
                  WHERE drug IN (%s)
@@ -64,7 +64,7 @@ server <- function(input, output, session) {
       )
     } else {
       df <- read_db(
-        "SELECT trial, drug, dose, timepoint, n,
+        "SELECT trial, drug, dose, timepoint, timepoint_unit, n,
                 pasi50, pasi75, pasi90, pasi100
          FROM v_pasi
          ORDER BY trial, arm_no, timepoint"
@@ -74,8 +74,11 @@ server <- function(input, output, session) {
     df$pasi75  <- fmt_pasi(df$pasi75,  df$n)
     df$pasi90  <- fmt_pasi(df$pasi90,  df$n)
     df$pasi100 <- fmt_pasi(df$pasi100, df$n)
+    # "12 wks", "3 mo"; pluralise weeks but not months.
+    unit_lbl <- ifelse(df$timepoint_unit == "wk", "wks", df$timepoint_unit)
     df$timepoint <- ifelse(is.na(df$timepoint), "",
-                           paste0(df$timepoint, " wks"))
+                           paste(df$timepoint, unit_lbl))
+    df$timepoint_unit <- NULL
     df
   })
 

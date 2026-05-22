@@ -95,6 +95,16 @@ WITH
     WHERE  OutcomeID IN (36, 13, 14, 38)
       AND  COALESCE(SubgroupID, 0) = 0
     GROUP BY RefID, ArmNo, TimePeriod
+  ),
+  -- Time unit per RefID across the four PASI outcomes. In this dataset every
+  -- ref uses one unit for all its PASI outcomes; if that ever stops being
+  -- true MIN(Unit) just picks one deterministically. Default: weeks.
+  tunit AS (
+    SELECT ld.RefID, MIN(u.strUnit) AS unit
+    FROM   tblLongitudinalDataDefs ld
+    JOIN   tblLongitudinalUnitDefs  u ON u.UnitID = ld.Unit
+    WHERE  ld.OutcomeID IN (36, 13, 14, 38)
+    GROUP BY ld.RefID
   )
 SELECT
   t.trial                                                       AS trial,
@@ -113,6 +123,7 @@ SELECT
     || ' ' || COALESCE(du.dose_unit, '')
   )                                                             AS dose,
   p.TimePeriod                                                  AS timepoint,
+  COALESCE(tu.unit, 'wk')                                       AS timepoint_unit,
   p.n                                                           AS n,
   p.pasi50, p.pasi75, p.pasi90, p.pasi100
 FROM       pasi p
@@ -121,6 +132,7 @@ LEFT JOIN  tblArms     a  ON a.RefID  = p.RefID AND a.ArmNo  = p.ArmNo
 LEFT JOIN  drug        d  ON d.RefID  = p.RefID AND d.ArmNo  = p.ArmNo
 LEFT JOIN  dose_amount da ON da.RefID = p.RefID AND da.ArmNo = p.ArmNo
 LEFT JOIN  dose_unit   du ON du.RefID = p.RefID AND du.ArmNo = p.ArmNo
+LEFT JOIN  tunit       tu ON tu.RefID = p.RefID
 ORDER BY   trial, p.ArmNo, p.TimePeriod
 ")
 

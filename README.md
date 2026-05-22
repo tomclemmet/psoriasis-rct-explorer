@@ -30,7 +30,8 @@ keyed on `(ref_id, arm_no, timepoint)`.
 | `arm_name` | `tblArms.ArmName`                                            |
 | `drug`     | lookup of `tblStudyChars.ListVal` where `CatID = 57`         |
 | `dose`     | `CatID 58` (amount, numeric) + `CatID 59` (unit, lookup)     |
-| `timepoint`| `tblIntraData.TimePeriod` (weeks)                            |
+| `timepoint`| `tblIntraData.TimePeriod` (numeric)                          |
+| `timepoint_unit` | `tblLongitudinalDataDefs.Unit` → `tblLongitudinalUnitDefs.strUnit` (usually `wk`, occasionally `mo`) |
 | `n`        | arm denominator (max `tblIntraData.N` across the four PASI outcomes for that timepoint) |
 | `pasi50`   | `tblIntraData.k` where `OutcomeID = 36`                      |
 | `pasi75`   | `tblIntraData.k` where `OutcomeID = 13`                      |
