@@ -3,6 +3,7 @@ suppressPackageStartupMessages({
   library(DBI)
   library(RSQLite)
   library(DT)
+  library(visNetwork)
 })
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -17,28 +18,89 @@ read_db <- function(sql, params = list()) {
   if (length(params)) dbGetQuery(con, sql, params = params) else dbGetQuery(con, sql)
 }
 
-drugs <- read_db(
-  "SELECT DISTINCT drug FROM v_pasi WHERE drug IS NOT NULL AND drug != '' ORDER BY drug"
-)$drug
+# Build network data once at startup. Nodes = drugs (sized by trial count).
+# Edges = unordered drug pairs that appear together in a trial (width = number
+# of trials with that head-to-head comparison). Drives the clickable NMA
+# diagram which doubles as the table filter.
+build_network <- function() {
+  td <- read_db(
+    "SELECT DISTINCT trial, drug FROM v_pasi
+     WHERE drug IS NOT NULL AND drug != '' AND trial IS NOT NULL"
+  )
 
-# SELECT every column from one of the v_* tables, optionally filtered by a
-# multi-value drug list. Each view always carries the shared id columns
-# (trial, drug, dose, timepoint, timepoint_unit, n) plus its own endpoint
-# columns, so callers can just `SELECT *` and trust the schema.
-query_view <- function(table, drugs) {
-  if (length(drugs)) {
-    ph <- paste(rep("?", length(drugs)), collapse = ", ")
-    read_db(
-      sprintf("SELECT * FROM %s WHERE drug IN (%s)
-               ORDER BY trial, arm_no, timepoint", table, ph),
-      params = as.list(drugs)
-    )
-  } else {
-    read_db(sprintf("SELECT * FROM %s ORDER BY trial, arm_no, timepoint", table))
+  trial_counts <- as.data.frame(table(td$drug), stringsAsFactors = FALSE)
+  names(trial_counts) <- c("id", "n_trials")
+  nodes_df <- data.frame(
+    id    = trial_counts$id,
+    label = trial_counts$id,
+    value = trial_counts$n_trials,
+    title = sprintf("<b>%s</b><br/>%d trial(s)",
+                    trial_counts$id, trial_counts$n_trials),
+    stringsAsFactors = FALSE
+  )
+  nodes_df <- nodes_df[order(-nodes_df$value, nodes_df$id), ]
+
+  # Edges: pairs within trial, dedupe with from < to, count trials.
+  pair_rows <- list()
+  for (tr in unique(td$trial)) {
+    ds <- sort(unique(td$drug[td$trial == tr]))
+    if (length(ds) < 2) next
+    cmb <- utils::combn(ds, 2)
+    pair_rows[[tr]] <- data.frame(from = cmb[1, ], to = cmb[2, ],
+                                  stringsAsFactors = FALSE)
   }
+  pairs <- do.call(rbind, pair_rows)
+  pair_counts <- as.data.frame(table(pairs$from, pairs$to),
+                               stringsAsFactors = FALSE)
+  names(pair_counts) <- c("from", "to", "n_trials")
+  pair_counts <- pair_counts[pair_counts$n_trials > 0, ]
+  pair_counts$id    <- sprintf("e%d", seq_len(nrow(pair_counts)))
+  pair_counts$value <- pair_counts$n_trials
+  pair_counts$title <- sprintf("<b>%s &harr; %s</b><br/>%d trial(s)",
+                               pair_counts$from, pair_counts$to,
+                               pair_counts$n_trials)
+
+  list(nodes = nodes_df, edges = pair_counts)
 }
 
-# "8 (10%)"; blank if responder count missing.
+.network <- build_network()
+nodes_df <- .network$nodes
+edges_df <- .network$edges
+
+# Filter state shape:
+#   NULL                                        - no filter, show all rows
+#   list(kind = "node", drug = "Adalimumab")    - single-drug filter
+#   list(kind = "edge", from = "A", to = "B")   - head-to-head pair: only
+#                                                 rows where drug in {A,B}
+#                                                 AND trial includes both
+#                                                 drugs (per v_pasi).
+query_view <- function(table, state) {
+  base_order <- "ORDER BY trial, arm_no, timepoint"
+  if (is.null(state)) {
+    return(read_db(sprintf("SELECT * FROM %s %s", table, base_order)))
+  }
+  if (identical(state$kind, "node")) {
+    return(read_db(
+      sprintf("SELECT * FROM %s WHERE drug = ? %s", table, base_order),
+      params = list(state$drug)
+    ))
+  }
+  if (identical(state$kind, "edge")) {
+    return(read_db(
+      sprintf("SELECT * FROM %s
+               WHERE drug IN (?, ?)
+                 AND trial IN (
+                   SELECT trial FROM v_pasi WHERE drug = ?
+                   INTERSECT
+                   SELECT trial FROM v_pasi WHERE drug = ?
+                 )
+               %s", table, base_order),
+      params = list(state$from, state$to, state$from, state$to)
+    ))
+  }
+  read_db(sprintf("SELECT * FROM %s %s", table, base_order))
+}
+
 fmt_pasi <- function(k, n) {
   out <- rep("", length(k))
   ok  <- !is.na(k) & !is.na(n) & n > 0
@@ -47,7 +109,6 @@ fmt_pasi <- function(k, n) {
   out
 }
 
-# "12.3 (4.5)"; blank if mean missing. SD optional - prints "12.3" if NA.
 fmt_mean_sd <- function(mean, sd, digits = 1) {
   out <- rep("", length(mean))
   ok  <- !is.na(mean)
@@ -58,126 +119,358 @@ fmt_mean_sd <- function(mean, sd, digits = 1) {
   out
 }
 
-# "12 wks" / "3 mo" from numeric timepoint + unit code.
 fmt_timepoint <- function(timepoint, unit) {
   unit_lbl <- ifelse(unit == "wk", "wks", unit)
   ifelse(is.na(timepoint), "", paste(timepoint, unit_lbl))
 }
 
-# Build a `view` reactive that pulls the right table for the current drug
-# filter and runs `format_fn` (which knows how to render endpoint columns).
-make_view <- function(table, format_fn) {
-  function(input) {
-    df <- query_view(table, input$drug)
-    df$timepoint <- fmt_timepoint(df$timepoint, df$timepoint_unit)
-    df$timepoint_unit <- NULL
-    format_fn(df)
-  }
+# Build the Drug cell text: "Adalimumab 40 mg, 16 wks". Dose/timepoint
+# omitted when missing.
+fmt_drug <- function(drug, dose, timepoint, unit) {
+  tp_txt   <- fmt_timepoint(timepoint, unit)
+  has_dose <- !is.na(dose) & nzchar(dose)
+  with_dose <- ifelse(has_dose, paste0(drug, " ", dose), drug)
+  ifelse(nzchar(tp_txt), paste0(with_dose, ", ", tp_txt), with_dose)
 }
 
-# Per-view formatters: format endpoint columns and drop helper columns.
-format_pasi <- function(df) {
-  for (col in c("pasi50", "pasi75", "pasi90", "pasi100"))
-    df[[col]] <- fmt_pasi(df[[col]], df$n)
-  df[, c("trial", "drug", "dose", "timepoint", "n",
-         "pasi50", "pasi75", "pasi90", "pasi100")]
+# Per-arm baseline: value at timepoint == 0 for the same (ref_id, arm_no).
+# Returns a vector aligned with df rows.
+baseline_lookup <- function(df, mean_col, sd_col) {
+  key <- paste(df$ref_id, df$arm_no, sep = "|")
+  is_b <- !is.na(df$timepoint) & df$timepoint == 0
+  bkey <- paste(df$ref_id[is_b], df$arm_no[is_b], sep = "|")
+  i    <- match(key, bkey)
+  list(mean = df[[mean_col]][is_b][i],
+       sd   = df[[sd_col]][is_b][i])
 }
 
-format_pasi_abs <- function(df) {
-  df$abs_pasi        <- fmt_mean_sd(df$abs_pasi_mean,        df$abs_pasi_sd)
+# Generic binary-subset formatter: format each column as "k (pct%)", build
+# the Drug cell, drop rows with no data in any of the selected endpoints,
+# return Trial/Drug/N + selected columns.
+format_binary_subset <- function(df, cols) {
+  for (col in cols) df[[col]] <- fmt_pasi(df[[col]], df$n)
+  df$drug <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
+  has_any <- Reduce(`|`, lapply(cols, function(c) nzchar(df[[c]])))
+  df <- df[has_any, , drop = FALSE]
+  df[, c("trial", "drug", "n", cols)]
+}
+
+format_pasi_response <- function(df) {
+  format_binary_subset(df, c("pasi50", "pasi75", "pasi90", "pasi100"))
+}
+
+format_pasi_absolute <- function(df) {
+  b <- baseline_lookup(df, "abs_pasi_mean", "abs_pasi_sd")
+  df$baseline        <- fmt_mean_sd(b$mean, b$sd)
+  df$on_tx           <- fmt_mean_sd(df$abs_pasi_mean,        df$abs_pasi_sd)
   df$abs_pasi_change <- fmt_mean_sd(df$abs_pasi_change_mean, df$abs_pasi_change_sd)
-  df[, c("trial", "drug", "dose", "timepoint", "n",
-         "abs_pasi", "abs_pasi_change")]
+  df$drug <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
+  # Drop pure baseline rows; each follow-up row now carries its baseline.
+  df <- df[is.na(df$timepoint) | df$timepoint > 0, ]
+  has_any <- nzchar(df$baseline) | nzchar(df$on_tx) | nzchar(df$abs_pasi_change)
+  df <- df[has_any, , drop = FALSE]
+  df[, c("trial", "drug", "n", "baseline", "on_tx", "abs_pasi_change")]
 }
 
-format_dlqi <- function(df) {
-  for (col in c("dlqi_0_1", "dlqi_0", "dlqi_5pt_dec", "dlqi_4pt_dec", "dlqi_le5"))
-    df[[col]] <- fmt_pasi(df[[col]], df$n)
-  df$abs_dlqi        <- fmt_mean_sd(df$abs_dlqi_mean,        df$abs_dlqi_sd)
+format_dlqi_zero <- function(df) {
+  format_binary_subset(df, c("dlqi_0_1", "dlqi_0"))
+}
+
+format_dlqi_threshold <- function(df) {
+  format_binary_subset(df, c("dlqi_le5"))
+}
+
+format_dlqi_change <- function(df) {
+  format_binary_subset(df, c("dlqi_5pt_dec", "dlqi_4pt_dec"))
+}
+
+format_dlqi_absolute <- function(df) {
+  b <- baseline_lookup(df, "abs_dlqi_mean", "abs_dlqi_sd")
+  df$baseline        <- fmt_mean_sd(b$mean, b$sd)
+  df$on_tx           <- fmt_mean_sd(df$abs_dlqi_mean,        df$abs_dlqi_sd)
   df$abs_dlqi_change <- fmt_mean_sd(df$abs_dlqi_change_mean, df$abs_dlqi_change_sd)
-  df[, c("trial", "drug", "dose", "timepoint", "n",
-         "dlqi_0_1", "dlqi_0", "dlqi_5pt_dec", "dlqi_4pt_dec", "dlqi_le5",
-         "abs_dlqi", "abs_dlqi_change")]
+  df$drug <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
+  df <- df[is.na(df$timepoint) | df$timepoint > 0, ]
+  has_any <- nzchar(df$baseline) | nzchar(df$on_tx) | nzchar(df$abs_dlqi_change)
+  df <- df[has_any, , drop = FALSE]
+  df[, c("trial", "drug", "n", "baseline", "on_tx", "abs_dlqi_change")]
 }
 
-format_safety <- function(df) {
-  binary_cols <- c("sae", "disc_any", "disc_ae", "serious_infection",
-                   "injection_site_rxn", "malignancy", "nmsc",
-                   "malignancy_non_nmsc")
-  for (col in binary_cols) df[[col]] <- fmt_pasi(df[[col]], df$n)
-  df[, c("trial", "drug", "dose", "timepoint", "n", binary_cols)]
-}
-
-render_view <- function(df_fn, colnames) {
-  renderDT({
-    df <- df_fn()
-    n_endpoint_cols <- ncol(df) - 5  # trial, drug, dose, timepoint, n are first 5
-    datatable(
-      df,
-      rownames = FALSE,
-      filter   = "none",
-      options  = list(
-        pageLength = 25,
-        autoWidth  = TRUE,
-        dom        = "tip",
-        columnDefs = list(list(className = "dt-right",
-                               targets = 3:(4 + n_endpoint_cols)))
+# Endpoint catalogue. Each tab has one or more endpoint groups. A group is
+# defined by the source v_* table, the format fn that shapes it for display,
+# and the column headers shown to the user.
+endpoint_groups <- list(
+  pasi = list(
+    label = "PASI",
+    groups = list(
+      response = list(
+        label    = "PASI 50 / 75 / 90 / 100",
+        table    = "v_pasi",
+        fmt      = format_pasi_response,
+        colnames = c("Trial", "Drug", "N",
+                     "PASI 50", "PASI 75", "PASI 90", "PASI 100")
       ),
-      colnames = colnames
+      absolute = list(
+        label    = "Baseline, follow-up, Δ from baseline",
+        table    = "v_pasi_abs",
+        fmt      = format_pasi_absolute,
+        colnames = c("Trial", "Drug", "N",
+                     "Baseline PASI", "Follow-up PASI", "Δ from baseline")
+      )
     )
-  })
-}
-
-ui <- fluidPage(
-  titlePanel("RevPal endpoint explorer"),
-  sidebarLayout(
-    sidebarPanel(
-      width = 3,
-      selectizeInput("drug", "Drug",
-                     choices  = drugs,
-                     selected = NULL,
-                     multiple = TRUE,
-                     options  = list(placeholder = "(all drugs)")),
-      helpText("One row per study arm × timepoint. Binary cells show",
-               "n (% of arm N); continuous cells show mean (SD).")
-    ),
-    mainPanel(
-      width = 9,
-      tabsetPanel(
-        id   = "view",
-        type = "tabs",
-        tabPanel("PASI thresholds", DTOutput("tbl_pasi")),
-        tabPanel("Absolute PASI",   DTOutput("tbl_abs")),
-        tabPanel("DLQI",            DTOutput("tbl_dlqi")),
-        tabPanel("Safety",          DTOutput("tbl_safety"))
+  ),
+  dlqi = list(
+    label = "DLQI",
+    groups = list(
+      zero = list(
+        label    = "DLQI 0/1, DLQI 0",
+        table    = "v_dlqi",
+        fmt      = format_dlqi_zero,
+        colnames = c("Trial", "Drug", "N", "DLQI 0/1", "DLQI 0")
+      ),
+      threshold = list(
+        label    = "DLQI ≤5",
+        table    = "v_dlqi",
+        fmt      = format_dlqi_threshold,
+        colnames = c("Trial", "Drug", "N", "DLQI ≤5")
+      ),
+      change = list(
+        label    = "5+ / 4+ point decrease",
+        table    = "v_dlqi",
+        fmt      = format_dlqi_change,
+        colnames = c("Trial", "Drug", "N",
+                     "5+ pt decrease", "4+ pt decrease")
+      ),
+      absolute = list(
+        label    = "Baseline, follow-up, Δ from baseline",
+        table    = "v_dlqi",
+        fmt      = format_dlqi_absolute,
+        colnames = c("Trial", "Drug", "N",
+                     "Baseline DLQI", "Follow-up DLQI", "Δ from baseline")
+      )
+    )
+  ),
+  safety = list(
+    label = "Safety",
+    groups = list(
+      sae = list(
+        label    = "Any SAE",
+        table    = "v_safety",
+        fmt      = function(df) format_binary_subset(df, c("sae")),
+        colnames = c("Trial", "Drug", "N", "Any SAE")
+      ),
+      disc = list(
+        label    = "Discontinuation (any, due to AE)",
+        table    = "v_safety",
+        fmt      = function(df) format_binary_subset(df,
+                     c("disc_any", "disc_ae")),
+        colnames = c("Trial", "Drug", "N",
+                     "Disc. (any)", "Disc. (AE)")
+      ),
+      serious_infection = list(
+        label    = "Serious infections",
+        table    = "v_safety",
+        fmt      = function(df) format_binary_subset(df, c("serious_infection")),
+        colnames = c("Trial", "Drug", "N", "Serious infection")
+      ),
+      injection_site_rxn = list(
+        label    = "Injection-site reactions",
+        table    = "v_safety",
+        fmt      = function(df) format_binary_subset(df, c("injection_site_rxn")),
+        colnames = c("Trial", "Drug", "N", "Injection site rxn")
+      ),
+      malignancy = list(
+        label    = "Malignancy, NMSC, malignancy (non-NMSC)",
+        table    = "v_safety",
+        fmt      = function(df) format_binary_subset(df,
+                     c("malignancy", "nmsc", "malignancy_non_nmsc")),
+        colnames = c("Trial", "Drug", "N",
+                     "Malignancy", "NMSC", "Malignancy (non-NMSC)")
       )
     )
   )
 )
 
+ui <- fluidPage(
+  tags$head(tags$style(HTML("
+    .filter-bar { padding: 8px 12px; background: #f4f6f9; border-radius: 6px;
+                  margin: 6px 0 12px 0; display: flex; align-items: center;
+                  gap: 12px; font-size: 15px; }
+    .filter-bar .label { color: #555; }
+    .filter-bar .value { font-weight: 600; color: #1F4E8C; }
+    .filter-bar .btn { padding: 2px 10px; font-size: 13px; }
+    #nma { background: #fafbfc; border: 1px solid #e3e6ea; border-radius: 6px; }
+    .endpoint-picker { margin: 0; padding: 6px 0; background: #ffffff;
+                       height: 46px; box-sizing: border-box; }
+    .endpoint-picker .form-group { margin-bottom: 0; }
+    /* Use flexbox so left/right columns share the row's full height; sticky
+       then has room to stick as the user scrolls the table. */
+    /* Lock the page so only the table column scrolls; the diagram never moves. */
+    html, body { height: 100%; overflow: hidden; }
+    .container-fluid, .container { height: 100%; display: flex; flex-direction: column; }
+    .row.split { display: flex; align-items: stretch; flex: 1 1 auto;
+                 min-height: 0; }
+    .row.split > [class*='col-'] { float: none; }
+    /* Only the table body scrolls; tabs stay pinned at the top of the column. */
+    .row.split .col-table { display: flex; flex-direction: column;
+                            max-height: 100%; min-height: 0; }
+    .row.split .col-table .tabbable { display: flex; flex-direction: column;
+                                       flex: 1 1 auto; min-height: 0; }
+    .row.split .col-table .tab-content { flex: 1 1 auto; overflow: auto;
+                                          min-height: 0; }
+    /* Pin the endpoint dropdown at the top of the scrolling tab-content,
+       and pin the table header directly underneath it. */
+    .row.split .col-table .tab-content .endpoint-picker {
+      position: sticky; top: 0; z-index: 3;
+    }
+    .row.split .col-table .tab-content table.dataTable thead th {
+      position: sticky; top: 46px; background: #ffffff; z-index: 2;
+      box-shadow: inset 0 -1px 0 #ddd;
+    }
+  "))),
+  titlePanel("Psoriasis RCT Explorer"),
+  div(class = "filter-bar",
+      span(class = "label", "Filter:"),
+      uiOutput("filter_label", inline = TRUE),
+      actionButton("clear_filter", "Clear", class = "btn btn-default"),
+      downloadButton("download_db", "Download SQLite",
+                     class = "btn btn-default")
+  ),
+  fluidRow(class = "split",
+    column(6,
+      visNetworkOutput("nma", height = "640px"),
+      helpText("Click a node to filter to one drug; click an edge to show only",
+               "trials comparing that pair. Click empty space, or the Clear",
+               "button, to reset.")
+    ),
+    column(6, class = "col-table",
+      do.call(tabsetPanel, c(
+        list(id = "view", type = "tabs"),
+        lapply(names(endpoint_groups), function(tab_id) {
+          tab <- endpoint_groups[[tab_id]]
+          group_choices <- setNames(names(tab$groups),
+                                    vapply(tab$groups, `[[`, "", "label"))
+          tabPanel(
+            tab$label,
+            div(class = "endpoint-picker",
+                selectInput(paste0("group_", tab_id),
+                            label = NULL,
+                            choices  = group_choices,
+                            selected = group_choices[[1]],
+                            width    = "100%")),
+            DTOutput(paste0("tbl_", tab_id))
+          )
+        })
+      ))
+    )
+  )
+)
+
 server <- function(input, output, session) {
-  data_pasi   <- reactive(make_view("v_pasi",     format_pasi)(input))
-  data_abs    <- reactive(make_view("v_pasi_abs", format_pasi_abs)(input))
-  data_dlqi   <- reactive(make_view("v_dlqi",     format_dlqi)(input))
-  data_safety <- reactive(make_view("v_safety",   format_safety)(input))
 
-  output$tbl_pasi <- render_view(data_pasi, c(
-    "Trial", "Drug", "Dose", "Timepoint", "N",
-    "PASI 50", "PASI 75", "PASI 90", "PASI 100"))
+  filter_state <- reactiveVal(NULL)
 
-  output$tbl_abs <- render_view(data_abs, c(
-    "Trial", "Drug", "Dose", "Timepoint", "N",
-    "Absolute PASI", "Δ from baseline"))
+  output$filter_label <- renderUI({
+    s <- filter_state()
+    if (is.null(s))                  span(class = "value", "all drugs")
+    else if (s$kind == "node")       span(class = "value", s$drug)
+    else if (s$kind == "edge")       span(class = "value",
+                                          sprintf("%s ↔ %s (head-to-head)",
+                                                  s$from, s$to))
+  })
 
-  output$tbl_dlqi <- render_view(data_dlqi, c(
-    "Trial", "Drug", "Dose", "Timepoint", "N",
-    "DLQI 0/1", "DLQI 0", "5+ pt decrease", "4+ pt decrease", "DLQI ≤5",
-    "Absolute DLQI", "Δ from baseline"))
+  # Build one renderDT per tab. Reactive picks the active endpoint group
+  # from that tab's dropdown, queries the right table, formats it.
+  for (tab_id in names(endpoint_groups)) local({
+    this_tab    <- tab_id
+    tab_cfg     <- endpoint_groups[[this_tab]]
+    output[[paste0("tbl_", this_tab)]] <- renderDT({
+      gid <- input[[paste0("group_", this_tab)]]
+      req(gid)
+      grp <- tab_cfg$groups[[gid]]
+      df  <- grp$fmt(query_view(grp$table, filter_state()))
+      n_endpoint_cols <- ncol(df) - 3
+      datatable(
+        df,
+        rownames = FALSE,
+        filter   = "none",
+        options  = list(
+          pageLength = 25,
+          autoWidth  = FALSE,
+          dom        = "tip",
+          columnDefs = list(list(className = "dt-right",
+                                 targets = 2:(2 + n_endpoint_cols)))
+        ),
+        colnames = grp$colnames
+      )
+    })
+  })
 
-  output$tbl_safety <- render_view(data_safety, c(
-    "Trial", "Drug", "Dose", "Timepoint", "N",
-    "Any SAE", "Disc. (any)", "Disc. (AE)", "Serious infection",
-    "Injection site rxn", "Malignancy", "NMSC", "Malignancy (non-NMSC)"))
+  output$nma <- renderVisNetwork({
+    visNetwork(nodes_df, edges_df) |>
+      visIgraphLayout(layout    = "layout_with_kk",
+                      randomSeed = 42,
+                      physics    = FALSE) |>
+      visNodes(shape   = "dot",
+               scaling = list(min = 18, max = 55,
+                              label = list(enabled = TRUE,
+                                           min = 18, max = 28)),
+               font    = list(size = 22, face = "Helvetica",
+                              strokeWidth = 4, strokeColor = "#ffffff"),
+               color   = list(background = "#4C9AFF",
+                              border     = "#1F4E8C",
+                              highlight  = list(background = "#FF8A3D",
+                                                border     = "#B5521A"),
+                              hover      = list(background = "#7FB5FF",
+                                                border     = "#1F4E8C")),
+               borderWidth = 2) |>
+      visEdges(smooth   = list(enabled = TRUE, type = "continuous"),
+               scaling  = list(min = 1, max = 10),
+               color    = list(color = "rgba(80,80,80,0.30)",
+                               highlight = "#FF8A3D",
+                               hover     = "#1F4E8C")) |>
+      visOptions(highlightNearest = list(enabled = TRUE, degree = 1,
+                                         hover = TRUE,
+                                         labelOnly = FALSE),
+                 nodesIdSelection = FALSE) |>
+      visInteraction(navigationButtons = FALSE, multiselect = FALSE,
+                     tooltipDelay = 150, hover = TRUE,
+                     zoomView = TRUE, dragView = TRUE) |>
+      visEvents(
+        selectNode   = "function(p){ Shiny.setInputValue('nma_node', p.nodes[0], {priority:'event'}); }",
+        selectEdge   = "function(p){ if(p.nodes && p.nodes.length) return;
+                                     Shiny.setInputValue('nma_edge', p.edges[0], {priority:'event'}); }",
+        deselectNode = "function(p){ Shiny.setInputValue('nma_clear', Math.random(), {priority:'event'}); }",
+        deselectEdge = "function(p){ Shiny.setInputValue('nma_clear', Math.random(), {priority:'event'}); }"
+      )
+  })
+
+  # Node click -> single-drug filter
+  observeEvent(input$nma_node, {
+    req(input$nma_node)
+    filter_state(list(kind = "node", drug = input$nma_node))
+  })
+
+  # Edge click -> head-to-head pair filter
+  observeEvent(input$nma_edge, {
+    req(input$nma_edge)
+    e <- edges_df[edges_df$id == input$nma_edge, , drop = FALSE]
+    if (!nrow(e)) return()
+    filter_state(list(kind = "edge", from = e$from[1], to = e$to[1]))
+  })
+
+  # Empty-canvas click -> clear
+  observeEvent(input$nma_clear, { filter_state(NULL) })
+
+  output$download_db <- downloadHandler(
+    filename    = function() "revpal.sqlite",
+    contentType = "application/x-sqlite3",
+    content     = function(file) file.copy(DB_PATH, file)
+  )
+  observeEvent(input$clear_filter, {
+    filter_state(NULL)
+    visNetworkProxy("nma") |> visUnselectAll()
+  })
 }
 
 shinyApp(ui, server)
