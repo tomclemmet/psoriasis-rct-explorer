@@ -12,6 +12,9 @@
 .Rproj.user/
 .Renviron
 
+# Scratch / reference material kept locally
+diagram example/
+
 # OS / editor
 .DS_Store
 Thumbs.db
