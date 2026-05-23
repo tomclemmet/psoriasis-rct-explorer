@@ -67,6 +67,29 @@ build_network <- function() {
 nodes_df <- .network$nodes
 edges_df <- .network$edges
 
+# ref_id -> DOI lookup, built once. Only ~12% of refs have a DOI in this
+# dataset (URL field is empty across the board), so most trial cells stay
+# plain text.
+.doi_rows <- read_db(
+  "SELECT ID AS ref_id, DOI FROM tblRefs
+   WHERE DOI IS NOT NULL AND DOI != ''"
+)
+doi_lookup <- setNames(.doi_rows$DOI, as.character(.doi_rows$ref_id))
+
+# Wrap trial text in an <a href="https://doi.org/..."> when a DOI is known
+# for that ref_id; otherwise return the trial text unchanged. Caller must
+# pass `escape = FALSE` to DT for the Trial column.
+fmt_trial <- function(trial, ref_id) {
+  doi <- doi_lookup[as.character(ref_id)]
+  has_doi <- !is.na(doi) & nzchar(doi)
+  out <- trial
+  out[has_doi] <- sprintf(
+    '<a href="https://doi.org/%s" target="_blank" rel="noopener">%s</a>',
+    doi[has_doi], htmltools::htmlEscape(trial[has_doi])
+  )
+  out
+}
+
 # Filter state shape:
 #   NULL                                        - no filter, show all rows
 #   list(kind = "node", drug = "Adalimumab")    - single-drug filter
@@ -149,7 +172,8 @@ baseline_lookup <- function(df, mean_col, sd_col) {
 # return Trial/Drug/N + selected columns.
 format_binary_subset <- function(df, cols) {
   for (col in cols) df[[col]] <- fmt_pasi(df[[col]], df$n)
-  df$drug <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
+  df$drug  <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
+  df$trial <- fmt_trial(df$trial, df$ref_id)
   has_any <- Reduce(`|`, lapply(cols, function(c) nzchar(df[[c]])))
   df <- df[has_any, , drop = FALSE]
   df[, c("trial", "drug", "n", cols)]
@@ -164,7 +188,8 @@ format_pasi_absolute <- function(df) {
   df$baseline        <- fmt_mean_sd(b$mean, b$sd)
   df$on_tx           <- fmt_mean_sd(df$abs_pasi_mean,        df$abs_pasi_sd)
   df$abs_pasi_change <- fmt_mean_sd(df$abs_pasi_change_mean, df$abs_pasi_change_sd)
-  df$drug <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
+  df$drug  <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
+  df$trial <- fmt_trial(df$trial, df$ref_id)
   # Drop pure baseline rows; each follow-up row now carries its baseline.
   df <- df[is.na(df$timepoint) | df$timepoint > 0, ]
   has_any <- nzchar(df$baseline) | nzchar(df$on_tx) | nzchar(df$abs_pasi_change)
@@ -189,7 +214,8 @@ format_dlqi_absolute <- function(df) {
   df$baseline        <- fmt_mean_sd(b$mean, b$sd)
   df$on_tx           <- fmt_mean_sd(df$abs_dlqi_mean,        df$abs_dlqi_sd)
   df$abs_dlqi_change <- fmt_mean_sd(df$abs_dlqi_change_mean, df$abs_dlqi_change_sd)
-  df$drug <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
+  df$drug  <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
+  df$trial <- fmt_trial(df$trial, df$ref_id)
   df <- df[is.na(df$timepoint) | df$timepoint > 0, ]
   has_any <- nzchar(df$baseline) | nzchar(df$on_tx) | nzchar(df$abs_dlqi_change)
   df <- df[has_any, , drop = FALSE]
@@ -211,11 +237,11 @@ endpoint_groups <- list(
                      "PASI 50", "PASI 75", "PASI 90", "PASI 100")
       ),
       absolute = list(
-        label    = "Baseline, follow-up, Δ from baseline",
+        label    = "Absolute PASI",
         table    = "v_pasi_abs",
         fmt      = format_pasi_absolute,
         colnames = c("Trial", "Drug", "N",
-                     "Baseline PASI", "Follow-up PASI", "Δ from baseline")
+                     "Baseline", "Follow-up", "Δ from baseline")
       )
     )
   ),
@@ -229,10 +255,10 @@ endpoint_groups <- list(
         colnames = c("Trial", "Drug", "N", "DLQI 0/1", "DLQI 0")
       ),
       threshold = list(
-        label    = "DLQI ≤5",
+        label    = "DLQI ≤ 5",
         table    = "v_dlqi",
         fmt      = format_dlqi_threshold,
-        colnames = c("Trial", "Drug", "N", "DLQI ≤5")
+        colnames = c("Trial", "Drug", "N", "DLQI ≤ 5")
       ),
       change = list(
         label    = "5+ / 4+ point decrease",
@@ -242,11 +268,11 @@ endpoint_groups <- list(
                      "5+ pt decrease", "4+ pt decrease")
       ),
       absolute = list(
-        label    = "Baseline, follow-up, Δ from baseline",
+        label    = "Absolute DLQI",
         table    = "v_dlqi",
         fmt      = format_dlqi_absolute,
         colnames = c("Trial", "Drug", "N",
-                     "Baseline DLQI", "Follow-up DLQI", "Δ from baseline")
+                     "Baseline", "Follow-up", "Δ from baseline")
       )
     )
   ),
@@ -292,6 +318,18 @@ endpoint_groups <- list(
 )
 
 ui <- fluidPage(
+  tags$head(tags$script(HTML("
+    // Disable specific <option> values inside a Shiny select input. Used to
+    // grey out endpoint groups that have zero rows under the current filter.
+    Shiny.addCustomMessageHandler('set_disabled_options', function(msg) {
+      var sel = document.getElementById(msg.input_id);
+      if (!sel) return;
+      var disabled = Array.isArray(msg.disabled) ? msg.disabled : [];
+      Array.from(sel.options).forEach(function(opt) {
+        opt.disabled = disabled.indexOf(opt.value) !== -1;
+      });
+    });
+  "))),
   tags$head(tags$style(HTML("
     .filter-bar { padding: 8px 12px; background: #f4f6f9; border-radius: 6px;
                   margin: 6px 0 12px 0; display: flex; align-items: center;
@@ -303,6 +341,10 @@ ui <- fluidPage(
     .endpoint-picker { margin: 0; padding: 6px 0; background: #ffffff;
                        height: 46px; box-sizing: border-box; }
     .endpoint-picker .form-group { margin-bottom: 0; }
+    .endpoint-picker select { width: 100%; height: 34px; padding: 4px 8px;
+                              border: 1px solid #ccc; border-radius: 4px;
+                              background: #ffffff; font-size: 14px; }
+    .endpoint-picker select option:disabled { color: #b0b0b0; }
     /* Use flexbox so left/right columns share the row's full height; sticky
        then has room to stick as the user scrolls the table. */
     /* Lock the page so only the table column scrolls; the diagram never moves. */
@@ -357,6 +399,7 @@ ui <- fluidPage(
                             label = NULL,
                             choices  = group_choices,
                             selected = group_choices[[1]],
+                            selectize = FALSE,
                             width    = "100%")),
             DTOutput(paste0("tbl_", tab_id))
           )
@@ -379,6 +422,43 @@ server <- function(input, output, session) {
                                                   s$from, s$to))
   })
 
+  # For each (tab, group), does the current filter yield any rows after
+  # formatting? Cache table queries within one pass since v_safety is reused
+  # across five groups.
+  availability <- reactive({
+    state <- filter_state()
+    cache <- list()
+    get_tbl <- function(tbl) {
+      if (is.null(cache[[tbl]])) cache[[tbl]] <<- query_view(tbl, state)
+      cache[[tbl]]
+    }
+    lapply(endpoint_groups, function(tab) {
+      vapply(tab$groups, function(grp) {
+        n <- tryCatch(nrow(grp$fmt(get_tbl(grp$table))),
+                      error = function(e) 0L)
+        isTRUE(n > 0)
+      }, logical(1))
+    })
+  })
+
+  # Push disabled-option lists into each tab's native <select>. We don't
+  # auto-switch the selection: that would re-render the same DT widget with
+  # a different column count and DataTables.js fires a "column not found"
+  # warning. Keeping the user's pick lets the empty-table path (which has
+  # always worked) handle the no-data case.
+  observe({
+    av <- availability()
+    for (tab_id in names(av)) {
+      avail <- av[[tab_id]]
+      session$sendCustomMessage("set_disabled_options", list(
+        input_id = paste0("group_", tab_id),
+        # Wrap with I() so an empty vector serializes as `[]` (a bare empty
+        # list becomes `{}`, which would break indexOf in the JS handler).
+        disabled = I(as.character(names(avail)[!avail]))
+      ))
+    }
+  })
+
   # Build one renderDT per tab. Reactive picks the active endpoint group
   # from that tab's dropdown, queries the right table, formats it.
   for (tab_id in names(endpoint_groups)) local({
@@ -388,18 +468,34 @@ server <- function(input, output, session) {
       gid <- input[[paste0("group_", this_tab)]]
       req(gid)
       grp <- tab_cfg$groups[[gid]]
-      df  <- grp$fmt(query_view(grp$table, filter_state()))
+      df <- grp$fmt(query_view(grp$table, filter_state()))
       n_endpoint_cols <- ncol(df) - 3
       datatable(
         df,
         rownames = FALSE,
         filter   = "none",
+        escape   = -1,  # Only the Trial column (col 1) contains HTML (an
+                        # <a href="https://doi.org/..."> link when a DOI is
+                        # known); fmt_trial() escapes the visible trial name
+                        # itself. Every other column stays escaped.
         options  = list(
           pageLength = 25,
           autoWidth  = FALSE,
           dom        = "tip",
           columnDefs = list(list(className = "dt-right",
-                                 targets = 2:(2 + n_endpoint_cols)))
+                                 targets = 2:(2 + n_endpoint_cols))),
+          # On page change, scroll the surrounding .tab-content (our custom
+          # scroll container) back to the top — DT only scrolls its own
+          # internal viewport, which we don't use.
+          initComplete = JS(
+            "function() {",
+            "  var api = this.api();",
+            "  api.on('page.dt', function() {",
+            "    var el = $(api.table().node()).closest('.tab-content')[0];",
+            "    if (el) el.scrollTo({ top: 0 });",
+            "  });",
+            "}"
+          )
         ),
         colnames = grp$colnames
       )
@@ -414,8 +510,8 @@ server <- function(input, output, session) {
       visNodes(shape   = "dot",
                scaling = list(min = 18, max = 55,
                               label = list(enabled = TRUE,
-                                           min = 18, max = 28)),
-               font    = list(size = 22, face = "Helvetica",
+                                           min = 22, max = 34)),
+               font    = list(size = 28, face = "Helvetica",
                               strokeWidth = 4, strokeColor = "#ffffff"),
                color   = list(background = "#4C9AFF",
                               border     = "#1F4E8C",

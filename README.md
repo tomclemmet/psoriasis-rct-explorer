@@ -1,16 +1,29 @@
-# RevPal endpoint explorer
+# Psoriasis RCT Explorer
 
-A small R/Shiny app over a SQLite copy of `RevPal.accdb`. Tabs for PASI
-thresholds, absolute PASI, DLQI, and safety endpoints — one row per study
-arm × timepoint in each, with a multi-select **Drug** filter that applies
-across tabs.
+A small R/Shiny app over a SQLite copy of `RevPal.accdb`. Three tabs —
+**PASI**, **DLQI**, **Safety** — each with a dropdown that picks the
+endpoint group shown in the table:
 
-Above the tables is a clickable **NMA connectivity diagram** (built with
-`visNetwork`, circular layout). Nodes are drugs, sized by the number of
-trials in which they appear; edges connect drugs compared head-to-head in
-the same trial, with width = number of such trials. Clicking a node filters
-the tables to that one drug; clicking an edge filters to the pair. Click
-empty space to clear.
+- **PASI**: PASI 50/75/90/100, or absolute PASI (baseline, follow-up,
+  Δ from baseline on one row per arm × timepoint).
+- **DLQI**: DLQI 0/1 and 0, DLQI ≤ 5, 5+/4+ point decreases, or absolute
+  DLQI (baseline, follow-up, Δ).
+- **Safety**: Any SAE, discontinuation (any / due to AE), serious
+  infections, injection-site reactions, or malignancy (incl. NMSC).
+
+Endpoint groups with no rows under the current filter are greyed-out in
+the dropdown. Trial cells link to the publication DOI when one is
+recorded in `tblRefs` (about 12% of refs in this dataset have a DOI).
+A **Download SQLite** button in the filter bar streams the generated
+`revpal.sqlite` file.
+
+To the left of the tables is a clickable **NMA connectivity diagram**
+(built with `visNetwork`, Kamada–Kawai layout via `igraph`). Nodes are
+drugs, sized by the number of trials in which they appear; edges connect
+drugs compared head-to-head in the same trial, with width = number of
+such trials. Clicking a node filters the tables to that one drug;
+clicking an edge filters to the head-to-head pair (only trials including
+both drugs). Click empty space, or the **Clear** button, to reset.
 
 ## Layout
 
