@@ -5,6 +5,13 @@ thresholds, absolute PASI, DLQI, and safety endpoints — one row per study
 arm × timepoint in each, with a multi-select **Drug** filter that applies
 across tabs.
 
+Above the tables is a clickable **NMA connectivity diagram** (built with
+`visNetwork`, circular layout). Nodes are drugs, sized by the number of
+trials in which they appear; edges connect drugs compared head-to-head in
+the same trial, with width = number of such trials. Clicking a node filters
+the tables to that one drug; clicking an edge filters to the pair. Click
+empty space to clear.
+
 ## Layout
 
 ```
@@ -75,10 +82,10 @@ project root and run `convert.R` (see below) to regenerate the SQLite file.
 ## One-time setup
 
 R 4.5 already has `shiny`, `DBI`, `RSQLite`, `odbc`, `dplyr` installed. The app
-also needs `DT`:
+also needs `DT` and `visNetwork`:
 
 ```r
-install.packages("DT")
+install.packages(c("DT", "visNetwork"))
 ```
 
 The 64-bit "Microsoft Access Driver (*.mdb, *.accdb)" must be installed (it
