@@ -8,9 +8,9 @@ suppressPackageStartupMessages({
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
-DB_PATH <- file.path(dirname(sys.frame(1)$ofile %||% "."), "revpal.sqlite")
-if (!file.exists(DB_PATH)) DB_PATH <- "app/revpal.sqlite"
-if (!file.exists(DB_PATH)) stop("revpal.sqlite not found - run convert.R first.")
+DB_PATH <- file.path(dirname(sys.frame(1)$ofile %||% "."), "psoriasis-rcts.sqlite")
+if (!file.exists(DB_PATH)) DB_PATH <- "app/psoriasis-rcts.sqlite"
+if (!file.exists(DB_PATH)) stop("psoriasis-rcts.sqlite not found - run convert.R first.")
 
 read_db <- function(sql, params = list()) {
   con <- dbConnect(SQLite(), DB_PATH, flags = SQLITE_RO)
@@ -71,8 +71,8 @@ edges_df <- .network$edges
 # dataset (URL field is empty across the board), so most trial cells stay
 # plain text.
 .doi_rows <- read_db(
-  "SELECT ID AS ref_id, DOI FROM tblRefs
-   WHERE DOI IS NOT NULL AND DOI != ''"
+  "SELECT study_id AS ref_id, doi AS DOI FROM studies
+   WHERE doi IS NOT NULL AND doi != ''"
 )
 doi_lookup <- setNames(.doi_rows$DOI, as.character(.doi_rows$ref_id))
 
@@ -559,7 +559,7 @@ server <- function(input, output, session) {
   observeEvent(input$nma_clear, { filter_state(NULL) })
 
   output$download_db <- downloadHandler(
-    filename    = function() "revpal.sqlite",
+    filename    = function() "psoriasis-rcts.sqlite",
     contentType = "application/x-sqlite3",
     content     = function(file) file.copy(DB_PATH, file)
   )

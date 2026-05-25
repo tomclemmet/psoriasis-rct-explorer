@@ -1,6 +1,6 @@
 # Psoriasis RCT Explorer
 
-A small R/Shiny app over a SQLite copy of `RevPal.accdb`. Three tabs —
+A small R/Shiny app over a normalised SQLite extract of `RevPal.accdb`. Three tabs —
 **PASI**, **DLQI**, **Safety** — each with a dropdown that picks the
 endpoint group shown in the table:
 
@@ -15,7 +15,7 @@ Endpoint groups with no rows under the current filter are greyed-out in
 the dropdown. Trial cells link to the publication DOI when one is
 recorded in `tblRefs` (about 12% of refs in this dataset have a DOI).
 A **Download SQLite** button in the filter bar streams the generated
-`revpal.sqlite` file.
+`psoriasis-rcts.sqlite` file.
 
 To the left of the tables is a clickable **NMA connectivity diagram**
 (built with `visNetwork`, Kamada–Kawai layout via `igraph`). Nodes are
@@ -33,29 +33,51 @@ both drugs). Click empty space, or the **Clear** button, to reset.
 ├── .gitignore           (excludes the .accdb and .sqlite)
 ├── RevPal.accdb         (not in git — supply locally; see "Cloning" below)
 └── app/
-    ├── convert.R        (reads ../RevPal.accdb → writes ./revpal.sqlite)
-    ├── revpal.sqlite    (generated, not in git)
+    ├── convert.R              (reads ../RevPal.accdb → writes ./psoriasis-rcts.sqlite)
+    ├── psoriasis-rcts.sqlite  (generated, not in git)
     └── app.R            (the Shiny app — shiny::runApp("app") finds this)
 ```
 
-`convert.R` copies the real `tbl*` source tables out of Access (dropping the
-many `qry*` views and scratch tables) and builds four flat **`v_*`** tables,
-each keyed on `(ref_id, arm_no, timepoint)` and restricted to
-`SubgroupID = 0` (main arms only).
+`convert.R` reads the relevant `tbl*` source tables out of Access and writes
+a **normalised** SQLite database: facts in `measurements` (long format, one
+row per arm × outcome × subgroup × timepoint), entities in `studies` and
+`arms`, and text labels in lookup tables (`drugs`, `dose_units`,
+`timepoint_units`, `outcomes`, `subgroups`). It then creates four **views**
+— `v_pasi`, `v_pasi_abs`, `v_dlqi`, `v_safety` — that pivot the long facts
+back to the wide shape the app consumes, each keyed on
+`(ref_id, arm_no, timepoint)` and restricted to `subgroup_id = 0`. The
+**Download SQLite** button serves this normalised file directly; subgroup
+rows (`subgroup_id > 0`) are preserved in `measurements` for downstream use.
 
-All four views share the same context columns:
+Schema (normalised tables):
+
+| table | role |
+|---|---|
+| `drugs (drug_id, drug_name)` | drug-name lookup |
+| `dose_units (unit_id, unit_name)` | dose unit lookup (`mg`, `mg/kg`, …) |
+| `timepoint_units (unit_id, unit_name)` | timepoint unit lookup (`wk`, `mo`) |
+| `data_types (data_type_id, name)` | data-type lookup (Continuous, Dichotomous, …) from `tblDataTypes` |
+| `outcomes (outcome_id, code, label, subcategory, data_type_id, endpoint_group)` | full outcome catalogue (~116 entries) from `tblOutcomeDefs`. `code` and `endpoint_group` populated only for the 21 outcomes pivoted into a view; `subcategory` distinguishes endpoint outcomes (`PASI`, `DLQI`, `Safety`) from baseline characteristics (`Demographics`, `Psoriasis characteristics`, `Previous therapy`, `Comorbidity`) |
+| `subgroups (subgroup_id, subgroup_name)` | `0` = main analysis; other IDs (e.g. "Biologic-naive", "Weight < 69 kg") come from `tblSubgroups` |
+| `studies (study_id, trial, doi, design, study_date, location, phase, inclusion_criteria, exclusion_criteria, population_restriction, timepoint_unit_id)` | one row per Access RefID; `design`/`study_date`/`location`/`phase`/`inclusion_criteria`/`exclusion_criteria`/`population_restriction` come from `tblStudyChars` CatIDs 50/51/52/53/54/55/60 |
+| `arms (arm_id, study_id, arm_no, arm_name, drug_id, dose_amount, dose_unit_id)` | one row per study × arm; FKs into `drugs` / `dose_units` |
+| `measurements (measurement_id, arm_id, outcome_id, subgroup_id, timepoint, k, n, mean, sd, median, lo_iqr, hi_iqr)` | long-format fact table; carries **every** outcome in `tblIntraData` (~4 300 rows), including baseline characteristics (age, sex, weight, BMI, ethnicity, prior therapy, baseline PASI/DLQI etc.) at `timepoint = 0`. `UNIQUE(arm_id, outcome_id, subgroup_id, timepoint)` |
+| `study_subgroups (study_id, subgroup_id, n, subgroup_type, notes, excluded)` | per-study subgroup denominators from `tblSubgroupsStudies` |
+| `arm_subgroups (arm_id, subgroup_id, n)` | per-arm subgroup denominators from `tblSubgroupsArms` |
+
+All four `v_*` views share the same context columns:
 
 | column     | source                                                       |
 |------------|--------------------------------------------------------------|
-| `trial`    | `tblStudyChars.TextVal` where `CatID = 49` (Cochrane Study ID) |
-| `ref_id`   | `tblIntraData.RefID`                                         |
-| `arm_no`   | `tblIntraData.ArmNo`                                         |
-| `arm_name` | `tblArms.ArmName`                                            |
-| `drug`     | lookup of `tblStudyChars.ListVal` where `CatID = 57`         |
-| `dose`     | `CatID 58` (amount, numeric) + `CatID 59` (unit, lookup)     |
-| `timepoint`| `tblIntraData.TimePeriod` (numeric)                          |
-| `timepoint_unit` | `tblLongitudinalDataDefs.Unit` → `tblLongitudinalUnitDefs.strUnit` (usually `wk`, occasionally `mo`) |
-| `n`        | arm denominator (max `tblIntraData.N` across the included outcomes for that timepoint) |
+| `trial`    | `studies.trial`                                              |
+| `ref_id`   | `studies.study_id` (= Access RefID)                          |
+| `arm_no`   | `arms.arm_no`                                                |
+| `arm_name` | `arms.arm_name`                                              |
+| `drug`     | `drugs.drug_name` via `arms.drug_id`                         |
+| `dose`     | `arms.dose_amount` + `dose_units.unit_name` (rendered as `"40 mg"`) |
+| `timepoint`| `measurements.timepoint`                                     |
+| `timepoint_unit` | `timepoint_units.unit_name` via `studies.timepoint_unit_id` (usually `wk`, occasionally `mo`) |
+| `n`        | `MAX(measurements.n)` across the included outcomes for that arm × timepoint |
 
 ### `v_pasi` — PASI threshold responders (binary)
 
@@ -88,7 +110,7 @@ columns: `abs_dlqi_*` (id 43), `abs_dlqi_change_*` (id 56).
 
 ## Cloning the repo
 
-The source Access database (`RevPal.accdb`) and the generated `revpal.sqlite`
+The source Access database (`RevPal.accdb`) and the generated `psoriasis-rcts.sqlite`
 are both git-ignored. After cloning, drop your own `RevPal.accdb` into the
 project root and run `convert.R` (see below) to regenerate the SQLite file.
 
@@ -123,3 +145,6 @@ From the project root:
   column and are excluded when you filter by drug.
 - A few studies have PASI outcomes recorded with no responder count (`k`); those
   cells render as blank.
+- The `studies` table carries every `RefID` in the Access file (~520), but only
+  the ~200 fully-extracted studies have `design` / `study_date` / inclusion-exclusion
+  populated — the rest are screening-stage refs that never reached full extraction.

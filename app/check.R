@@ -32,14 +32,14 @@ find_script_dir <- function() {
 here <- find_script_dir()
 sqlite_p <- NULL
 for (cand in c(
-  if (!is.null(here)) file.path(here, "revpal.sqlite"),
-  "app/revpal.sqlite",
-  "revpal.sqlite"
+  if (!is.null(here)) file.path(here, "psoriasis-rcts.sqlite"),
+  "app/psoriasis-rcts.sqlite",
+  "psoriasis-rcts.sqlite"
 )) {
   if (file.exists(cand)) { sqlite_p <- normalizePath(cand); break }
 }
 if (is.null(sqlite_p))
-  stop("revpal.sqlite not found - run convert.R first.")
+  stop("psoriasis-rcts.sqlite not found - run convert.R first.")
 
 con <- dbConnect(SQLite(), sqlite_p, flags = SQLITE_RO)
 
@@ -145,14 +145,17 @@ section(
 section(
   "N differs between PASI outcomes at the same arm × timepoint",
   q("
-    SELECT RefID AS ref_id, ArmNo AS arm_no, TimePeriod AS timepoint,
-           MIN(N) AS n_min, MAX(N) AS n_max, COUNT(DISTINCT N) AS distinct_n
-    FROM   tblIntraData
-    WHERE  OutcomeID IN (36, 13, 14, 38)
-      AND  COALESCE(SubgroupID, 0) = 0
-      AND  N IS NOT NULL
-    GROUP  BY RefID, ArmNo, TimePeriod
-    HAVING COUNT(DISTINCT N) > 1
+    SELECT a.study_id AS ref_id, a.arm_no, m.timepoint,
+           MIN(m.n) AS n_min, MAX(m.n) AS n_max,
+           COUNT(DISTINCT m.n) AS distinct_n
+    FROM   measurements m
+    JOIN   arms     a ON a.arm_id = m.arm_id
+    JOIN   outcomes o ON o.outcome_id = m.outcome_id
+    WHERE  o.code IN ('pasi50','pasi75','pasi90','pasi100')
+      AND  m.subgroup_id = 0
+      AND  m.n IS NOT NULL
+    GROUP  BY a.study_id, a.arm_no, m.timepoint
+    HAVING COUNT(DISTINCT m.n) > 1
     ORDER BY ref_id, arm_no, timepoint
   "),
   note = "(v_pasi reports MAX(N); these arms have conflicting Ns in the raw data.)"
@@ -185,24 +188,13 @@ section(
 section(
   "Dose amount/unit mismatch",
   q("
-    WITH
-      da AS (SELECT RefID, ArmNo, NumVal AS amt
-             FROM tblStudyChars WHERE CatID = 58 AND ArmNo > 0),
-      du AS (SELECT RefID, ArmNo, ListVal AS unit
-             FROM tblStudyChars WHERE CatID = 59 AND ArmNo > 0)
-    SELECT COALESCE(da.RefID, du.RefID) AS ref_id,
-           COALESCE(da.ArmNo, du.ArmNo) AS arm_no,
-           da.amt  AS dose_amount,
-           du.unit AS dose_unit_id
-    FROM   da LEFT JOIN du ON da.RefID = du.RefID AND da.ArmNo = du.ArmNo
-    WHERE  da.amt IS NOT NULL AND du.unit IS NULL
-    UNION ALL
-    SELECT COALESCE(da.RefID, du.RefID) AS ref_id,
-           COALESCE(da.ArmNo, du.ArmNo) AS arm_no,
-           da.amt  AS dose_amount,
-           du.unit AS dose_unit_id
-    FROM   du LEFT JOIN da ON da.RefID = du.RefID AND da.ArmNo = du.ArmNo
-    WHERE  du.unit IS NOT NULL AND da.amt IS NULL
+    SELECT a.study_id    AS ref_id,
+           a.arm_no,
+           a.dose_amount,
+           a.dose_unit_id
+    FROM   arms a
+    WHERE  (a.dose_amount IS NOT NULL AND a.dose_unit_id IS NULL)
+       OR  (a.dose_amount IS NULL     AND a.dose_unit_id IS NOT NULL)
     ORDER BY ref_id, arm_no
   ")
 )
@@ -240,16 +232,16 @@ section(
   ")
 )
 
-# 11. Arms in tblArms with no PASI data at all. Informational, not an error
-#     (some trials extract other outcomes), but useful to scan.
+# 11. Arms in the database with no PASI data at all. Informational, not an
+#     error (some trials extract other outcomes), but useful to scan.
 section(
   "Arms with no PASI data (informational)",
   q("
-    SELECT a.RefID AS ref_id, a.ArmNo AS arm_no, a.ArmName AS arm_name
-    FROM   tblArms a
-    LEFT   JOIN v_pasi v ON v.ref_id = a.RefID AND v.arm_no = a.ArmNo
+    SELECT a.study_id AS ref_id, a.arm_no AS arm_no, a.arm_name
+    FROM   arms a
+    LEFT   JOIN v_pasi v ON v.ref_id = a.study_id AND v.arm_no = a.arm_no
     WHERE  v.ref_id IS NULL
-    ORDER BY ref_id, arm_no
+    ORDER BY a.study_id, a.arm_no
   "),
   max_rows = 20
 )
