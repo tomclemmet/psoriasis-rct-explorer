@@ -18,15 +18,34 @@ read_db <- function(sql, params = list()) {
   if (length(params)) dbGetQuery(con, sql, params = params) else dbGetQuery(con, sql)
 }
 
-# Turn a (trial, drug) data frame into the visNetwork node + edge data
-# frames. Nodes = drugs (sized by trial count). Edges = unordered drug pairs
-# that appear together in a trial (width = number of trials with that
-# head-to-head). Pure function: called once at startup to build the master
-# graph (union across all endpoint groups) and again per-group to build the
-# subset shown when the user picks a specific endpoint.
-build_network_data <- function(td) {
+# Turn a per-arm (trial, drug, ref_id, arm_no, n_arm) data frame into
+# visNetwork node + edge data frames. Nodes = drugs, sized by total patients
+# across surviving arms (area-proportional via sqrt). Edges = unordered drug
+# pairs that appear together in a trial, width = number of trials with that
+# head-to-head. Pure function: called once at startup to build the master
+# graph (union across all endpoint groups) and again per-group for subsets.
+NODE_SIZE_MIN <- 14
+NODE_SIZE_MAX <- 55
+
+# Scale a vector of patient counts to a visible-radius range using sqrt so
+# that area ∝ patients. `ref_max` anchors the upper end so the same patient
+# count produces the same on-screen size across every endpoint subset —
+# without this, visNetwork's per-render auto-scaling would make 1,000
+# patients look the same as 100 in views where 100 is the largest.
+size_from_patients <- function(n, ref_max) {
+  if (!length(n)) return(numeric(0))
+  if (!is.finite(ref_max) || ref_max <= 0) return(rep(NODE_SIZE_MIN, length(n)))
+  r <- sqrt(pmax(n, 1)) / sqrt(ref_max)
+  pmin(NODE_SIZE_MAX, pmax(NODE_SIZE_MIN,
+                            NODE_SIZE_MIN + (NODE_SIZE_MAX - NODE_SIZE_MIN) * r))
+}
+
+build_network_data <- function(td, ref_max_n = NA_real_) {
   td <- td[!is.na(td$drug) & nzchar(td$drug) & !is.na(td$trial), , drop = FALSE]
-  td <- unique(td[, c("trial", "drug")])
+  # One row per (trial, arm) keeps the patient count from being multi-counted
+  # if the same arm produced several rows in the source view.
+  td <- unique(td[, c("trial", "ref_id", "arm_no", "drug", "n_arm"),
+                  drop = FALSE])
 
   empty_edges <- data.frame(from = character(), to = character(),
                             n_trials = integer(), id = character(),
@@ -35,27 +54,39 @@ build_network_data <- function(td) {
   if (!nrow(td)) {
     return(list(
       nodes = data.frame(id = character(), label = character(),
-                         value = integer(), title = character(),
+                         value = numeric(), title = character(),
                          stringsAsFactors = FALSE),
       edges = empty_edges
     ))
   }
 
-  trial_counts <- as.data.frame(table(td$drug), stringsAsFactors = FALSE)
-  names(trial_counts) <- c("id", "n_trials")
+  drugs <- sort(unique(td$drug))
+  n_patients <- vapply(drugs, function(d)
+    sum(td$n_arm[td$drug == d], na.rm = TRUE), numeric(1))
+  n_trials_per_drug <- vapply(drugs, function(d)
+    length(unique(td$trial[td$drug == d])), integer(1))
+
+  size_ref <- if (is.finite(ref_max_n) && ref_max_n > 0) ref_max_n
+              else max(n_patients, 1, na.rm = TRUE)
   nodes_df <- data.frame(
-    id    = trial_counts$id,
-    label = trial_counts$id,
-    value = trial_counts$n_trials,
-    title = sprintf("<b>%s</b><br/>%d trial(s)",
-                    trial_counts$id, trial_counts$n_trials),
+    id    = drugs,
+    label = drugs,
+    # Absolute size in pixels (radius). Bypassing visNetwork's `scaling.value`
+    # auto-rescale so a given patient count looks identical across endpoint
+    # subsets. sqrt → area ∝ patients (standard NMA-diagram convention).
+    size  = size_from_patients(n_patients, size_ref),
+    title = sprintf("<b>%s</b><br/>%d trial(s), %s patient(s)",
+                    drugs, n_trials_per_drug,
+                    formatC(n_patients, format = "d", big.mark = ",")),
     stringsAsFactors = FALSE
   )
-  nodes_df <- nodes_df[order(-nodes_df$value, nodes_df$id), ]
+  nodes_df <- nodes_df[order(-n_patients[match(nodes_df$id, drugs)],
+                             nodes_df$id), ]
 
+  td_pair <- unique(td[, c("trial", "drug"), drop = FALSE])
   pair_rows <- list()
-  for (tr in unique(td$trial)) {
-    ds <- sort(unique(td$drug[td$trial == tr]))
+  for (tr in unique(td_pair$trial)) {
+    ds <- sort(unique(td_pair$drug[td_pair$trial == tr]))
     if (length(ds) < 2) next
     cmb <- utils::combn(ds, 2)
     pair_rows[[tr]] <- data.frame(from = cmb[1, ], to = cmb[2, ],
@@ -362,13 +393,34 @@ endpoint_groups <- list(
 
 # Per-group "does this (trial, drug) arm contribute a row to this endpoint?"
 # predicate. Mirrors the row-drop logic inside each fmt() in endpoint_groups
-# (e.g. `has_any` across the binary cols) but returns the underlying raw
-# (trial, drug) pairs — these drive the per-endpoint network subset.
+# (e.g. `has_any` across the binary cols) but also computes a per-arm
+# patient count (max n across the arm's surviving rows in this endpoint,
+# i.e. the ITT denominator for the endpoint). Returned columns drive both
+# the per-endpoint network subset and node sizing.
+empty_survivors <- function() {
+  data.frame(trial = character(), ref_id = integer(), arm_no = integer(),
+             drug = character(), n_arm = integer(),
+             stringsAsFactors = FALSE)
+}
+
+summarise_arms <- function(df) {
+  if (!nrow(df)) return(empty_survivors())
+  agg <- aggregate(df$n,
+                   by = list(trial = df$trial, ref_id = df$ref_id,
+                             arm_no = df$arm_no, drug = df$drug),
+                   FUN = function(x) {
+                     v <- suppressWarnings(max(x, na.rm = TRUE))
+                     if (is.infinite(v)) NA_integer_ else as.integer(v)
+                   })
+  names(agg)[ncol(agg)] <- "n_arm"
+  agg
+}
+
 survivors_binary <- function(df, cols) {
-  if (!nrow(df)) return(df[, c("trial", "drug"), drop = FALSE])
+  if (!nrow(df)) return(empty_survivors())
   ok <- Reduce(`|`, lapply(cols, function(c)
     !is.na(df[[c]]) & !is.na(df$n) & df$n > 0))
-  unique(df[ok, c("trial", "drug"), drop = FALSE])
+  summarise_arms(df[ok, , drop = FALSE])
 }
 
 # Absolute-value endpoints: a (trial, drug) arm contributes iff some
@@ -377,10 +429,10 @@ survivors_binary <- function(df, cols) {
 # require any of {baseline, on_tx, change} to be non-empty. Baseline alone
 # without a follow-up value would not survive their `has_any` either.
 survivors_absolute <- function(df, mean_col, change_col) {
-  if (!nrow(df)) return(df[, c("trial", "drug"), drop = FALSE])
+  if (!nrow(df)) return(empty_survivors())
   tp_ok   <- is.na(df$timepoint) | df$timepoint > 0
   any_val <- !is.na(df[[mean_col]]) | !is.na(df[[change_col]])
-  unique(df[tp_ok & any_val, c("trial", "drug"), drop = FALSE])
+  summarise_arms(df[tp_ok & any_val, , drop = FALSE])
 }
 
 group_survivors <- list(
@@ -424,12 +476,26 @@ for (.tid in names(endpoint_groups)) {
   }
 }
 
+# Find the largest per-drug patient total across any single endpoint group.
+# This anchors node sizing so the same patient count produces the same
+# visual size in every subset (and the biggest drug in the busiest endpoint
+# hits NODE_SIZE_MAX exactly).
+.global_max_patients <- max(0L, unlist(lapply(group_td, function(tab_grps) {
+  unlist(lapply(tab_grps, function(td) {
+    if (!nrow(td)) return(0L)
+    td <- unique(td[, c("trial", "ref_id", "arm_no", "drug", "n_arm")])
+    if (!nrow(td)) return(0L)
+    vapply(unique(td$drug), function(d)
+      sum(td$n_arm[td$drug == d], na.rm = TRUE), numeric(1))
+  }))
+})), na.rm = TRUE)
+
 # Master network = union of every endpoint group's (trial, drug) set. Its
 # layout is computed once with layout_with_kk and reused for every subset,
 # so a drug's position never moves when the user switches endpoints.
 master_td <- unique(do.call(rbind, lapply(group_td, function(tab_grps)
   do.call(rbind, tab_grps))))
-master_network <- build_network_data(master_td)
+master_network <- build_network_data(master_td, ref_max_n = .global_max_patients)
 
 .master_layout <- visNetwork(master_network$nodes, master_network$edges) |>
   visIgraphLayout(layout = "layout_with_kk", randomSeed = 42, physics = FALSE)
@@ -454,7 +520,8 @@ for (.tid in names(endpoint_groups)) {
   group_networks[[.tid]] <- list()
   for (.gid in names(endpoint_groups[[.tid]]$groups)) {
     group_networks[[.tid]][[.gid]] <- attach_master_coords(
-      build_network_data(group_td[[.tid]][[.gid]])
+      build_network_data(group_td[[.tid]][[.gid]],
+                         ref_max_n = .global_max_patients)
     )
   }
 }
@@ -533,8 +600,10 @@ ui <- fluidPage(
       helpText("Click a node to filter to one drug; click an edge to show only",
                "trials comparing that pair. The network reflects the currently",
                "selected endpoint — drugs and comparisons without data for that",
-               "endpoint are hidden. Click empty space, or the Clear button,",
-               "to reset."),
+               "endpoint are hidden. Node area is proportional to the number",
+               "of randomised patients contributing to the endpoint; edge",
+               "width is the number of trials with that head-to-head. Click",
+               "empty space, or the Clear button, to reset."),
       tags$footer(class = "app-footer",
         HTML("&copy; 2026 Thomas Clemmet"),
         " · ",
@@ -676,9 +745,10 @@ server <- function(input, output, session) {
     nw <- isolate(current_network())
     visNetwork(nw$nodes, nw$edges) |>
       visNodes(shape   = "dot",
-               scaling = list(min = 18, max = 55,
-                              label = list(enabled = TRUE,
-                                           min = 22, max = 34)),
+               # Per-node `size` is set in build_network_data() (sqrt of
+               # patient count, anchored to the global max). No `scaling`
+               # block — that would re-rescale per render and break visual
+               # comparability across endpoint subsets.
                font    = list(size = 28, face = "Helvetica",
                               strokeWidth = 4, strokeColor = "#ffffff"),
                color   = list(background = "#4C9AFF",
