@@ -18,15 +18,28 @@ read_db <- function(sql, params = list()) {
   if (length(params)) dbGetQuery(con, sql, params = params) else dbGetQuery(con, sql)
 }
 
-# Build network data once at startup. Nodes = drugs (sized by trial count).
-# Edges = unordered drug pairs that appear together in a trial (width = number
-# of trials with that head-to-head comparison). Drives the clickable NMA
-# diagram which doubles as the table filter.
-build_network <- function() {
-  td <- read_db(
-    "SELECT DISTINCT trial, drug FROM v_pasi
-     WHERE drug IS NOT NULL AND drug != '' AND trial IS NOT NULL"
-  )
+# Turn a (trial, drug) data frame into the visNetwork node + edge data
+# frames. Nodes = drugs (sized by trial count). Edges = unordered drug pairs
+# that appear together in a trial (width = number of trials with that
+# head-to-head). Pure function: called once at startup to build the master
+# graph (union across all endpoint groups) and again per-group to build the
+# subset shown when the user picks a specific endpoint.
+build_network_data <- function(td) {
+  td <- td[!is.na(td$drug) & nzchar(td$drug) & !is.na(td$trial), , drop = FALSE]
+  td <- unique(td[, c("trial", "drug")])
+
+  empty_edges <- data.frame(from = character(), to = character(),
+                            n_trials = integer(), id = character(),
+                            value = integer(), title = character(),
+                            stringsAsFactors = FALSE)
+  if (!nrow(td)) {
+    return(list(
+      nodes = data.frame(id = character(), label = character(),
+                         value = integer(), title = character(),
+                         stringsAsFactors = FALSE),
+      edges = empty_edges
+    ))
+  }
 
   trial_counts <- as.data.frame(table(td$drug), stringsAsFactors = FALSE)
   names(trial_counts) <- c("id", "n_trials")
@@ -40,7 +53,6 @@ build_network <- function() {
   )
   nodes_df <- nodes_df[order(-nodes_df$value, nodes_df$id), ]
 
-  # Edges: pairs within trial, dedupe with from < to, count trials.
   pair_rows <- list()
   for (tr in unique(td$trial)) {
     ds <- sort(unique(td$drug[td$trial == tr]))
@@ -49,12 +61,18 @@ build_network <- function() {
     pair_rows[[tr]] <- data.frame(from = cmb[1, ], to = cmb[2, ],
                                   stringsAsFactors = FALSE)
   }
+  if (!length(pair_rows)) {
+    return(list(nodes = nodes_df, edges = empty_edges))
+  }
   pairs <- do.call(rbind, pair_rows)
   pair_counts <- as.data.frame(table(pairs$from, pairs$to),
                                stringsAsFactors = FALSE)
   names(pair_counts) <- c("from", "to", "n_trials")
   pair_counts <- pair_counts[pair_counts$n_trials > 0, ]
-  pair_counts$id    <- sprintf("e%d", seq_len(nrow(pair_counts)))
+  # Stable id derived from (from, to) so the same comparison keeps the same
+  # edge id across subset rebuilds — that lets visNetworkProxy reconcile
+  # additions/removals correctly when the user switches endpoints.
+  pair_counts$id    <- sprintf("e_%s__%s", pair_counts$from, pair_counts$to)
   pair_counts$value <- pair_counts$n_trials
   pair_counts$title <- sprintf("<b>%s &harr; %s</b><br/>%d trial(s)",
                                pair_counts$from, pair_counts$to,
@@ -62,10 +80,6 @@ build_network <- function() {
 
   list(nodes = nodes_df, edges = pair_counts)
 }
-
-.network <- build_network()
-nodes_df <- .network$nodes
-edges_df <- .network$edges
 
 # ref_id -> DOI lookup, built once. Only ~12% of refs have a DOI in this
 # dataset (URL field is empty across the board), so most trial cells stay
@@ -85,8 +99,8 @@ doi_lookup <- setNames(.doi_rows$DOI, as.character(.doi_rows$ref_id))
 .baseline_pasi <- read_db("
   SELECT a.study_id AS ref_id, a.arm_no AS arm_no,
          MAX(m.mean) AS mean, MAX(m.sd) AS sd
-  FROM   measurements m
-  JOIN   arms a ON a.arm_id = m.arm_id
+  FROM   tblIntraData m
+  JOIN   tblArms a ON a.arm_id = m.arm_id
   WHERE  m.outcome_id = 11 AND m.subgroup_id = 0
   GROUP  BY a.study_id, a.arm_no
 ")
@@ -346,6 +360,109 @@ endpoint_groups <- list(
   )
 )
 
+# Per-group "does this (trial, drug) arm contribute a row to this endpoint?"
+# predicate. Mirrors the row-drop logic inside each fmt() in endpoint_groups
+# (e.g. `has_any` across the binary cols) but returns the underlying raw
+# (trial, drug) pairs — these drive the per-endpoint network subset.
+survivors_binary <- function(df, cols) {
+  if (!nrow(df)) return(df[, c("trial", "drug"), drop = FALSE])
+  ok <- Reduce(`|`, lapply(cols, function(c)
+    !is.na(df[[c]]) & !is.na(df$n) & df$n > 0))
+  unique(df[ok, c("trial", "drug"), drop = FALSE])
+}
+
+# Absolute-value endpoints: a (trial, drug) arm contributes iff some
+# non-baseline timepoint has a mean or change-from-baseline value. Matches
+# format_pasi_absolute / format_dlqi_absolute, which drop t==0 rows and then
+# require any of {baseline, on_tx, change} to be non-empty. Baseline alone
+# without a follow-up value would not survive their `has_any` either.
+survivors_absolute <- function(df, mean_col, change_col) {
+  if (!nrow(df)) return(df[, c("trial", "drug"), drop = FALSE])
+  tp_ok   <- is.na(df$timepoint) | df$timepoint > 0
+  any_val <- !is.na(df[[mean_col]]) | !is.na(df[[change_col]])
+  unique(df[tp_ok & any_val, c("trial", "drug"), drop = FALSE])
+}
+
+group_survivors <- list(
+  pasi = list(
+    response = function(df) survivors_binary(df,
+                              c("pasi50", "pasi75", "pasi90", "pasi100")),
+    absolute = function(df) survivors_absolute(df,
+                              "abs_pasi_mean", "abs_pasi_change_mean")
+  ),
+  dlqi = list(
+    zero      = function(df) survivors_binary(df,  c("dlqi_0_1", "dlqi_0")),
+    threshold = function(df) survivors_binary(df,  c("dlqi_le5")),
+    change    = function(df) survivors_binary(df,
+                               c("dlqi_5pt_dec", "dlqi_4pt_dec")),
+    absolute  = function(df) survivors_absolute(df,
+                               "abs_dlqi_mean", "abs_dlqi_change_mean")
+  ),
+  safety = list(
+    sae                = function(df) survivors_binary(df, c("sae")),
+    disc               = function(df) survivors_binary(df,
+                                        c("disc_any", "disc_ae")),
+    serious_infection  = function(df) survivors_binary(df,
+                                        c("serious_infection")),
+    injection_site_rxn = function(df) survivors_binary(df,
+                                        c("injection_site_rxn")),
+    malignancy         = function(df) survivors_binary(df,
+                                        c("malignancy", "nmsc",
+                                          "malignancy_non_nmsc"))
+  )
+)
+
+# Precompute the (trial, drug) set and the network for each (tab, group).
+# Switching endpoints is then a free dictionary lookup at runtime.
+group_td <- list()
+for (.tid in names(endpoint_groups)) {
+  group_td[[.tid]] <- list()
+  for (.gid in names(endpoint_groups[[.tid]]$groups)) {
+    .grp <- endpoint_groups[[.tid]]$groups[[.gid]]
+    .raw <- read_db(sprintf("SELECT * FROM %s", .grp$table))
+    group_td[[.tid]][[.gid]] <- group_survivors[[.tid]][[.gid]](.raw)
+  }
+}
+
+# Master network = union of every endpoint group's (trial, drug) set. Its
+# layout is computed once with layout_with_kk and reused for every subset,
+# so a drug's position never moves when the user switches endpoints.
+master_td <- unique(do.call(rbind, lapply(group_td, function(tab_grps)
+  do.call(rbind, tab_grps))))
+master_network <- build_network_data(master_td)
+
+.master_layout <- visNetwork(master_network$nodes, master_network$edges) |>
+  visIgraphLayout(layout = "layout_with_kk", randomSeed = 42, physics = FALSE)
+.layout_nodes <- .master_layout$x$nodes
+.mi <- match(master_network$nodes$id, .layout_nodes$id)
+# visIgraphLayout normalises coords to ~[-1, 1] and relies on a JS-side
+# square-fit multiplier to spread them across the canvas. We bypass that
+# wrapper (so subset switches don't relayout), so scale to pixel space
+# ourselves — ~400 produces spacing comparable to the original render.
+master_network$nodes$x <- .layout_nodes$x[.mi] * 400
+master_network$nodes$y <- .layout_nodes$y[.mi] * 400
+
+attach_master_coords <- function(nw) {
+  m <- match(nw$nodes$id, master_network$nodes$id)
+  nw$nodes$x <- master_network$nodes$x[m]
+  nw$nodes$y <- master_network$nodes$y[m]
+  nw
+}
+
+group_networks <- list()
+for (.tid in names(endpoint_groups)) {
+  group_networks[[.tid]] <- list()
+  for (.gid in names(endpoint_groups[[.tid]]$groups)) {
+    group_networks[[.tid]][[.gid]] <- attach_master_coords(
+      build_network_data(group_td[[.tid]][[.gid]])
+    )
+  }
+}
+
+# Preserved for downstream lookups (filter-state click handlers, etc.).
+nodes_df <- master_network$nodes
+edges_df <- master_network$edges
+
 ui <- fluidPage(
   tags$head(tags$script(HTML("
     // Disable specific <option> values inside a Shiny select input. Used to
@@ -414,8 +531,10 @@ ui <- fluidPage(
     column(6,
       visNetworkOutput("nma", height = "640px"),
       helpText("Click a node to filter to one drug; click an edge to show only",
-               "trials comparing that pair. Click empty space, or the Clear",
-               "button, to reset."),
+               "trials comparing that pair. The network reflects the currently",
+               "selected endpoint — drugs and comparisons without data for that",
+               "endpoint are hidden. Click empty space, or the Clear button,",
+               "to reset."),
       tags$footer(class = "app-footer",
         HTML("&copy; 2026 Thomas Clemmet"),
         " · ",
@@ -435,6 +554,7 @@ ui <- fluidPage(
                                     vapply(tab$groups, `[[`, "", "label"))
           tabPanel(
             tab$label,
+            value = tab_id,
             div(class = "endpoint-picker",
                 selectInput(paste0("group_", tab_id),
                             label = NULL,
@@ -543,11 +663,18 @@ server <- function(input, output, session) {
     })
   })
 
+  # The active endpoint group's pre-built network (nodes + edges, with
+  # master-graph x/y baked in). Subset switches don't relayout.
+  current_network <- reactive({
+    tid <- input$view %||% names(endpoint_groups)[1]
+    gid <- input[[paste0("group_", tid)]]
+    req(gid)
+    group_networks[[tid]][[gid]]
+  })
+
   output$nma <- renderVisNetwork({
-    visNetwork(nodes_df, edges_df) |>
-      visIgraphLayout(layout    = "layout_with_kk",
-                      randomSeed = 42,
-                      physics    = FALSE) |>
+    nw <- isolate(current_network())
+    visNetwork(nw$nodes, nw$edges) |>
       visNodes(shape   = "dot",
                scaling = list(min = 18, max = 55,
                               label = list(enabled = TRUE,
@@ -560,12 +687,14 @@ server <- function(input, output, session) {
                                                 border     = "#B5521A"),
                               hover      = list(background = "#7FB5FF",
                                                 border     = "#1F4E8C")),
-               borderWidth = 2) |>
+               borderWidth = 2,
+               physics = FALSE) |>
       visEdges(smooth   = list(enabled = TRUE, type = "continuous"),
                scaling  = list(min = 1, max = 10),
                color    = list(color = "rgba(80,80,80,0.30)",
                                highlight = "#FF8A3D",
                                hover     = "#1F4E8C")) |>
+      visPhysics(enabled = FALSE) |>
       visOptions(highlightNearest = list(enabled = TRUE, degree = 1,
                                          hover = TRUE,
                                          labelOnly = FALSE),
@@ -581,6 +710,42 @@ server <- function(input, output, session) {
         deselectEdge = "function(p){ Shiny.setInputValue('nma_clear', Math.random(), {priority:'event'}); }"
       )
   })
+
+  # When the active endpoint group changes, swap nodes/edges in place via
+  # the proxy so zoom and pan are preserved. If the currently-selected drug
+  # or pair has no data in the new endpoint, clear the filter automatically
+  # — the user confirmed this behaviour over leaving the selection pinned.
+  observeEvent(current_network(), {
+    nw <- current_network()
+    remove_nodes <- setdiff(master_network$nodes$id, nw$nodes$id)
+    remove_edges <- setdiff(master_network$edges$id, nw$edges$id)
+    proxy <- visNetworkProxy("nma")
+    if (length(remove_edges)) visRemoveEdges(proxy, id = remove_edges)
+    if (length(remove_nodes)) visRemoveNodes(proxy, id = remove_nodes)
+    visUpdateNodes(proxy, nodes = nw$nodes)
+    visUpdateEdges(proxy, edges = nw$edges)
+    # Recentre on the visible subset so a smaller network doesn't sit in a
+    # corner of the canvas. Preserves zoom level on no-op updates.
+    visFit(proxy, animation = list(duration = 250))
+
+    s <- isolate(filter_state())
+    if (!is.null(s)) {
+      stale <- FALSE
+      if (identical(s$kind, "node") && !(s$drug %in% nw$nodes$id)) {
+        stale <- TRUE
+      } else if (identical(s$kind, "edge")) {
+        present <- nrow(nw$edges) > 0 && any(
+          (nw$edges$from == s$from & nw$edges$to == s$to) |
+          (nw$edges$from == s$to   & nw$edges$to == s$from)
+        )
+        if (!present) stale <- TRUE
+      }
+      if (stale) {
+        filter_state(NULL)
+        visUnselectAll(proxy)
+      }
+    }
+  }, ignoreInit = TRUE)
 
   # Node click -> single-drug filter
   observeEvent(input$nma_node, {
