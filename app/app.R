@@ -761,8 +761,11 @@ server <- function(input, output, session) {
                borderWidth = 2,
                physics = FALSE) |>
       visEdges(smooth   = list(enabled = TRUE, type = "continuous"),
-               scaling  = list(min = 1, max = 10),
-               color    = list(color = "rgba(80,80,80,0.30)",
+               # Floor the minimum width at 3px so single-trial edges stay
+               # easily clickable; head-to-heads with many trials still
+               # stand out at the top end.
+               scaling  = list(min = 3, max = 14),
+               color    = list(color = "rgba(80,80,80,0.35)",
                                highlight = "#FF8A3D",
                                hover     = "#1F4E8C")) |>
       visPhysics(enabled = FALSE) |>
