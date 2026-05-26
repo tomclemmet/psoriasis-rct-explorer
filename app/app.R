@@ -504,9 +504,10 @@ master_network <- build_network_data(master_td, ref_max_n = .global_max_patients
 # visIgraphLayout normalises coords to ~[-1, 1] and relies on a JS-side
 # square-fit multiplier to spread them across the canvas. We bypass that
 # wrapper (so subset switches don't relayout), so scale to pixel space
-# ourselves — ~400 produces spacing comparable to the original render.
-master_network$nodes$x <- .layout_nodes$x[.mi] * 400
-master_network$nodes$y <- .layout_nodes$y[.mi] * 400
+# ourselves — ~650 gives the larger patient-count-sized nodes room to
+# breathe without overlapping labels.
+master_network$nodes$x <- .layout_nodes$x[.mi] * 650
+master_network$nodes$y <- .layout_nodes$y[.mi] * 650
 
 attach_master_coords <- function(nw) {
   m <- match(nw$nodes$id, master_network$nodes$id)
