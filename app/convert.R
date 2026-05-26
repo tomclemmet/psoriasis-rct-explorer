@@ -17,11 +17,20 @@
 #     subgroups(subgroup_id PK, subgroup_name)
 #
 #   Entities
-#     studies(study_id PK, trial, doi,
+#     studies(study_id PK, trial,
 #             design, study_date, location, phase,
 #             inclusion_criteria, exclusion_criteria,
 #             population_restriction,
 #             timepoint_unit_id FK)
+#         -- Keyed by the *primary* publication's RefID. Secondary
+#         -- publications are recorded in `publications` and never appear
+#         -- here (the source data attributes all measurements/arms/chars
+#         -- to the primary RefID).
+#     publications(publication_id PK, study_id FK, is_primary,
+#                  doi, title, authors, year, journal, notes)
+#         -- One row per tblRefs entry; secondaries link to their primary
+#         -- via `study_id` (= tblStudyDefs.ParentID). The primary's row
+#         -- has study_id == publication_id and is_primary = 1.
 #     arms(arm_id PK, study_id FK, arm_no, arm_name,
 #          drug_id FK, dose_amount, dose_unit_id FK)
 #
@@ -115,6 +124,7 @@ odefs   <- dbReadTable(src, "tblOutcomeDefs")    # 116 outcomes catalogue
 dtypes  <- dbReadTable(src, "tblDataTypes")      # DataTypeID -> name
 sg_st   <- dbReadTable(src, "tblSubgroupsStudies") # per (study, subgroup)
 sg_arm  <- dbReadTable(src, "tblSubgroupsArms")    # per (study, subgroup, arm)
+studefs <- dbReadTable(src, "tblStudyDefs")        # RefID, ParentID, Notes, ...
 dbDisconnect(src)
 
 # --- 3. Create destination schema -----------------------------------------
@@ -150,9 +160,8 @@ CREATE TABLE subgroups (
   subgroup_name  TEXT
 );
 CREATE TABLE studies (
-  study_id                INTEGER PRIMARY KEY,
+  study_id                INTEGER PRIMARY KEY,  -- = primary publication's RefID
   trial                   TEXT,    -- Cochrane Study ID (CatID 49)
-  doi                     TEXT,
   design                  TEXT,    -- CatID 50
   study_date              TEXT,    -- CatID 51 (free-form date range)
   location                TEXT,    -- CatID 52
@@ -162,6 +171,18 @@ CREATE TABLE studies (
   population_restriction  TEXT,    -- CatID 60
   timepoint_unit_id       INTEGER REFERENCES timepoint_units(unit_id)
 );
+CREATE TABLE publications (
+  publication_id  INTEGER PRIMARY KEY,         -- = tblRefs.ID
+  study_id        INTEGER NOT NULL REFERENCES studies(study_id),
+  is_primary      INTEGER NOT NULL,            -- 1 for the primary pub, else 0
+  doi             TEXT,
+  title           TEXT,
+  authors         TEXT,
+  year            INTEGER,                     -- parsed from tblRefs.Date
+  journal         TEXT,
+  notes           TEXT
+);
+CREATE INDEX idx_publications_study ON publications(study_id);
 CREATE TABLE arms (
   arm_id        INTEGER PRIMARY KEY,
   study_id      INTEGER NOT NULL REFERENCES studies(study_id),
@@ -292,11 +313,36 @@ dbWriteTable(dst, "timepoint_units", timepoint_units_df, append = TRUE)
 tp_unit_id_of <- setNames(timepoint_units_df$unit_id, timepoint_units_df$unit_name)
 
 # --- 6. Studies -----------------------------------------------------------
-# Universe = any RefID seen in intra, chars, arms or refs.
-all_ref_ids <- sort(unique(as.integer(c(
-  intra$RefID, chars$RefID, arms_x$RefID, refs$ID
-))))
-all_ref_ids <- all_ref_ids[!is.na(all_ref_ids)]
+# Universe = *primary* RefIDs that have any extracted data. tblStudyDefs
+# distinguishes primaries (ParentID NULL/0) from secondaries (ParentID > 0);
+# every measurement/arm/char row in the source attributes data to a primary
+# RefID, so secondaries never need a `studies` row. Their bibliography info
+# lives in `publications` further down.
+primary_ids <- studefs$RefID[is.na(studefs$ParentID) | studefs$ParentID == 0]
+
+# Fail loud if a secondary has measurements or arms attributed directly —
+# would silently drop data once we restrict to primaries below.
+# (tblStudyChars also records CatID 49 = trial name redundantly against
+# secondaries; that's a known denormalisation in the source and is ignored.)
+secondary_with_data <- setdiff(
+  unique(as.integer(c(intra$RefID, arms_x$RefID))),
+  primary_ids
+)
+secondary_with_data <- secondary_with_data[!is.na(secondary_with_data)]
+if (length(secondary_with_data)) {
+  stop("Secondary RefIDs have measurements or arms: ",
+       paste(sort(secondary_with_data), collapse = ", "))
+}
+
+# Universe: primaries that have any genuine data. tblStudyChars rows
+# against secondaries (CatID 49 only — redundant trial name) are excluded.
+data_ref_ids <- unique(as.integer(c(
+  intra$RefID,
+  chars$RefID[chars$RefID %in% primary_ids],
+  arms_x$RefID
+)))
+data_ref_ids <- data_ref_ids[!is.na(data_ref_ids)]
+all_ref_ids <- sort(intersect(primary_ids, data_ref_ids))
 
 # Helper: pull a study-level TextVal field (ArmNo = 0) for a given CatID
 # into a named vector keyed by RefID.
@@ -323,8 +369,6 @@ inc_of        <- study_text_of(54)
 exc_of        <- study_text_of(55)
 pop_restr_of  <- study_text_of(60)
 
-doi_of <- setNames(refs$DOI, as.character(refs$ID))
-
 # Per-study timepoint unit. Use MIN(strUnit) across every outcome present
 # in tblLongitudinalDataDefs for the study; deterministic, constant per
 # study in this dataset.
@@ -341,7 +385,6 @@ pick <- function(map, ids) unname(map[as.character(ids)])
 studies_df <- data.frame(
   study_id               = all_ref_ids,
   trial                  = pick(trial_of,      all_ref_ids),
-  doi                    = pick(doi_of,        all_ref_ids),
   design                 = pick(design_of,     all_ref_ids),
   study_date             = pick(date_of,       all_ref_ids),
   location               = pick(location_of,   all_ref_ids),
@@ -356,12 +399,55 @@ studies_df <- data.frame(
   stringsAsFactors = FALSE
 )
 # Blank strings -> NA.
-for (col in c("trial","doi","design","study_date","location","phase",
+for (col in c("trial","design","study_date","location","phase",
               "inclusion_criteria","exclusion_criteria","population_restriction")) {
   v <- studies_df[[col]]
   studies_df[[col]][!is.na(v) & !nzchar(v)] <- NA
 }
 dbWriteTable(dst, "studies", studies_df, append = TRUE)
+
+# --- 6b. Publications -----------------------------------------------------
+# One row per tblRefs entry. Each publication points at its primary's
+# study_id (= ParentID if non-NULL/>0, else its own RefID). Only keep
+# publications whose resolved primary actually has a `studies` row, so the
+# FK is satisfied; secondaries dangling off an excluded primary are dropped
+# with a warning.
+parent_of <- setNames(
+  ifelse(is.na(studefs$ParentID) | studefs$ParentID == 0,
+         studefs$RefID, studefs$ParentID),
+  as.character(studefs$RefID)
+)
+pub_study_id <- unname(parent_of[as.character(refs$ID)])
+# Publications missing from tblStudyDefs default to "primary of themselves".
+pub_study_id[is.na(pub_study_id)] <- refs$ID[is.na(pub_study_id)]
+
+publications_df <- data.frame(
+  publication_id = as.integer(refs$ID),
+  study_id       = as.integer(pub_study_id),
+  is_primary     = as.integer(refs$ID == pub_study_id),
+  doi            = refs$DOI,
+  title          = refs$Title,
+  authors        = refs$Authors,
+  year           = suppressWarnings(as.integer(
+                     sub(".*?(\\d{4}).*", "\\1", refs$Date))),
+  journal        = ifelse(!is.na(refs$JournalAbbrev) & nzchar(refs$JournalAbbrev),
+                          refs$JournalAbbrev, refs$JournalLong),
+  notes          = refs$Notes,
+  stringsAsFactors = FALSE
+)
+# Blank strings -> NA in text columns.
+for (col in c("doi","title","authors","journal","notes")) {
+  v <- publications_df[[col]]
+  publications_df[[col]][!is.na(v) & !nzchar(v)] <- NA
+}
+
+dropped_pubs <- sum(!(publications_df$study_id %in% studies_df$study_id))
+if (dropped_pubs) {
+  cat(sprintf("  publications: dropping %d row(s) whose primary is outside the study universe\n",
+              dropped_pubs))
+}
+publications_df <- publications_df[publications_df$study_id %in% studies_df$study_id, ]
+dbWriteTable(dst, "publications", publications_df, append = TRUE)
 
 # --- 7. Arms --------------------------------------------------------------
 # Arm universe: every (RefID, ArmNo) seen in tblArms or as a non-zero ArmNo
@@ -661,6 +747,10 @@ cat(sprintf("study_subgroups rows: %d   arm_subgroups rows: %d\n",
 cat(sprintf("Studies with non-null design: %d / %d\n",
             dbGetQuery(dst, "SELECT COUNT(*) AS n FROM studies WHERE design IS NOT NULL")$n,
             dbGetQuery(dst, "SELECT COUNT(*) AS n FROM studies")$n))
+cat(sprintf("Publications: %d (primary: %d, secondary: %d)\n",
+            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM publications")$n,
+            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM publications WHERE is_primary = 1")$n,
+            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM publications WHERE is_primary = 0")$n))
 
 cat("\nSample v_pasi (first 5 rows):\n")
 print(dbGetQuery(dst, "SELECT trial, drug, dose, timepoint, n, pasi50, pasi75, pasi90, pasi100

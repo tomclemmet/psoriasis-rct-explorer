@@ -71,10 +71,30 @@ edges_df <- .network$edges
 # dataset (URL field is empty across the board), so most trial cells stay
 # plain text.
 .doi_rows <- read_db(
-  "SELECT study_id AS ref_id, doi AS DOI FROM studies
-   WHERE doi IS NOT NULL AND doi != ''"
+  "SELECT study_id AS ref_id, doi AS DOI FROM publications
+   WHERE is_primary = 1 AND doi IS NOT NULL AND doi != ''"
 )
 doi_lookup <- setNames(.doi_rows$DOI, as.character(.doi_rows$ref_id))
+
+# Baseline PASI recorded as a "Psoriasis characteristics" outcome
+# (outcome_id 11) — used as a fallback for the Absolute PASI table when an
+# arm has no week-0 abs_pasi row. Curators usually record baseline PASI as
+# a baseline characteristic; week 0 of the absolute-PASI longitudinal series
+# is only present for the minority of arms where that timepoint was
+# explicitly extracted.
+.baseline_pasi <- read_db("
+  SELECT a.study_id AS ref_id, a.arm_no AS arm_no,
+         MAX(m.mean) AS mean, MAX(m.sd) AS sd
+  FROM   measurements m
+  JOIN   arms a ON a.arm_id = m.arm_id
+  WHERE  m.outcome_id = 11 AND m.subgroup_id = 0
+  GROUP  BY a.study_id, a.arm_no
+")
+.baseline_pasi_key <- paste(.baseline_pasi$ref_id, .baseline_pasi$arm_no, sep = "|")
+baseline_pasi_lookup <- list(
+  mean = setNames(.baseline_pasi$mean, .baseline_pasi_key),
+  sd   = setNames(.baseline_pasi$sd,   .baseline_pasi_key)
+)
 
 # Wrap trial text in an <a href="https://doi.org/..."> when a DOI is known
 # for that ref_id; otherwise return the trial text unchanged. Caller must
@@ -156,15 +176,23 @@ fmt_drug <- function(drug, dose, timepoint, unit) {
   ifelse(nzchar(tp_txt), paste0(with_dose, ", ", tp_txt), with_dose)
 }
 
-# Per-arm baseline: value at timepoint == 0 for the same (ref_id, arm_no).
-# Returns a vector aligned with df rows.
-baseline_lookup <- function(df, mean_col, sd_col) {
+# Per-arm baseline: value at timepoint == 0 for the same (ref_id, arm_no),
+# with optional fallback to a pre-loaded `list(mean=<named>, sd=<named>)`
+# keyed by "ref_id|arm_no" when no timepoint-0 row exists. Returns vectors
+# aligned with df rows.
+baseline_lookup <- function(df, mean_col, sd_col, fallback = NULL) {
   key <- paste(df$ref_id, df$arm_no, sep = "|")
   is_b <- !is.na(df$timepoint) & df$timepoint == 0
   bkey <- paste(df$ref_id[is_b], df$arm_no[is_b], sep = "|")
   i    <- match(key, bkey)
-  list(mean = df[[mean_col]][is_b][i],
-       sd   = df[[sd_col]][is_b][i])
+  mean <- df[[mean_col]][is_b][i]
+  sd   <- df[[sd_col]][is_b][i]
+  if (!is.null(fallback)) {
+    miss <- is.na(mean)
+    mean[miss] <- unname(fallback$mean[key[miss]])
+    sd[miss]   <- unname(fallback$sd[key[miss]])
+  }
+  list(mean = mean, sd = sd)
 }
 
 # Generic binary-subset formatter: format each column as "k (pct%)", build
@@ -184,7 +212,8 @@ format_pasi_response <- function(df) {
 }
 
 format_pasi_absolute <- function(df) {
-  b <- baseline_lookup(df, "abs_pasi_mean", "abs_pasi_sd")
+  b <- baseline_lookup(df, "abs_pasi_mean", "abs_pasi_sd",
+                       fallback = baseline_pasi_lookup)
   df$baseline        <- fmt_mean_sd(b$mean, b$sd)
   df$on_tx           <- fmt_mean_sd(df$abs_pasi_mean,        df$abs_pasi_sd)
   df$abs_pasi_change <- fmt_mean_sd(df$abs_pasi_change_mean, df$abs_pasi_change_sd)
@@ -369,6 +398,9 @@ ui <- fluidPage(
       position: sticky; top: 46px; background: #ffffff; z-index: 2;
       box-shadow: inset 0 -1px 0 #ddd;
     }
+    .app-footer { margin-top: 12px; font-size: 12px; color: #888; }
+    .app-footer a { color: #1F4E8C; text-decoration: none; }
+    .app-footer a:hover { text-decoration: underline; }
   "))),
   titlePanel("Psoriasis RCT Explorer"),
   div(class = "filter-bar",
@@ -383,7 +415,16 @@ ui <- fluidPage(
       visNetworkOutput("nma", height = "640px"),
       helpText("Click a node to filter to one drug; click an edge to show only",
                "trials comparing that pair. Click empty space, or the Clear",
-               "button, to reset.")
+               "button, to reset."),
+      tags$footer(class = "app-footer",
+        HTML("&copy; 2026 Thomas Clemmet"),
+        " · ",
+        tags$a(href = "https://github.com/tomclemmet/psoriasis-rct-explorer",
+               target = "_blank", rel = "noopener", "GitHub"),
+        " · ",
+        tags$a(href = "https://www.crd.york.ac.uk/PROSPERO/view/CRD420261306630",
+               target = "_blank", rel = "noopener", "PROSPERO record")
+      )
     ),
     column(6, class = "col-table",
       do.call(tabsetPanel, c(
