@@ -750,8 +750,8 @@ server <- function(input, output, session) {
                # patient count, anchored to the global max). No `scaling`
                # block — that would re-rescale per render and break visual
                # comparability across endpoint subsets.
-               font    = list(size = 28, face = "Helvetica",
-                              strokeWidth = 4, strokeColor = "#ffffff"),
+               font    = list(size = 44, face = "Helvetica",
+                              strokeWidth = 6, strokeColor = "#ffffff"),
                color   = list(background = "#4C9AFF",
                               border     = "#1F4E8C",
                               highlight  = list(background = "#FF8A3D",
