@@ -148,9 +148,9 @@ section(
     SELECT a.study_id AS ref_id, a.arm_no, m.timepoint,
            MIN(m.n) AS n_min, MAX(m.n) AS n_max,
            COUNT(DISTINCT m.n) AS distinct_n
-    FROM   measurements m
-    JOIN   arms     a ON a.arm_id = m.arm_id
-    JOIN   outcomes o ON o.outcome_id = m.outcome_id
+    FROM   tblIntraData m
+    JOIN   tblArms     a ON a.arm_id = m.arm_id
+    JOIN   tblOutcomeDefs o ON o.outcome_id = m.outcome_id
     WHERE  o.code IN ('pasi50','pasi75','pasi90','pasi100')
       AND  m.subgroup_id = 0
       AND  m.n IS NOT NULL
@@ -192,7 +192,7 @@ section(
            a.arm_no,
            a.dose_amount,
            a.dose_unit_id
-    FROM   arms a
+    FROM   tblArms a
     WHERE  (a.dose_amount IS NOT NULL AND a.dose_unit_id IS NULL)
        OR  (a.dose_amount IS NULL     AND a.dose_unit_id IS NOT NULL)
     ORDER BY ref_id, arm_no
@@ -238,7 +238,7 @@ section(
   "Arms with no PASI data (informational)",
   q("
     SELECT a.study_id AS ref_id, a.arm_no AS arm_no, a.arm_name
-    FROM   arms a
+    FROM   tblArms a
     LEFT   JOIN v_pasi v ON v.ref_id = a.study_id AND v.arm_no = a.arm_no
     WHERE  v.ref_id IS NULL
     ORDER BY a.study_id, a.arm_no
