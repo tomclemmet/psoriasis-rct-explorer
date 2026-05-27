@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
-# Data-quality checks for revpal.sqlite. Run from the project root:
-#   Rscript app/check.R
+# Data-quality checks for psoriasis-rcts.sqlite. Run from the project root:
+#   Rscript checks/check.R
 #
 # Prints each problem class with a short heading and the offending rows.
 # Empty sections are summarised as "OK".
@@ -32,14 +32,14 @@ find_script_dir <- function() {
 here <- find_script_dir()
 sqlite_p <- NULL
 for (cand in c(
-  if (!is.null(here)) file.path(here, "psoriasis-rcts.sqlite"),
+  if (!is.null(here)) file.path(here, "..", "app", "psoriasis-rcts.sqlite"),
   "app/psoriasis-rcts.sqlite",
   "psoriasis-rcts.sqlite"
 )) {
   if (file.exists(cand)) { sqlite_p <- normalizePath(cand); break }
 }
 if (is.null(sqlite_p))
-  stop("psoriasis-rcts.sqlite not found - run convert.R first.")
+  stop("psoriasis-rcts.sqlite not found - run app/convert.R first.")
 
 con <- dbConnect(SQLite(), sqlite_p, flags = SQLITE_RO)
 
