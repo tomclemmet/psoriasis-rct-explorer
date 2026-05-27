@@ -465,7 +465,7 @@ endpoint_groups <- list(
         colnames = c("Trial", "Drug", "N", "Any SAE")
       ),
       disc = list(
-        label    = "Discontinuation (any, due to AE)",
+        label    = "Discontinuation",
         table    = "v_safety",
         fmt      = function(df) format_binary_subset(df,
                      c("disc_any", "disc_ae")),
@@ -485,7 +485,7 @@ endpoint_groups <- list(
         colnames = c("Trial", "Drug", "N", "Injection site rxn")
       ),
       malignancy = list(
-        label    = "Malignancy, NMSC, malignancy (non-NMSC)",
+        label    = "Malignancies",
         table    = "v_safety",
         fmt      = function(df) format_binary_subset(df,
                      c("malignancy", "nmsc", "malignancy_non_nmsc")),
