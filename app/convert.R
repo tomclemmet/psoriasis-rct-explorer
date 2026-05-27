@@ -213,6 +213,10 @@ CREATE TABLE publications (
   authors         TEXT,
   year            INTEGER,                     -- parsed from tblRefs.Date
   journal         TEXT,
+  volume          TEXT,                        -- tblRefs.Vol (text: occasionally non-numeric)
+  issue           TEXT,                        -- tblRefs.Issue
+  page_start      TEXT,                        -- tblRefs.PStart (text: e.g. S12)
+  page_end        TEXT,                        -- tblRefs.PEnd
   notes           TEXT
 );
 CREATE INDEX idx_publications_study ON publications(study_id);
@@ -465,11 +469,15 @@ publications_df <- data.frame(
                      sub(".*?(\\d{4}).*", "\\1", refs$Date))),
   journal        = ifelse(!is.na(refs$JournalAbbrev) & nzchar(refs$JournalAbbrev),
                           refs$JournalAbbrev, refs$JournalLong),
+  volume         = as.character(refs$Vol),
+  issue          = as.character(refs$Issue),
+  page_start     = as.character(refs$PStart),
+  page_end       = as.character(refs$PEnd),
   notes          = refs$Notes,
   stringsAsFactors = FALSE
 )
 # Blank strings -> NA in text columns.
-for (col in c("doi","title","authors","journal","notes")) {
+for (col in c("doi","title","authors","journal","volume","issue","page_start","page_end","notes")) {
   v <- publications_df[[col]]
   publications_df[[col]][!is.na(v) & !nzchar(v)] <- NA
 }

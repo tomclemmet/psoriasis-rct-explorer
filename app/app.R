@@ -112,14 +112,112 @@ build_network_data <- function(td, ref_max_n = NA_real_) {
   list(nodes = nodes_df, edges = pair_counts)
 }
 
-# ref_id -> DOI lookup, built once. Only ~12% of refs have a DOI in this
-# dataset (URL field is empty across the board), so most trial cells stay
-# plain text.
-.doi_rows <- read_db(
-  "SELECT study_id AS ref_id, doi AS DOI FROM publications
-   WHERE is_primary = 1 AND doi IS NOT NULL AND doi != ''"
+# study_id -> list of publication rows (primary first, then secondaries by
+# year). Built once at startup; used by fmt_citations() to render the
+# popover that opens when a user clicks a trial name.
+.pub_rows <- read_db(
+  "SELECT study_id, is_primary, doi, title, authors, year, journal,
+          volume, issue, page_start, page_end
+   FROM   publications
+   ORDER  BY study_id, is_primary DESC, year ASC"
 )
-doi_lookup <- setNames(.doi_rows$DOI, as.character(.doi_rows$ref_id))
+pubs_by_study <- split(.pub_rows, .pub_rows$study_id)
+
+# Pre-render one citations-HTML string per study_id at startup, then
+# attribute-escape it for embedding in data-citations="...". A trial
+# typically appears in dozens of rows (one per arm × timepoint), so doing
+# this per-row in fmt_trial() was the hot path slowing table renders.
+# Built lazily below once fmt_citations() is defined.
+
+# Reformat one author entry from "Griffiths,C.E." to "Griffiths CE".
+.fmt_one_author <- function(a) {
+  a <- trimws(a)
+  if (!nzchar(a)) return(NA_character_)
+  # First comma separates surname from initials.
+  parts <- strsplit(a, ",", fixed = TRUE)[[1]]
+  if (length(parts) < 2) return(a)
+  surname  <- trimws(parts[1])
+  initials <- paste(parts[-1], collapse = ",")
+  initials <- gsub("[.[:space:]]+", "", initials)
+  paste(surname, initials)
+}
+
+# Reformat a semicolon-separated author string to Vancouver style:
+# "Griffiths,C.E.; Strober,B.E." -> "Griffiths CE, Strober BE".
+# Truncates to first 6 authors + ", et al" when >6 (standard Vancouver).
+.fmt_authors <- function(s) {
+  if (is.na(s) || !nzchar(s)) return("")
+  authors <- vapply(strsplit(s, ";", fixed = TRUE)[[1]],
+                    .fmt_one_author, character(1))
+  authors <- authors[!is.na(authors) & nzchar(authors)]
+  if (!length(authors)) return("")
+  if (length(authors) > 6) {
+    paste0(paste(authors[1:6], collapse = ", "), ", et al")
+  } else {
+    paste(authors, collapse = ", ")
+  }
+}
+
+# Build the "Year;Vol(Iss):Pstart-Pend" fragment. Any missing piece drops
+# out cleanly. Returns "" if year is also missing (caller decides).
+.fmt_volissue <- function(year, volume, issue, p_start, p_end) {
+  out <- if (is.na(year)) "" else as.character(year)
+  if (!is.na(volume) && nzchar(volume)) {
+    out <- paste0(out, ";", volume)
+    if (!is.na(issue) && nzchar(issue)) out <- paste0(out, "(", issue, ")")
+  }
+  if (!is.na(p_start) && nzchar(p_start)) {
+    out <- paste0(out, ":", p_start)
+    if (!is.na(p_end) && nzchar(p_end) && p_end != p_start) {
+      out <- paste0(out, "-", p_end)
+    }
+  }
+  out
+}
+
+# Render one publications data frame as an HTML <ol> of Vancouver-style
+# citations. Returns "" when no publications are known for the study.
+fmt_citations <- function(pubs) {
+  esc <- htmltools::htmlEscape
+  if (is.null(pubs) || !nrow(pubs)) return("")
+  items <- character(nrow(pubs))
+  for (i in seq_len(nrow(pubs))) {
+    p <- pubs[i, ]
+    authors <- .fmt_authors(p$authors)
+    title   <- if (is.na(p$title)) "" else trimws(p$title)
+    journal <- if (is.na(p$journal)) "" else trimws(p$journal)
+    # Some "publications" are registry entries with a URL in the journal
+    # field; render those as a link and skip vol/iss/pages.
+    is_url <- nzchar(journal) && grepl("^https?://", journal)
+    parts <- c()
+    if (nzchar(authors)) parts <- c(parts, paste0(esc(authors), "."))
+    if (nzchar(title))   parts <- c(parts, paste0(esc(title), "."))
+    if (is_url) {
+      parts <- c(parts, sprintf(
+        '<a href="%s" target="_blank" rel="noopener">%s</a>.',
+        esc(journal), esc(journal)))
+    } else {
+      if (nzchar(journal)) parts <- c(parts, paste0(esc(journal), "."))
+      vi <- .fmt_volissue(p$year, p$volume, p$issue, p$page_start, p$page_end)
+      if (nzchar(vi)) parts <- c(parts, paste0(esc(vi), "."))
+    }
+    if (!is.na(p$doi) && nzchar(p$doi)) {
+      parts <- c(parts, sprintf(
+        '<a href="https://doi.org/%s" target="_blank" rel="noopener">https://doi.org/%s</a>',
+        esc(p$doi), esc(p$doi)))
+    }
+    items[i] <- paste0('<div class="trial-cite">', paste(parts, collapse = " "), "</div>")
+  }
+  paste0('<div class="trial-cites">', paste(items, collapse = ""), "</div>")
+}
+
+# Pre-rendered, attribute-escaped citation HTML per study_id. fmt_trial()
+# just does a lookup; no per-row HTML generation.
+cites_attr_by_study <- vapply(
+  pubs_by_study,
+  function(p) htmltools::htmlEscape(fmt_citations(p), attribute = TRUE),
+  character(1)
+)
 
 # Baseline PASI recorded as a "Psoriasis characteristics" outcome
 # (outcome_id 11) — used as a fallback for the Absolute PASI table when an
@@ -141,16 +239,23 @@ baseline_pasi_lookup <- list(
   sd   = setNames(.baseline_pasi$sd,   .baseline_pasi_key)
 )
 
-# Wrap trial text in an <a href="https://doi.org/..."> when a DOI is known
-# for that ref_id; otherwise return the trial text unchanged. Caller must
-# pass `escape = FALSE` to DT for the Trial column.
+# Render trial text as a popover trigger. Clicking the trial name opens a
+# small floating panel listing every publication for that study (primary +
+# secondaries) as Vancouver-style citations with clickable DOIs. The popover
+# is implemented in vanilla JS (see tags$script in the UI) via event
+# delegation, so it survives DT redraws without a drawCallback.
+#
+# Citation HTML is stashed in `data-citations` (attribute-escaped). Trials
+# with no publications fall back to a span (no popover).
+# Caller must pass `escape = FALSE` for the Trial column.
 fmt_trial <- function(trial, ref_id) {
-  doi <- doi_lookup[as.character(ref_id)]
-  has_doi <- !is.na(doi) & nzchar(doi)
-  out <- trial
-  out[has_doi] <- sprintf(
-    '<a href="https://doi.org/%s" target="_blank" rel="noopener">%s</a>',
-    doi[has_doi], htmltools::htmlEscape(trial[has_doi])
+  labels <- htmltools::htmlEscape(trial)
+  cites  <- cites_attr_by_study[as.character(ref_id)]
+  has    <- !is.na(cites) & nzchar(cites)
+  out    <- paste0("<span>", labels, "</span>")
+  out[has] <- sprintf(
+    '<a href="javascript:void(0)" class="trial-pop" data-citations="%s">%s</a>',
+    cites[has], labels[has]
   )
   out
 }
@@ -543,6 +648,51 @@ ui <- fluidPage(
         opt.disabled = disabled.indexOf(opt.value) !== -1;
       });
     });
+
+    // Trial-name popover. fmt_trial() emits <a class='trial-pop'
+    // data-citations='...'> elements; clicking one opens a floating panel
+    // anchored beneath the link. Event delegation on document means DT
+    // redraws (filter/paginate) don't break the trigger.
+    (function() {
+      var pop = null;
+      function ensure() {
+        if (pop) return pop;
+        pop = document.createElement('div');
+        pop.id = 'trial-popover';
+        pop.style.display = 'none';
+        document.body.appendChild(pop);
+        return pop;
+      }
+      function hide() { if (pop) pop.style.display = 'none'; }
+      function show(trigger) {
+        var p = ensure();
+        p.innerHTML = trigger.getAttribute('data-citations') || '';
+        p.style.display = 'block';
+        // Measure after layout so we can flip when there's no room below.
+        var r  = trigger.getBoundingClientRect();
+        var ph = p.offsetHeight;
+        var pw = p.offsetWidth;
+        var spaceBelow = window.innerHeight - r.bottom;
+        var top = (spaceBelow < ph + 12 && r.top > spaceBelow)
+          ? window.scrollY + r.top - ph - 6
+          : window.scrollY + r.bottom + 6;
+        var left = window.scrollX + r.left;
+        var maxLeft = window.scrollX + window.innerWidth - pw - 12;
+        if (left > maxLeft) left = Math.max(8, maxLeft);
+        p.style.top  = top  + 'px';
+        p.style.left = left + 'px';
+      }
+      document.addEventListener('click', function(ev) {
+        var t = ev.target.closest && ev.target.closest('.trial-pop');
+        if (t) { ev.preventDefault(); show(t); return; }
+        if (pop && pop.contains(ev.target)) return;  // clicks inside popover
+        hide();
+      });
+      document.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Escape') hide();
+      });
+      window.addEventListener('scroll', hide, true);
+    })();
   "))),
   tags$head(tags$style(HTML("
     .filter-bar { padding: 8px 12px; background: #f4f6f9; border-radius: 6px;
@@ -586,6 +736,21 @@ ui <- fluidPage(
     .app-footer { margin-top: 12px; font-size: 12px; color: #888; }
     .app-footer a { color: #1F4E8C; text-decoration: none; }
     .app-footer a:hover { text-decoration: underline; }
+    /* Trial-name popover. Anchored absolutely; positioning is set inline by
+       the click handler in <script> above. */
+    a.trial-pop { color: #1F4E8C; cursor: pointer; }
+    a.trial-pop:hover { text-decoration: underline; }
+    #trial-popover {
+      position: absolute; z-index: 1000; max-width: 520px;
+      background: #ffffff; border: 1px solid #c8ced6; border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+      padding: 10px 14px; font-size: 13px; line-height: 1.45; color: #222;
+    }
+    #trial-popover .trial-cite { margin-bottom: 8px; }
+    #trial-popover .trial-cite:last-child { margin-bottom: 0; }
+    #trial-popover a { color: #1F4E8C; word-break: break-all; }
+    /* Per-trial banding applied by drawCallback above. */
+    table.dataTable tr.trial-band > td { background-color: #f3f5f8; }
   "))),
   titlePanel("Psoriasis RCT Explorer"),
   div(class = "filter-bar",
@@ -703,9 +868,14 @@ server <- function(input, output, session) {
       n_endpoint_cols <- ncol(df) - 3
       datatable(
         df,
-        rownames = FALSE,
-        filter   = "none",
-        escape   = -1,  # Only the Trial column (col 1) contains HTML (an
+        rownames  = FALSE,
+        filter    = "none",
+        selection = "none",  # Row-highlight on click is sticky and noisy;
+                              # we don't use selection for anything anyway.
+        # Drop DT's default `stripe` class — banding is applied per-trial in
+        # rowCallback below, not per-row.
+        class     = "row-border hover order-column",
+        escape    = -1,  # Only the Trial column (col 1) contains HTML (an
                         # <a href="https://doi.org/..."> link when a DOI is
                         # known); fmt_trial() escapes the visible trial name
                         # itself. Every other column stays escaped.
@@ -715,6 +885,20 @@ server <- function(input, output, session) {
           dom        = "tip",
           columnDefs = list(list(className = "dt-right",
                                  targets = 2:(2 + n_endpoint_cols))),
+          # Banding by trial: walk the rendered page top-to-bottom and flip
+          # a band index whenever the visible trial-cell text changes. CSS
+          # below paints alternate trials with a subtle background.
+          drawCallback = JS(
+            "function() {",
+            "  var rows = this.api().rows({page:'current'}).nodes();",
+            "  var prev = null, band = 0;",
+            "  rows.each(function(node) {",
+            "    var t = node.cells[0].innerText;",
+            "    if (t !== prev) { band = 1 - band; prev = t; }",
+            "    node.classList.toggle('trial-band', band === 1);",
+            "  });",
+            "}"
+          ),
           # On page change, scroll the surrounding .tab-content (our custom
           # scroll container) back to the top — DT only scrolls its own
           # internal viewport, which we don't use.
