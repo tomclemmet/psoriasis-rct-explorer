@@ -10,11 +10,11 @@
 #     drugs(drug_id PK, drug_name UNIQUE)
 #     dose_units(unit_id PK, unit_name UNIQUE)
 #     timepoint_units(unit_id PK, unit_name UNIQUE)
-#     tblDataTypes(data_type_id PK, name)            -- from tblDataTypes
-#     tblOutcomeDefs(outcome_id PK, code, label, subcategory,
+#     data_types(data_type_id PK, name)            -- from tblDataTypes
+#     outcomes(outcome_id PK, code, label, subcategory,
 #              data_type_id FK, endpoint_group)    -- full Access catalogue
 #                                                  -- (incl. baseline chars)
-#     tblSubgroups(subgroup_id PK, subgroup_name)
+#     subgroups(subgroup_id PK, subgroup_name)
 #
 #   Entities
 #     studies(study_id PK, trial,
@@ -24,32 +24,32 @@
 #             timepoint_unit_id FK)
 #         -- Keyed by the *primary* publication's RefID. Secondary
 #         -- publications are recorded in `publications` and never appear
-#         -- here (the source data attributes all measurement/arm/char rows
+#         -- here (the source data attributes all measurements/arms/chars
 #         -- to the primary RefID).
 #     publications(publication_id PK, study_id FK, is_primary,
 #                  doi, title, authors, year, journal, notes)
 #         -- One row per tblRefs entry; secondaries link to their primary
 #         -- via `study_id` (= tblStudyDefs.ParentID). The primary's row
 #         -- has study_id == publication_id and is_primary = 1.
-#     tblArms(arm_id PK, study_id FK, arm_no, arm_name,
+#     arms(arm_id PK, study_id FK, arm_no, arm_name,
 #          drug_id FK, dose_amount, dose_unit_id FK)
 #
 #   Facts
-#     tblIntraData(measurement_id PK, arm_id FK, outcome_id FK,
+#     measurements(measurement_id PK, arm_id FK, outcome_id FK,
 #                  subgroup_id FK, timepoint,
 #                  k, n, mean, sd, median, lo_iqr, hi_iqr)
 #         -- carries ALL outcomes from tblIntraData, not just the four
 #         -- endpoint groups. Demographics / baseline characteristics
 #         -- (age, sex, weight, BMI, baseline PASI, ethnicity, prior
 #         -- therapy etc.) live here as their own OutcomeIDs.
-#     tblSubgroupsStudies(study_id, subgroup_id, n,
+#     study_subgroups(study_id, subgroup_id, n,
 #                     subgroup_type, notes, excluded)
-#     tblSubgroupsArms(arm_id, subgroup_id, n)
+#     arm_subgroups(arm_id, subgroup_id, n)
 #
 #   Views (rebuild the wide tables the app expects, filtered to main arms)
 #     v_pasi, v_pasi_abs, v_dlqi, v_safety
 #
-# Subgroup rows are preserved in `tblIntraData` (subgroup_id > 0); the four
+# Subgroup rows are preserved in `measurements` (subgroup_id > 0); the four
 # views filter to subgroup_id = 0 so the app behaves as before.
 
 suppressPackageStartupMessages({
@@ -174,21 +174,21 @@ CREATE TABLE timepoint_units (
   unit_id    INTEGER PRIMARY KEY,
   unit_name  TEXT NOT NULL UNIQUE
 );
-CREATE TABLE tblDataTypes (
+CREATE TABLE data_types (
   data_type_id  INTEGER PRIMARY KEY,
   name          TEXT NOT NULL UNIQUE
 );
-CREATE TABLE tblOutcomeDefs (
+CREATE TABLE outcomes (
   outcome_id      INTEGER PRIMARY KEY,
   code            TEXT UNIQUE,           -- short identifier for the 21 wide-view
-                                         -- tblOutcomeDefs; NULL for baseline chars etc.
+                                         -- outcomes; NULL for baseline chars etc.
   label           TEXT NOT NULL,         -- OutcomeName from tblOutcomeDefs
   subcategory     TEXT,                  -- 'Demographics', 'PASI', 'DLQI', ...
-  data_type_id    INTEGER REFERENCES tblDataTypes(data_type_id),
+  data_type_id    INTEGER REFERENCES data_types(data_type_id),
   endpoint_group  TEXT                   -- 'pasi','pasi_abs','dlqi','safety',
                                          -- or NULL when not exposed by a view
 );
-CREATE TABLE tblSubgroups (
+CREATE TABLE subgroups (
   subgroup_id    INTEGER PRIMARY KEY,
   subgroup_name  TEXT
 );
@@ -216,7 +216,7 @@ CREATE TABLE publications (
   notes           TEXT
 );
 CREATE INDEX idx_publications_study ON publications(study_id);
-CREATE TABLE tblArms (
+CREATE TABLE arms (
   arm_id        INTEGER PRIMARY KEY,
   study_id      INTEGER NOT NULL REFERENCES studies(study_id),
   arm_no        INTEGER NOT NULL,
@@ -226,11 +226,11 @@ CREATE TABLE tblArms (
   dose_unit_id  INTEGER REFERENCES dose_units(unit_id),
   UNIQUE (study_id, arm_no)
 );
-CREATE TABLE tblIntraData (
+CREATE TABLE measurements (
   measurement_id  INTEGER PRIMARY KEY,
-  arm_id          INTEGER NOT NULL REFERENCES tblArms(arm_id),
-  outcome_id      INTEGER NOT NULL REFERENCES tblOutcomeDefs(outcome_id),
-  subgroup_id     INTEGER NOT NULL REFERENCES tblSubgroups(subgroup_id),
+  arm_id          INTEGER NOT NULL REFERENCES arms(arm_id),
+  outcome_id      INTEGER NOT NULL REFERENCES outcomes(outcome_id),
+  subgroup_id     INTEGER NOT NULL REFERENCES subgroups(subgroup_id),
   timepoint       INTEGER,
   k               INTEGER,
   n               INTEGER,
@@ -241,19 +241,19 @@ CREATE TABLE tblIntraData (
   hi_iqr          REAL,
   UNIQUE (arm_id, outcome_id, subgroup_id, timepoint)
 );
-CREATE INDEX idx_measurements_outcome_arm ON tblIntraData(outcome_id, arm_id);
-CREATE TABLE tblSubgroupsStudies (
+CREATE INDEX idx_measurements_outcome_arm ON measurements(outcome_id, arm_id);
+CREATE TABLE study_subgroups (
   study_id       INTEGER NOT NULL REFERENCES studies(study_id),
-  subgroup_id    INTEGER NOT NULL REFERENCES tblSubgroups(subgroup_id),
+  subgroup_id    INTEGER NOT NULL REFERENCES subgroups(subgroup_id),
   n              INTEGER,
   subgroup_type  TEXT,
   notes          TEXT,
   excluded       INTEGER,  -- 0/1 from tblSubgroupsStudies.blnExc
   PRIMARY KEY (study_id, subgroup_id)
 );
-CREATE TABLE tblSubgroupsArms (
-  arm_id         INTEGER NOT NULL REFERENCES tblArms(arm_id),
-  subgroup_id    INTEGER NOT NULL REFERENCES tblSubgroups(subgroup_id),
+CREATE TABLE arm_subgroups (
+  arm_id         INTEGER NOT NULL REFERENCES arms(arm_id),
+  subgroup_id    INTEGER NOT NULL REFERENCES subgroups(subgroup_id),
   n              INTEGER,
   PRIMARY KEY (arm_id, subgroup_id)
 );
@@ -263,13 +263,13 @@ for (stmt in strsplit(ddl, ";\\s*\n", perl = TRUE)[[1]]) {
   if (nzchar(s)) dbExecute(dst, s)
 }
 
-# --- 4. Seed tblDataTypes, tblOutcomeDefs, tblSubgroups ------------------------------
+# --- 4. Seed data_types, outcomes, subgroups ------------------------------
 data_types_df <- data.frame(
   data_type_id = dtypes$DataTypeID,
   name         = dtypes$DataType,
   stringsAsFactors = FALSE
 )
-dbWriteTable(dst, "tblDataTypes", data_types_df, append = TRUE)
+dbWriteTable(dst, "data_types", data_types_df, append = TRUE)
 
 # Full outcome catalogue from tblOutcomeDefs, decorated with view metadata
 # for the 21 outcomes the app pivots into v_pasi / v_pasi_abs / v_dlqi /
@@ -286,9 +286,9 @@ outcomes_df <- merge(
 outcomes_df <- outcomes_df[, c("outcome_id","code","label","subcategory",
                                "data_type_id","endpoint_group")]
 outcomes_df <- outcomes_df[order(outcomes_df$outcome_id), ]
-dbWriteTable(dst, "tblOutcomeDefs", outcomes_df, append = TRUE)
+dbWriteTable(dst, "outcomes", outcomes_df, append = TRUE)
 
-# Subgroup IDs referenced anywhere: tblIntraData, per-study denominators,
+# Subgroup IDs referenced anywhere: measurements, per-study denominators,
 # per-arm denominators. Plus 0 (the main-analysis sentinel) which has no
 # row in tblSubgroups but is implied throughout.
 subgroup_ids <- sort(unique(as.integer(c(
@@ -303,7 +303,7 @@ subgroups_df <- data.frame(
                          unname(sg_name_of[as.character(subgroup_ids)])),
   stringsAsFactors = FALSE
 )
-dbWriteTable(dst, "tblSubgroups", subgroups_df, append = TRUE)
+dbWriteTable(dst, "subgroups", subgroups_df, append = TRUE)
 
 # --- 5. Lookup population -------------------------------------------------
 # Drugs: distinct lookup labels (CatID = 57) actually referenced by an arm.
@@ -353,7 +353,7 @@ tp_unit_id_of <- setNames(timepoint_units_df$unit_id, timepoint_units_df$unit_na
 # lives in `publications` further down.
 primary_ids <- studefs$RefID[is.na(studefs$ParentID) | studefs$ParentID == 0]
 
-# Fail loud if a secondary has measurement or arm rows attributed directly —
+# Fail loud if a secondary has measurements or arms attributed directly —
 # would silently drop data once we restrict to primaries below.
 # (tblStudyChars also records CatID 49 = trial name redundantly against
 # secondaries; that's a known denormalisation in the source and is ignored.)
@@ -363,7 +363,7 @@ secondary_with_data <- setdiff(
 )
 secondary_with_data <- secondary_with_data[!is.na(secondary_with_data)]
 if (length(secondary_with_data)) {
-  stop("Secondary RefIDs have measurement or arm rows: ",
+  stop("Secondary RefIDs have measurements or arms: ",
        paste(sort(secondary_with_data), collapse = ", "))
 }
 
@@ -532,16 +532,16 @@ arms_df <- data.frame(
   dose_unit_id = unname(dose_unit_id_of[unit_names_resolved]),
   stringsAsFactors = FALSE
 )
-dbWriteTable(dst, "tblArms", arms_df, append = TRUE)
+dbWriteTable(dst, "arms", arms_df, append = TRUE)
 
-# (arm_id, study_id, arm_no) -> arm_id, for the measurement join.
+# (arm_id, study_id, arm_no) -> arm_id, for the measurements join.
 arm_id_of <- setNames(arms_df$arm_id, key(arms_df$study_id, arms_df$arm_no))
 
 # --- 8. Measurements (long format, all outcomes, all subgroups) -----------
-# Carry every source tblIntraData row through unchanged. Demographics /
-# baseline characteristics (Age, Sex, Weight, BMI, baseline PASI, ethnicity,
-# prior therapy, etc.) land here alongside the on-treatment endpoints. The
-# four v_* views still filter to the 21 wide-view outcomes, so the app behaves
+# Carry every tblIntraData row to measurements. Demographics / baseline
+# characteristics (Age, Sex, Weight, BMI, baseline PASI, ethnicity, prior
+# therapy, etc.) land here alongside the on-treatment endpoints. The four
+# v_* views still filter to the 21 wide-view outcomes, so the app behaves
 # identically. The %in% guard is just FK safety — drops rows whose
 # OutcomeID is missing from tblOutcomeDefs (none in this dataset).
 m <- intra[intra$OutcomeID %in% outcomes_df$outcome_id & intra$ArmNo > 0, ]
@@ -582,7 +582,7 @@ if (anyDuplicated(key4)) {
     key4[ord]
   ), ]
 }
-dbWriteTable(dst, "tblIntraData", measurements_df, append = TRUE)
+dbWriteTable(dst, "measurements", measurements_df, append = TRUE)
 
 # --- 8b. Subgroup denominators --------------------------------------------
 study_sg <- sg_st[sg_st$RefID %in% all_ref_ids &
@@ -596,7 +596,7 @@ study_subgroups_df <- data.frame(
   excluded      = as.integer(as.logical(study_sg$blnExc)),
   stringsAsFactors = FALSE
 )
-dbWriteTable(dst, "tblSubgroupsStudies", study_subgroups_df, append = TRUE)
+dbWriteTable(dst, "study_subgroups", study_subgroups_df, append = TRUE)
 
 arm_sg <- sg_arm[sg_arm$SubgroupID %in% subgroup_ids, ]
 arm_sg$arm_id <- unname(arm_id_of[key(arm_sg$RefID, arm_sg$ArmNo)])
@@ -607,7 +607,7 @@ arm_subgroups_df <- data.frame(
   n           = as.integer(arm_sg$N),
   stringsAsFactors = FALSE
 )
-dbWriteTable(dst, "tblSubgroupsArms", arm_subgroups_df, append = TRUE)
+dbWriteTable(dst, "arm_subgroups", arm_subgroups_df, append = TRUE)
 
 # --- 9. Views (the contract the app reads) --------------------------------
 # Common arm/study context CTE used by every view. Mirrors the column names
@@ -632,7 +632,7 @@ WITH arm_ctx AS (
            || ' ' || COALESCE(du.unit_name, '')
          )              AS dose,
          tu.unit_name   AS timepoint_unit
-  FROM   tblArms a
+  FROM   arms a
   JOIN   studies s         ON s.study_id = a.study_id
   LEFT   JOIN drugs dr     ON dr.drug_id = a.drug_id
   LEFT   JOIN dose_units du ON du.unit_id = a.dose_unit_id
@@ -655,8 +655,8 @@ build_view <- function(name, outcome_codes, pivot_cols, select_cols) {
       SELECT m.arm_id, m.timepoint,
              %s,
              MAX(m.n) AS n
-      FROM   tblIntraData m
-      JOIN   tblOutcomeDefs o ON o.outcome_id = m.outcome_id
+      FROM   measurements m
+      JOIN   outcomes o ON o.outcome_id = m.outcome_id
       WHERE  o.code IN (%s)
         AND  m.subgroup_id = 0
       GROUP BY m.arm_id, m.timepoint
@@ -762,21 +762,21 @@ build_view(
 n_drug <- dbGetQuery(dst, "SELECT COUNT(DISTINCT drug) AS n FROM v_pasi WHERE drug IS NOT NULL")$n
 cat(sprintf("\nDistinct drugs in v_pasi: %d\n", n_drug))
 cat(sprintf("Outcomes catalogued: %d  (of which exposed via a view: %d)\n",
-            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM tblOutcomeDefs")$n,
-            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM tblOutcomeDefs WHERE code IS NOT NULL")$n))
+            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM outcomes")$n,
+            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM outcomes WHERE code IS NOT NULL")$n))
 cat(sprintf("Measurements rows (all outcomes, all subgroups): %d\n",
-            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM tblIntraData")$n))
+            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM measurements")$n))
 cat(sprintf("  of which subgroup_id > 0: %d\n",
-            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM tblIntraData WHERE subgroup_id > 0")$n))
+            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM measurements WHERE subgroup_id > 0")$n))
 cat(sprintf("  baseline-characteristic rows (Demographics / Psoriasis chars / Previous therapy / Comorbidity): %d\n",
             dbGetQuery(dst, "
-              SELECT COUNT(*) AS n FROM tblIntraData m
-              JOIN tblOutcomeDefs o ON o.outcome_id = m.outcome_id
+              SELECT COUNT(*) AS n FROM measurements m
+              JOIN outcomes o ON o.outcome_id = m.outcome_id
               WHERE o.subcategory IN ('Demographics','Psoriasis characteristics',
                                       'Previous therapy','Comorbidity')")$n))
-cat(sprintf("tblSubgroupsStudies rows: %d   tblSubgroupsArms rows: %d\n",
-            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM tblSubgroupsStudies")$n,
-            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM tblSubgroupsArms")$n))
+cat(sprintf("study_subgroups rows: %d   arm_subgroups rows: %d\n",
+            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM study_subgroups")$n,
+            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM arm_subgroups")$n))
 cat(sprintf("Studies with non-null design: %d / %d\n",
             dbGetQuery(dst, "SELECT COUNT(*) AS n FROM studies WHERE design IS NOT NULL")$n,
             dbGetQuery(dst, "SELECT COUNT(*) AS n FROM studies")$n))

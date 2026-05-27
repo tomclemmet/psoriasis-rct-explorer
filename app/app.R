@@ -130,8 +130,8 @@ doi_lookup <- setNames(.doi_rows$DOI, as.character(.doi_rows$ref_id))
 .baseline_pasi <- read_db("
   SELECT a.study_id AS ref_id, a.arm_no AS arm_no,
          MAX(m.mean) AS mean, MAX(m.sd) AS sd
-  FROM   tblIntraData m
-  JOIN   tblArms a ON a.arm_id = m.arm_id
+  FROM   measurements m
+  JOIN   arms a ON a.arm_id = m.arm_id
   WHERE  m.outcome_id = 11 AND m.subgroup_id = 0
   GROUP  BY a.study_id, a.arm_no
 ")

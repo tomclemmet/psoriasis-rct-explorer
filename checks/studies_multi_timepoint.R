@@ -48,8 +48,8 @@ rows <- DBI::dbGetQuery(con, "
          dr.drug_name AS drug,
          m.timepoint  AS timepoint,
          tu.unit_name AS timepoint_unit
-  FROM   tblIntraData m
-  JOIN   tblArms a           ON a.arm_id = m.arm_id
+  FROM   measurements m
+  JOIN   arms a              ON a.arm_id = m.arm_id
   JOIN   studies s           ON s.study_id = a.study_id
   LEFT   JOIN drugs dr       ON dr.drug_id = a.drug_id
   LEFT   JOIN timepoint_units tu ON tu.unit_id = s.timepoint_unit_id
