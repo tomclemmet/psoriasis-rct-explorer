@@ -32,10 +32,15 @@ both drugs). Click empty space, or the **Clear** button, to reset.
 ├── README.md            (this file)
 ├── .gitignore           (excludes the .accdb and .sqlite)
 ├── RevPal.accdb         (not in git — supply locally; see "Cloning" below)
-└── app/
-    ├── convert.R              (reads ../RevPal.accdb → writes ./psoriasis-rcts.sqlite)
-    ├── psoriasis-rcts.sqlite  (generated, not in git)
-    └── app.R            (the Shiny app — shiny::runApp("app") finds this)
+├── app/
+│   ├── convert.R              (reads ../RevPal.accdb → writes ./psoriasis-rcts.sqlite)
+│   ├── psoriasis-rcts.sqlite  (generated, not in git)
+│   └── app.R            (the Shiny app — shiny::runApp("app") finds this)
+└── checks/              (ad-hoc data-quality / inspection scripts; read the
+                          sqlite but don't affect the app)
+    ├── check.R                    (data-quality sweep over the views)
+    ├── drug_doses_timepoints.R    (per-drug doses + timepoints)
+    └── studies_multi_timepoint.R  (studies with >1 outcome timepoint)
 ```
 
 `convert.R` reads the relevant `tbl*` source tables out of Access and writes
@@ -59,7 +64,8 @@ Schema (normalised tables):
 | `data_types (data_type_id, name)` | data-type lookup (Continuous, Dichotomous, …) from `tblDataTypes` |
 | `outcomes (outcome_id, code, label, subcategory, data_type_id, endpoint_group)` | full outcome catalogue (~116 entries) from `tblOutcomeDefs`. `code` and `endpoint_group` populated only for the 21 outcomes pivoted into a view; `subcategory` distinguishes endpoint outcomes (`PASI`, `DLQI`, `Safety`) from baseline characteristics (`Demographics`, `Psoriasis characteristics`, `Previous therapy`, `Comorbidity`) |
 | `subgroups (subgroup_id, subgroup_name)` | `0` = main analysis; other IDs (e.g. "Biologic-naive", "Weight < 69 kg") come from `tblSubgroups` |
-| `studies (study_id, trial, doi, design, study_date, location, phase, inclusion_criteria, exclusion_criteria, population_restriction, timepoint_unit_id)` | one row per Access RefID; `design`/`study_date`/`location`/`phase`/`inclusion_criteria`/`exclusion_criteria`/`population_restriction` come from `tblStudyChars` CatIDs 50/51/52/53/54/55/60 |
+| `studies (study_id, trial, design, study_date, location, phase, inclusion_criteria, exclusion_criteria, population_restriction, timepoint_unit_id)` | one row per *primary* Access RefID; `design`/`study_date`/`location`/`phase`/`inclusion_criteria`/`exclusion_criteria`/`population_restriction` come from `tblStudyChars` CatIDs 50/51/52/53/54/55/60. Secondary publications attach via `publications.study_id` rather than getting their own `studies` row |
+| `publications (publication_id, study_id, is_primary, doi, title, authors, year, journal, notes)` | one row per `tblRefs` entry. `study_id` points at the primary publication's row in `studies` (the primary's own row has `study_id = publication_id` and `is_primary = 1`); secondaries link to the same primary |
 | `arms (arm_id, study_id, arm_no, arm_name, drug_id, dose_amount, dose_unit_id)` | one row per study × arm; FKs into `drugs` / `dose_units` |
 | `measurements (measurement_id, arm_id, outcome_id, subgroup_id, timepoint, k, n, mean, sd, median, lo_iqr, hi_iqr)` | long-format fact table; carries **every** outcome in `tblIntraData` (~4 300 rows), including baseline characteristics (age, sex, weight, BMI, ethnicity, prior therapy, baseline PASI/DLQI etc.) at `timepoint = 0`. `UNIQUE(arm_id, outcome_id, subgroup_id, timepoint)` |
 | `study_subgroups (study_id, subgroup_id, n, subgroup_type, notes, excluded)` | per-study subgroup denominators from `tblSubgroupsStudies` |
@@ -83,10 +89,10 @@ All four `v_*` views share the same context columns:
 
 | column    | OutcomeID | meaning                       |
 |-----------|-----------|-------------------------------|
-| `pasi50`  | 36        | `tblIntraData.k`              |
-| `pasi75`  | 13        | `tblIntraData.k`              |
-| `pasi90`  | 14        | `tblIntraData.k`              |
-| `pasi100` | 38        | `tblIntraData.k`              |
+| `pasi50`  | 36        | `measurements.k`              |
+| `pasi75`  | 13        | `measurements.k`              |
+| `pasi90`  | 14        | `measurements.k`              |
+| `pasi100` | 38        | `measurements.k`              |
 
 In this schema responders are stored in column **`k`** (not `TP`) for binary outcomes.
 
