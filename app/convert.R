@@ -58,15 +58,49 @@ suppressPackageStartupMessages({
   library(RSQLite)
 })
 
-args <- commandArgs(trailingOnly = FALSE)
-file_arg <- sub("^--file=", "", grep("^--file=", args, value = TRUE))
-script_path <- if (length(file_arg)) file_arg else "app/convert.R"
-here     <- normalizePath(dirname(script_path), mustWork = TRUE)
+resolve_script_dir <- function() {
+  # Rscript: --file=... is on commandArgs.
+  file_arg <- sub("^--file=", "",
+                  grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE))
+  if (length(file_arg) && nzchar(file_arg[[1]])) {
+    return(normalizePath(dirname(file_arg[[1]]), mustWork = TRUE))
+  }
+  # RStudio: ask the IDE for the active source editor path.
+  if (requireNamespace("rstudioapi", quietly = TRUE) &&
+      rstudioapi::isAvailable()) {
+    p <- tryCatch(rstudioapi::getSourceEditorContext()$path,
+                  error = function(e) "")
+    if (nzchar(p)) return(normalizePath(dirname(p), mustWork = TRUE))
+  }
+  # source() from the console: sys.frames() carries the ofile.
+  for (i in rev(seq_along(sys.frames()))) {
+    ofile <- sys.frame(i)$ofile
+    if (!is.null(ofile)) return(normalizePath(dirname(ofile), mustWork = TRUE))
+  }
+  # Fallback: assume cwd is the project root.
+  normalizePath("app", mustWork = TRUE)
+}
+
+here     <- resolve_script_dir()
 accdb    <- normalizePath(file.path(here, "..", "RevPal.accdb"), mustWork = TRUE)
 sqlite_p <- file.path(here, "psoriasis-rcts.sqlite")
 
-if (!file.exists(accdb)) stop("Cannot find ", accdb)
-if (file.exists(sqlite_p)) file.remove(sqlite_p)
+# Close any lingering connection to the target from a previous run in this
+# R session - otherwise file.remove() silently fails on Windows and the
+# subsequent dbConnect() can hand back an invalid handle.
+if (exists("dst", envir = globalenv(), inherits = FALSE)) {
+  try(dbDisconnect(get("dst", envir = globalenv())), silent = TRUE)
+  rm("dst", envir = globalenv())
+}
+if (exists("src", envir = globalenv(), inherits = FALSE)) {
+  try(dbDisconnect(get("src", envir = globalenv())), silent = TRUE)
+  rm("src", envir = globalenv())
+}
+
+if (file.exists(sqlite_p) && !file.remove(sqlite_p)) {
+  stop("Could not remove existing ", sqlite_p,
+       " - is the Shiny app or another R session holding it open?")
+}
 
 cat("Source:", accdb, "\n")
 cat("Target:", sqlite_p, "\n\n")
@@ -75,7 +109,6 @@ src <- dbConnect(odbc::odbc(),
   .connection_string = sprintf(
     "Driver={Microsoft Access Driver (*.mdb, *.accdb)};DBQ=%s;", accdb))
 dst <- dbConnect(RSQLite::SQLite(), sqlite_p)
-on.exit({ try(dbDisconnect(src), silent = TRUE); try(dbDisconnect(dst), silent = TRUE) }, add = TRUE)
 
 dbExecute(dst, "PRAGMA foreign_keys = ON")
 
