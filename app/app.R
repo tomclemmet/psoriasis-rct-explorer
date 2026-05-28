@@ -318,6 +318,32 @@ fmt_mean_sd <- function(mean, sd, digits = 1) {
   out
 }
 
+# Fill in the change column when both baseline and follow-up are reported
+# but the study didn't report change directly. Returns the (possibly
+# updated) change vector and a logical flag per row marking derived cells.
+# Only the mean is derived: the SD of the difference depends on the
+# within-arm baseline/follow-up correlation, which is rarely reported, so
+# SDs of derived cells are left blank rather than guessed.
+derive_change <- function(baseline, follow, change) {
+  cd <- rep(FALSE, length(change))
+  m <- is.na(change) & !is.na(baseline) & !is.na(follow)
+  change[m] <- follow[m] - baseline[m]
+  cd[m] <- TRUE
+  list(change = change, change_derived = cd)
+}
+
+# fmt_mean_sd, but derived cells are rendered without an SD (we don't have
+# one) and tagged with a trailing asterisk so the table caption can explain
+# them. Non-derived cells render exactly as fmt_mean_sd would.
+fmt_mean_sd_marked <- function(mean, sd, derived, digits = 1) {
+  sd_eff <- sd
+  sd_eff[derived] <- NA_real_
+  out <- fmt_mean_sd(mean, sd_eff, digits = digits)
+  mark <- derived & nzchar(out)
+  out[mark] <- paste0(out[mark], "*")
+  out
+}
+
 fmt_timepoint <- function(timepoint, unit) {
   unit_lbl <- ifelse(unit == "wk", "wks", unit)
   ifelse(is.na(timepoint), "", paste(timepoint, unit_lbl))
@@ -370,9 +396,11 @@ format_pasi_response <- function(df) {
 format_pasi_absolute <- function(df) {
   b <- baseline_lookup(df, "abs_pasi_mean", "abs_pasi_sd",
                        fallback = baseline_pasi_lookup)
+  d <- derive_change(b$mean, df$abs_pasi_mean, df$abs_pasi_change_mean)
   df$baseline        <- fmt_mean_sd(b$mean, b$sd)
-  df$on_tx           <- fmt_mean_sd(df$abs_pasi_mean,        df$abs_pasi_sd)
-  df$abs_pasi_change <- fmt_mean_sd(df$abs_pasi_change_mean, df$abs_pasi_change_sd)
+  df$on_tx           <- fmt_mean_sd(df$abs_pasi_mean, df$abs_pasi_sd)
+  df$abs_pasi_change <- fmt_mean_sd_marked(d$change, df$abs_pasi_change_sd,
+                                           d$change_derived)
   df$drug  <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
   df$trial <- fmt_trial(df$trial, df$ref_id)
   # Drop pure baseline rows; each follow-up row now carries its baseline.
@@ -396,9 +424,11 @@ format_dlqi_change <- function(df) {
 
 format_dlqi_absolute <- function(df) {
   b <- baseline_lookup(df, "abs_dlqi_mean", "abs_dlqi_sd")
+  d <- derive_change(b$mean, df$abs_dlqi_mean, df$abs_dlqi_change_mean)
   df$baseline        <- fmt_mean_sd(b$mean, b$sd)
-  df$on_tx           <- fmt_mean_sd(df$abs_dlqi_mean,        df$abs_dlqi_sd)
-  df$abs_dlqi_change <- fmt_mean_sd(df$abs_dlqi_change_mean, df$abs_dlqi_change_sd)
+  df$on_tx           <- fmt_mean_sd(df$abs_dlqi_mean, df$abs_dlqi_sd)
+  df$abs_dlqi_change <- fmt_mean_sd_marked(d$change, df$abs_dlqi_change_sd,
+                                           d$change_derived)
   df$drug  <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
   df$trial <- fmt_trial(df$trial, df$ref_id)
   df <- df[is.na(df$timepoint) | df$timepoint > 0, ]
@@ -426,7 +456,11 @@ endpoint_groups <- list(
         table    = "v_pasi_abs",
         fmt      = format_pasi_absolute,
         colnames = c("Trial", "Drug", "N",
-                     "Baseline", "Follow-up", "Δ from baseline")
+                     "Baseline", "Follow-up", "Δ from baseline"),
+        note     = paste("Change values marked with * are derived as",
+                         "follow-up - baseline when the study reported",
+                         "both timepoints but not the change directly;",
+                         "SDs are not shown for derived values.")
       )
     )
   ),
@@ -457,7 +491,11 @@ endpoint_groups <- list(
         table    = "v_dlqi",
         fmt      = format_dlqi_absolute,
         colnames = c("Trial", "Drug", "N",
-                     "Baseline", "Follow-up", "Δ from baseline")
+                     "Baseline", "Follow-up", "Δ from baseline"),
+        note     = paste("Change values marked with * are derived as",
+                         "follow-up - baseline when the study reported",
+                         "both timepoints but not the change directly;",
+                         "SDs are not shown for derived values.")
       )
     )
   ),
@@ -722,9 +760,22 @@ ui <- fluidPage(
     }
     body { background: #ffffff; color: #1a1f2c; }
     h1, h2, h3, h4, h5 { font-weight: 600; letter-spacing: -0.01em; }
+    /* App header: title left, action buttons right, sits as a unified bar
+       across the top of the page with a subtle separator below. Negative
+       horizontal margins bleed it past the container's 15px gutters so
+       the bottom border runs edge-to-edge. */
+    .title-bar {
+      background: #ffffff;
+      border-bottom: 1px solid #e3e6ea;
+      padding: 10px 24px;
+      margin: 0 -15px 12px -15px;
+      flex: 0 0 auto;
+    }
     /* Trim the default Bootstrap titlePanel — it's huge and bold. */
-    .title-bar h2 { font-size: 22px; font-weight: 600; margin: 12px 0 8px 0;
-                    letter-spacing: -0.015em; color: #0f1726; }
+    .title-bar h2 { font-size: 22px; font-weight: 600; margin: 0;
+                    letter-spacing: -0.015em; color: #0f1726;
+                    line-height: 1.2; }
+    .title-bar .title-actions .btn { padding: 5px 12px; }
 
     /* --- buttons -------------------------------------------------------- */
     .btn-default {
@@ -758,12 +809,10 @@ ui <- fluidPage(
       border-bottom: 2px solid #1F4E8C; color: #1F4E8C; font-weight: 600;
     }
 
-    .filter-bar { padding: 8px 12px; background: #f4f6f9; border-radius: 6px;
-                  margin: 6px 0 12px 0; display: flex; align-items: center;
-                  gap: 12px; font-size: 15px; }
-    .filter-bar .label { color: #555; }
-    .filter-bar .value { font-weight: 600; color: #1F4E8C; }
-    .filter-bar .btn { padding: 2px 10px; font-size: 13px; }
+    .title-actions { display: flex; align-items: center; gap: 8px; }
+    .title-actions .btn { padding: 4px 12px; font-size: 13px; }
+    .view-summary-filter { font-weight: 600; color: #1F4E8C; }
+    .view-summary-sep    { color: #5a6478; }
     #nma { background: #fafbfc; border: 1px solid #e3e6ea; border-radius: 6px; }
     .endpoint-picker { margin: 0; padding: 6px 0; background: #ffffff;
                        height: 46px; box-sizing: border-box; }
@@ -788,12 +837,22 @@ ui <- fluidPage(
     .row.split .col-table .tab-content { flex: 1 1 auto; overflow: auto;
                                           min-height: 0; }
     /* Pin the endpoint dropdown at the top of the scrolling tab-content,
-       and pin the table header directly underneath it. */
+       and pin the summary line + table header directly underneath it. */
     .row.split .col-table .tab-content .endpoint-picker {
       position: sticky; top: 0; z-index: 3;
     }
+    /* Let the sticky .view-summary's containing block be the scrolling
+       .tab-content rather than this Shiny wrapper (which has no extra
+       height of its own and would pin sticky in place). */
+    .view-summary-wrap { display: contents; }
+    .row.split .col-table .tab-content .view-summary {
+      position: sticky; top: 46px; z-index: 3;
+      background: #ffffff; padding: 10px 4px 10px 4px;
+      font-size: 16px; font-weight: 500; color: #1a1f2c;
+      border-bottom: 1px solid #e3e6ea;
+    }
     .row.split .col-table .tab-content table.dataTable thead th {
-      position: sticky; top: 46px; background: #ffffff; z-index: 2;
+      position: sticky; top: 90px; background: #ffffff; z-index: 2;
       box-shadow: inset 0 -1px 0 #ddd;
     }
     .app-footer { margin-top: 12px; font-size: 12px; color: #888; }
@@ -826,15 +885,11 @@ ui <- fluidPage(
   "))),
   div(class = "title-bar",
       titlePanel("Psoriasis RCT Explorer"),
-      actionButton("show_about", "About", icon = icon("circle-info"),
-                   class = "btn btn-default about-btn")
-  ),
-  div(class = "filter-bar",
-      span(class = "label", "Filter:"),
-      uiOutput("filter_label", inline = TRUE),
-      actionButton("clear_filter", "Clear", class = "btn btn-default"),
-      downloadButton("download_db", "Download SQLite",
-                     class = "btn btn-default")
+      div(class = "title-actions",
+          downloadButton("download_db", "Download SQLite",
+                         class = "btn btn-default"),
+          actionButton("show_about", "About", icon = icon("circle-info"),
+                       class = "btn btn-default about-btn"))
   ),
   fluidRow(class = "split",
     column(6,
@@ -845,7 +900,7 @@ ui <- fluidPage(
                "endpoint are hidden. Node area is proportional to the number",
                "of randomised patients contributing to the endpoint; edge",
                "width is the number of trials with that head-to-head. Click",
-               "empty space, or the Clear button, to reset."),
+               "empty space to clear the filter."),
       tags$footer(class = "app-footer",
         HTML("&copy; 2026 Thomas Clemmet"))
     ),
@@ -866,6 +921,8 @@ ui <- fluidPage(
                             selected = group_choices[[1]],
                             selectize = FALSE,
                             width    = "100%")),
+            uiOutput(paste0("summary_", tab_id),
+                     class = "view-summary-wrap"),
             DTOutput(paste0("tbl_", tab_id))
           )
         })
@@ -878,14 +935,13 @@ server <- function(input, output, session) {
 
   filter_state <- reactiveVal(NULL)
 
-  output$filter_label <- renderUI({
-    s <- filter_state()
-    if (is.null(s))                  span(class = "value", "all drugs")
-    else if (s$kind == "node")       span(class = "value", s$drug)
-    else if (s$kind == "edge")       span(class = "value",
-                                          sprintf("%s ↔ %s (head-to-head)",
-                                                  s$from, s$to))
-  })
+  # Plain-text rendering of the current filter for the per-tab summary line.
+  filter_text <- function(s) {
+    if (is.null(s))            "All drugs"
+    else if (s$kind == "node") s$drug
+    else if (s$kind == "edge") sprintf("%s ↔ %s", s$from, s$to)
+    else                       "All drugs"
+  }
 
   # For each (tab, group), does the current filter yield any rows after
   # formatting? Cache table queries within one pass since v_safety is reused
@@ -924,20 +980,73 @@ server <- function(input, output, session) {
     }
   })
 
+  # Counts shown in the per-tab summary line. Trials and references come
+  # from the survivor set (arms that actually contribute a row to the
+  # endpoint); references are summed across pubs_by_study to count every
+  # primary + secondary publication, not just unique study IDs.
+  summarise_view <- function(survivors) {
+    if (!nrow(survivors)) {
+      return(list(n_trials = 0L, n_refs = 0L, n_patients = 0L))
+    }
+    refs <- unique(as.character(survivors$ref_id))
+    n_refs <- sum(vapply(refs, function(rid) {
+      p <- pubs_by_study[[rid]]
+      if (is.null(p)) 0L else nrow(p)
+    }, integer(1)))
+    arms <- unique(survivors[, c("ref_id", "arm_no", "n_arm"), drop = FALSE])
+    list(
+      n_trials   = length(unique(survivors$trial)),
+      n_refs     = n_refs,
+      n_patients = sum(arms$n_arm, na.rm = TRUE)
+    )
+  }
+
+  pluralise <- function(n, word) {
+    sprintf("%s %s%s",
+            formatC(n, format = "d", big.mark = ","),
+            word,
+            if (n == 1L) "" else "s")
+  }
+
   # Build one renderDT per tab. Reactive picks the active endpoint group
   # from that tab's dropdown, queries the right table, formats it.
   for (tab_id in names(endpoint_groups)) local({
     this_tab    <- tab_id
     tab_cfg     <- endpoint_groups[[this_tab]]
+
+    output[[paste0("summary_", this_tab)]] <- renderUI({
+      gid <- input[[paste0("group_", this_tab)]]
+      req(gid)
+      grp <- tab_cfg$groups[[gid]]
+      surv <- group_survivors[[this_tab]][[gid]](
+        query_view(grp$table, filter_state()))
+      s <- summarise_view(surv)
+      div(class = "view-summary",
+          tags$span(class = "view-summary-filter",
+                    filter_text(filter_state())),
+          tags$span(class = "view-summary-sep", " • "),
+          sprintf("%s across %s • %s",
+                  pluralise(s$n_trials,   "trial"),
+                  pluralise(s$n_refs,     "publication"),
+                  pluralise(s$n_patients, "patient")))
+    })
+
     output[[paste0("tbl_", this_tab)]] <- renderDT({
       gid <- input[[paste0("group_", this_tab)]]
       req(gid)
       grp <- tab_cfg$groups[[gid]]
       df <- grp$fmt(query_view(grp$table, filter_state()))
       n_endpoint_cols <- ncol(df) - 3
+      cap <- if (!is.null(grp$note))
+        htmltools::tags$caption(
+          style = "caption-side: top; text-align: left;
+                   padding: 6px 4px; color: #5a6478; font-size: 12px;",
+          grp$note
+        )
       datatable(
         df,
         rownames  = FALSE,
+        caption   = cap,
         filter    = "none",
         selection = "none",  # Row-highlight on click is sticky and noisy;
                               # we don't use selection for anything anyway.
@@ -1144,10 +1253,6 @@ server <- function(input, output, session) {
     contentType = "application/x-sqlite3",
     content     = function(file) file.copy(DB_PATH, file)
   )
-  observeEvent(input$clear_filter, {
-    filter_state(NULL)
-    visNetworkProxy("nma") |> visUnselectAll()
-  })
 }
 
 shinyApp(ui, server)

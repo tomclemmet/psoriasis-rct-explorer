@@ -12,18 +12,29 @@ endpoint group shown in the table:
   infections, injection-site reactions, or malignancy (incl. NMSC).
 
 Endpoint groups with no rows under the current filter are greyed-out in
-the dropdown. Trial cells link to the publication DOI when one is
-recorded in `tblRefs` (about 12% of refs in this dataset have a DOI).
-A **Download SQLite** button in the filter bar streams the generated
-`psoriasis-rcts.sqlite` file.
+the dropdown. Clicking a trial name opens a popover listing every
+publication for that study (primary + secondaries) as Vancouver-style
+citations with clickable DOIs. A summary line under each tab's dropdown
+shows the current filter plus trial/publication/patient counts for the
+table below. A **Download SQLite** button in the header streams the
+generated `psoriasis-rcts.sqlite` file.
+
+In the **absolute PASI** and **absolute DLQI** tables, when a study
+reports baseline and follow-up but not change directly (or vice versa),
+the change column is filled in as `follow-up − baseline` and marked with
+`*` — a caption above the table explains. Only the mean is derived; SDs
+of derived cells are left blank because they depend on the within-arm
+correlation, which isn't reported.
 
 To the left of the tables is a clickable **NMA connectivity diagram**
 (built with `visNetwork`, Kamada–Kawai layout via `igraph`). Nodes are
-drugs, sized by the number of trials in which they appear; edges connect
-drugs compared head-to-head in the same trial, with width = number of
-such trials. Clicking a node filters the tables to that one drug;
-clicking an edge filters to the head-to-head pair (only trials including
-both drugs). Click empty space, or the **Clear** button, to reset.
+drugs, with area proportional to the number of randomised patients
+contributing to the active endpoint; edges connect drugs compared
+head-to-head in the same trial, with width = number of such trials. The
+network reflects the active endpoint — drugs and comparisons without
+data for it are hidden. Clicking a node filters the tables to that one
+drug; clicking an edge filters to the head-to-head pair. Click empty
+space to clear the filter.
 
 ## Layout
 
@@ -40,6 +51,7 @@ both drugs). Click empty space, or the **Clear** button, to reset.
                           sqlite but don't affect the app)
     ├── check.R                    (data-quality sweep over the views)
     ├── drug_doses_timepoints.R    (per-drug doses + timepoints)
+    ├── publications.R             (sanity-checks the publications table)
     └── studies_multi_timepoint.R  (studies with >1 outcome timepoint)
 ```
 
