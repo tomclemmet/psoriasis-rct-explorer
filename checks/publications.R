@@ -54,7 +54,6 @@ if (is.null(sqlite_p))
   stop("psoriasis-rcts.sqlite not found - run app/convert.R first.")
 
 con <- dbConnect(SQLite(), sqlite_p, flags = SQLITE_RO)
-on.exit(dbDisconnect(con), add = TRUE)
 
 options(width = 200)
 
