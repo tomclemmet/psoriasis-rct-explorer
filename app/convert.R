@@ -157,8 +157,30 @@ odefs   <- dbReadTable(src, "tblOutcomeDefs")    # 116 outcomes catalogue
 dtypes  <- dbReadTable(src, "tblDataTypes")      # DataTypeID -> name
 sg_st   <- dbReadTable(src, "tblSubgroupsStudies") # per (study, subgroup)
 sg_arm  <- dbReadTable(src, "tblSubgroupsArms")    # per (study, subgroup, arm)
-studefs <- dbReadTable(src, "tblStudyDefs")        # RefID, ParentID, Notes, ...
+studefs <- dbReadTable(src, "tblStudyDefs")        # RefID, ParentID, IncExc, ...
 dbDisconnect(src)
+
+# --- 2b. Curator exclusion flags ------------------------------------------
+# tblRefs.Duplicate flags publication rows that are duplicate citations of
+# another row for the same trial (curator-marked at source). Drop these so
+# they never appear in `publications` or in trial-citation popovers.
+n_refs_before <- nrow(refs)
+refs <- refs[is.na(refs$Duplicate) | refs$Duplicate != 1, ]
+cat(sprintf("Dropped %d duplicate publication row(s) (tblRefs.Duplicate = 1)\n",
+            n_refs_before - nrow(refs)))
+
+# tblStudyDefs.IncExc:
+#   NULL / 0 -> include normally
+#   1        -> excluded as secondary publication (still handled via
+#               ParentID -- captured in `publications`, not in `studies`)
+#   2 - 4    -> excluded for other reasons (no relevant outcomes etc.).
+#               Drop the study entirely along with every dependent row.
+excluded_study_ids <- studefs$RefID[
+  (is.na(studefs$ParentID) | studefs$ParentID == 0) &
+  !is.na(studefs$IncExc) & studefs$IncExc %in% c(2L, 3L, 4L)
+]
+cat(sprintf("Excluding %d primary trial(s) flagged tblStudyDefs.IncExc in 2-4\n",
+            length(excluded_study_ids)))
 
 # --- 3. Create destination schema -----------------------------------------
 ddl <- "
@@ -355,7 +377,10 @@ tp_unit_id_of <- setNames(timepoint_units_df$unit_id, timepoint_units_df$unit_na
 # every measurement/arm/char row in the source attributes data to a primary
 # RefID, so secondaries never need a `studies` row. Their bibliography info
 # lives in `publications` further down.
-primary_ids <- studefs$RefID[is.na(studefs$ParentID) | studefs$ParentID == 0]
+# Every primary in tblStudyDefs, regardless of whether we'll keep it. The
+# sanity check below relies on this superset; the kept set is computed
+# immediately afterwards by removing the IncExc-excluded ones.
+all_primary_ids <- studefs$RefID[is.na(studefs$ParentID) | studefs$ParentID == 0]
 
 # Fail loud if a secondary has measurements or arms attributed directly —
 # would silently drop data once we restrict to primaries below.
@@ -363,13 +388,18 @@ primary_ids <- studefs$RefID[is.na(studefs$ParentID) | studefs$ParentID == 0]
 # secondaries; that's a known denormalisation in the source and is ignored.)
 secondary_with_data <- setdiff(
   unique(as.integer(c(intra$RefID, arms_x$RefID))),
-  primary_ids
+  all_primary_ids
 )
 secondary_with_data <- secondary_with_data[!is.na(secondary_with_data)]
 if (length(secondary_with_data)) {
   stop("Secondary RefIDs have measurements or arms: ",
        paste(sort(secondary_with_data), collapse = ", "))
 }
+
+# Drop IncExc-excluded primaries from the kept universe. Their arms,
+# measurements, subgroup denominators, and primary+secondary publications
+# all cascade out below via the all_ref_ids restriction.
+primary_ids <- setdiff(all_primary_ids, excluded_study_ids)
 
 # Universe: primaries that have any genuine data. tblStudyChars rows
 # against secondaries (CatID 49 only — redundant trial name) are excluded.
@@ -500,6 +530,9 @@ arm_keys <- unique(rbind(
 ))
 arm_keys <- arm_keys[!is.na(arm_keys$RefID) & !is.na(arm_keys$ArmNo) &
                      arm_keys$ArmNo > 0, ]
+# Excluded primaries (IncExc 2-4) may still own arms in tblArms; drop those
+# so the arms.study_id FK to studies(study_id) is satisfied.
+arm_keys <- arm_keys[arm_keys$RefID %in% all_ref_ids, ]
 arm_keys <- arm_keys[order(arm_keys$RefID, arm_keys$ArmNo), ]
 arm_keys$arm_id <- seq_len(nrow(arm_keys))
 
