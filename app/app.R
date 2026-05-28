@@ -4,6 +4,7 @@ suppressPackageStartupMessages({
   library(RSQLite)
   library(DT)
   library(visNetwork)
+  library(jsonlite)
 })
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -211,13 +212,17 @@ fmt_citations <- function(pubs) {
   paste0('<div class="trial-cites">', paste(items, collapse = ""), "</div>")
 }
 
-# Pre-rendered, attribute-escaped citation HTML per study_id. fmt_trial()
-# just does a lookup; no per-row HTML generation.
-cites_attr_by_study <- vapply(
-  pubs_by_study,
-  function(p) htmltools::htmlEscape(fmt_citations(p), attribute = TRUE),
-  character(1)
+# Pre-rendered citation HTML per study_id. Held as plain (unescaped) HTML
+# because it's delivered to the browser once as a JS object (window.studyCitations)
+# rather than being embedded into a `data-` attribute on every table cell.
+# fmt_trial() only writes the study_id into each cell; the JS click handler
+# looks the HTML up at click time.
+cites_html_by_study <- vapply(
+  pubs_by_study, fmt_citations, character(1)
 )
+cites_html_by_study <- cites_html_by_study[nzchar(cites_html_by_study)]
+studies_with_cites <- names(cites_html_by_study)
+cites_json <- jsonlite::toJSON(as.list(cites_html_by_study), auto_unbox = TRUE)
 
 # Baseline PASI recorded as a "Psoriasis characteristics" outcome
 # (outcome_id 11) — used as a fallback for the Absolute PASI table when an
@@ -245,17 +250,18 @@ baseline_pasi_lookup <- list(
 # is implemented in vanilla JS (see tags$script in the UI) via event
 # delegation, so it survives DT redraws without a drawCallback.
 #
-# Citation HTML is stashed in `data-citations` (attribute-escaped). Trials
-# with no publications fall back to a span (no popover).
+# Each anchor carries only `data-ref-id`; the JS handler looks the citation
+# HTML up in window.studyCitations. Trials with no publications fall back to
+# a span (no popover).
 # Caller must pass `escape = FALSE` for the Trial column.
 fmt_trial <- function(trial, ref_id) {
   labels <- htmltools::htmlEscape(trial)
-  cites  <- cites_attr_by_study[as.character(ref_id)]
-  has    <- !is.na(cites) & nzchar(cites)
+  ids    <- as.character(ref_id)
+  has    <- ids %in% studies_with_cites
   out    <- paste0("<span>", labels, "</span>")
   out[has] <- sprintf(
-    '<a href="javascript:void(0)" class="trial-pop" data-citations="%s">%s</a>',
-    cites[has], labels[has]
+    '<a href="javascript:void(0)" class="trial-pop" data-ref-id="%s">%s</a>',
+    ids[has], labels[has]
   )
   out
 }
@@ -666,7 +672,8 @@ ui <- fluidPage(
       function hide() { if (pop) pop.style.display = 'none'; }
       function show(trigger) {
         var p = ensure();
-        p.innerHTML = trigger.getAttribute('data-citations') || '';
+        var id = trigger.getAttribute('data-ref-id');
+        p.innerHTML = (window.studyCitations && window.studyCitations[id]) || '';
         p.style.display = 'block';
         // Measure after layout so we can flip when there's no room below.
         var r  = trigger.getBoundingClientRect();
@@ -694,7 +701,63 @@ ui <- fluidPage(
       window.addEventListener('scroll', hide, true);
     })();
   "))),
+  tags$head(tags$script(HTML(paste0(
+    "window.studyCitations = ", cites_json, ";"
+  )))),
+  tags$head(
+    tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),
+    tags$link(rel = "preconnect", href = "https://fonts.gstatic.com",
+              crossorigin = NA),
+    tags$link(rel = "stylesheet",
+              href = paste0("https://fonts.googleapis.com/css2?",
+                            "family=Inter:wght@400;500;600;700&display=swap"))
+  ),
   tags$head(tags$style(HTML("
+    /* --- base typography ------------------------------------------------ */
+    body, .container-fluid, .container, button, input, select, textarea {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                   Roboto, Helvetica, Arial, sans-serif;
+      color: #1a1f2c;
+      -webkit-font-smoothing: antialiased;
+    }
+    body { background: #ffffff; color: #1a1f2c; }
+    h1, h2, h3, h4, h5 { font-weight: 600; letter-spacing: -0.01em; }
+    /* Trim the default Bootstrap titlePanel — it's huge and bold. */
+    .title-bar h2 { font-size: 22px; font-weight: 600; margin: 12px 0 8px 0;
+                    letter-spacing: -0.015em; color: #0f1726; }
+
+    /* --- buttons -------------------------------------------------------- */
+    .btn-default {
+      background: #ffffff; border: 1px solid #d4d8df; color: #2a3142;
+      border-radius: 5px; font-weight: 500; transition: all 0.15s ease;
+      box-shadow: none;
+    }
+    .btn-default:hover, .btn-default:focus {
+      background: #f5f7fa; border-color: #b8bec8; color: #0f1726;
+    }
+    .btn-default:active { background: #eceff3; }
+
+    /* --- tabs: flat underline style ------------------------------------- */
+    .nav-tabs {
+      border-bottom: 1px solid #e3e6ea; margin-bottom: 0; padding-left: 2px;
+    }
+    .nav-tabs > li { margin-bottom: -1px; }
+    .nav-tabs > li > a {
+      border: none; border-bottom: 2px solid transparent;
+      background: transparent; color: #5a6478; font-weight: 500;
+      padding: 10px 16px; margin-right: 4px; border-radius: 0;
+      transition: color 0.15s ease, border-color 0.15s ease;
+    }
+    .nav-tabs > li > a:hover {
+      background: transparent; border-bottom-color: #c8ced6; color: #1F4E8C;
+    }
+    .nav-tabs > li.active > a,
+    .nav-tabs > li.active > a:hover,
+    .nav-tabs > li.active > a:focus {
+      background: transparent; border: none;
+      border-bottom: 2px solid #1F4E8C; color: #1F4E8C; font-weight: 600;
+    }
+
     .filter-bar { padding: 8px 12px; background: #f4f6f9; border-radius: 6px;
                   margin: 6px 0 12px 0; display: flex; align-items: center;
                   gap: 12px; font-size: 15px; }
@@ -751,8 +814,21 @@ ui <- fluidPage(
     #trial-popover a { color: #1F4E8C; word-break: break-all; }
     /* Per-trial banding applied by drawCallback above. */
     table.dataTable tr.trial-band > td { background-color: #f3f5f8; }
+    .title-bar { display: flex; align-items: center; justify-content: space-between;
+                 gap: 12px; }
+    .title-bar .about-btn { margin-right: 4px; }
+    /* Roomy About modal. */
+    .about-modal .modal-dialog { width: 80%; max-width: 900px; }
+    .about-modal .modal-body { font-size: 14px; line-height: 1.55;
+                               max-height: 70vh; overflow-y: auto; }
+    .about-modal .modal-body h4 { margin-top: 18px; color: #1F4E8C; }
+    .about-modal .modal-body h4:first-child { margin-top: 0; }
   "))),
-  titlePanel("Psoriasis RCT Explorer"),
+  div(class = "title-bar",
+      titlePanel("Psoriasis RCT Explorer"),
+      actionButton("show_about", "About", icon = icon("circle-info"),
+                   class = "btn btn-default about-btn")
+  ),
   div(class = "filter-bar",
       span(class = "label", "Filter:"),
       uiOutput("filter_label", inline = TRUE),
@@ -771,14 +847,7 @@ ui <- fluidPage(
                "width is the number of trials with that head-to-head. Click",
                "empty space, or the Clear button, to reset."),
       tags$footer(class = "app-footer",
-        HTML("&copy; 2026 Thomas Clemmet"),
-        " · ",
-        tags$a(href = "https://github.com/tomclemmet/psoriasis-rct-explorer",
-               target = "_blank", rel = "noopener", "GitHub"),
-        " · ",
-        tags$a(href = "https://www.crd.york.ac.uk/PROSPERO/view/CRD420261306630",
-               target = "_blank", rel = "noopener", "PROSPERO record")
-      )
+        HTML("&copy; 2026 Thomas Clemmet"))
     ),
     column(6, class = "col-table",
       do.call(tabsetPanel, c(
@@ -1021,6 +1090,54 @@ server <- function(input, output, session) {
 
   # Empty-canvas click -> clear
   observeEvent(input$nma_clear, { filter_state(NULL) })
+
+  observeEvent(input$show_about, {
+    showModal(modalDialog(
+      title = "About the Psoriasis RCT Explorer",
+      easyClose = TRUE,
+      size = "l",
+      footer = modalButton("Close"),
+      class = "about-modal",
+      tags$div(
+        tags$h4("Overview"),
+        tags$p("This app can be used to explore the results from randomised 
+               controlled trials in psoriasis. Data for psoriasis area and
+               severity index (PASI), Dermatology Life Quality Index (DLQI),
+               and safety are included. Use the network diagram on the left
+               to choose the drug or the comparison you are interested in and
+               the tables will update automatically."),
+        tags$h4("Study selection"),
+        tags$p("The studies reported in this app were identified as 
+               randomised controlled trials for systemic treatments for
+               moderate-to-severe psoriasis by a Cochrane living review ",
+               tags$a("(Sbidian et al., 2025)", 
+                      href = "https://doi.org/10.1002/14651858.CD011535.pub7",
+                      target = "_blank", rel = "noopener", .noWS = "after"),
+               ". "),
+        tags$h4("Data extraction"),
+        tags$p("Data were extracted from the identified studies by a single
+               researcher. The data is stored in a sqlite database, which can
+               be downloaded. For full details of the data extraction, see 
+               the full protocol on ",
+               tags$a("PROSPERO", 
+                      href = "https://www.crd.york.ac.uk/PROSPERO/view/CRD420261306630",
+                      target = "_blank", rel = "noopener", .noWS = "after"),
+               "."
+               ),
+        tags$h4("Network diagram"),
+        tags$p("The network diagram shows the drugs and comparisons available
+               for the selected endpoints. Nodes are sizes according sample 
+               size; edges are sizes according to number of trials."),
+        tags$h4("Contact"),
+        tags$p("If you have a question about the app, please raise an issue 
+               on the ",
+               tags$a("GitHub repository", 
+                      href = "https://github.com/tomclemmet/psoriasis-rct-explorer",
+                      target = "_blank", rel = "noopener", .noWS = "after"), 
+               ".")
+      )
+    ))
+  })
 
   output$download_db <- downloadHandler(
     filename    = function() "psoriasis-rcts.sqlite",
