@@ -5,8 +5,6 @@ suppressPackageStartupMessages({
   library(DT)
   library(visNetwork)
   library(jsonlite)
-  library(ggplot2)
-  library(ggiraph)
 })
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -777,12 +775,14 @@ fmt_pct <- function(x, digits = 0) {
   sprintf("%.*f%%", digits, 100 * x)
 }
 
-# Build a tooltip string (HTML) for a forest-plot row. `extra` is an
-# optional named character vector of additional label/value pairs.
+# Plain-text tooltip for native SVG <title> elements. Multi-line via "\n";
+# browsers honour newlines in <title> as a multi-line hover tooltip without
+# any extra JS. `extra` is an optional named character vector of additional
+# label / value pairs.
 ma_tooltip <- function(label, est, lo, hi, weight_fe, weight_re, extra = NULL,
                        digits = 2) {
   parts <- c(
-    sprintf("<b>%s</b>", htmltools::htmlEscape(label)),
+    label,
     sprintf("Effect: %s", fmt_ci(est, lo, hi, digits)),
     if (!is.na(weight_fe))
       sprintf("Weight (FE): %s", fmt_pct(weight_fe, 1)),
@@ -791,100 +791,243 @@ ma_tooltip <- function(label, est, lo, hi, weight_fe, weight_re, extra = NULL,
   )
   if (length(extra))
     parts <- c(parts, sprintf("%s: %s", names(extra), as.character(extra)))
-  paste(parts, collapse = "<br/>")
+  paste(parts, collapse = "\n")
 }
 
-# Render one forest plot. `rows` is a data.frame with columns:
+# --- Inline-SVG forest plot ------------------------------------------------
+# All rendering is a pure R string-builder: no ggplot, no ggiraph, no
+# svglite. We compute pixel coordinates ourselves and emit <svg> with
+# <line>, <rect>, <polygon>, <text> children. Per-row tooltips ride along
+# as native SVG <title> child elements (every browser renders these as
+# hover tooltips automatically).
+#
+# `rows` is a data.frame with columns
 #   label, est, lo, hi, weight_fe, weight_re, tooltip
-# Optional `pooled` rows are drawn as diamonds at the bottom; each pooled
-# row has label, est, lo, hi, kind ("FE" or "RE"). `scale` is one of
-# "rr", "md", "prop". `emphasis` is "FE" or "RE" (the highlighted diamond).
-forest_ggiraph <- function(rows, pooled, scale = "rr", emphasis = "RE",
-                            title = NULL, output_id) {
+# Optional `pooled` rows are drawn as diamonds below; each has kind ("FE"
+# or "RE"), est, lo, hi. `scale` is one of "rr", "md", "prop".
+
+# Pick visible x-axis ticks for one of the three scales. Returns numeric
+# tick values in data units; the renderer formats them and maps to pixels.
+forest_ticks <- function(scale, xmin, xmax) {
+  if (identical(scale, "rr")) {
+    # Decade-anchored ticks; keep ones inside the visible window.
+    candidates <- c(0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100)
+    candidates[candidates >= xmin & candidates <= xmax]
+  } else if (identical(scale, "prop")) {
+    seq(0, 1, by = 0.25)
+  } else {
+    # mean diff: ~5 pretty ticks within the data range.
+    pretty(c(xmin, xmax), n = 5)
+  }
+}
+
+# Format a tick label for the axis.
+forest_tick_label <- function(scale, v) {
+  if (identical(scale, "rr"))    sub("\\.0$", "", formatC(v, format = "g"))
+  else if (identical(scale, "prop")) sprintf("%g", v)
+  else                            formatC(v, format = "g")
+}
+
+# Map a data-unit x value to a pixel x position inside the plot area.
+forest_xscale <- function(scale, xmin, xmax, plot_left, plot_w) {
+  if (identical(scale, "rr")) {
+    lmin <- log10(xmin); lmax <- log10(xmax)
+    function(x) plot_left + (log10(pmax(x, xmin / 10)) - lmin) /
+                            (lmax - lmin) * plot_w
+  } else {
+    function(x) plot_left + (x - xmin) / (xmax - xmin) * plot_w
+  }
+}
+
+# Compute (xmin, xmax) so every CI fits with a little padding, and the
+# reference line sits inside the visible range when it exists.
+forest_xlimits <- function(scale, rows, pooled) {
+  vals <- c(rows$lo, rows$hi)
+  if (!is.null(pooled) && nrow(pooled)) vals <- c(vals, pooled$lo, pooled$hi)
+  vals <- vals[is.finite(vals)]
+  if (!length(vals)) return(switch(scale, rr = c(0.1, 10), prop = c(0, 1),
+                                   c(-1, 1)))
+  if (identical(scale, "rr")) {
+    # Pad in log space and snap outward to a decade-anchored tick so the
+    # axis ends on a clean number. Always include 1 (the null) inside the
+    # range so the reference line is visible.
+    candidates <- c(0.01, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200)
+    lo <- min(vals, 1); hi <- max(vals, 1)
+    # Add log-space padding before snapping so a CI that lands exactly on a
+    # candidate tick doesn't have its tip touching the plot edge.
+    lr  <- log10(hi) - log10(lo)
+    pad <- max(lr * 0.05, 0.05)
+    lo  <- 10 ^ (log10(lo) - pad)
+    hi  <- 10 ^ (log10(hi) + pad)
+    lo <- max(candidates[candidates <= lo], 0.01)
+    hi <- min(candidates[candidates >= hi], 200)
+    c(lo, hi)
+  } else if (identical(scale, "prop")) {
+    c(0, 1)
+  } else {
+    pad <- (max(vals) - min(vals)) * 0.1
+    # Linear (MD): also pull the null (0) inside the range when CIs lie on
+    # one side of zero.
+    c(min(min(vals), 0) - pad, max(max(vals), 0) + pad)
+  }
+}
+
+# Diamond polygon: left point, top, right, bottom — half-height `hh` px.
+forest_diamond_points <- function(xL, xC, xR, yC, hh) {
+  sprintf("%g,%g %g,%g %g,%g %g,%g",
+          xL, yC, xC, yC - hh, xR, yC, xC, yC + hh)
+}
+
+# Render one forest plot to a complete <svg> string. Width is fixed; height
+# scales with the number of rows.
+forest_svg <- function(rows, pooled, scale = "rr", width = 880) {
+  esc <- function(x) htmltools::htmlEscape(x, attribute = FALSE)
   if (!nrow(rows)) {
-    return(girafe(ggobj = ggplot() +
-                    annotate("text", x = 0, y = 0, label = "No data") +
-                    theme_void(),
-                  width_svg = 7, height_svg = 1.5))
+    return(sprintf('<div class="ma-empty">No meta-analysable data for this comparison.</div>'))
   }
 
+  # Geometry.
+  ROW_H        <- 22
+  HEADER_PAD   <- 8
+  POOLED_GAP   <- 14
+  POOLED_H     <- 22
+  AXIS_PAD     <- 28
+  BOTTOM_PAD   <- 6
+  LEFT_MARGIN  <- 200       # row labels
+  RIGHT_MARGIN <- 235       # CI text (always shown — printable)
+  PLOT_LEFT    <- LEFT_MARGIN
+  PLOT_W       <- width - LEFT_MARGIN - RIGHT_MARGIN
+
+  n_trials  <- nrow(rows)
+  n_pooled  <- if (!is.null(pooled)) nrow(pooled) else 0L
+  body_h    <- n_trials * ROW_H + (if (n_pooled) POOLED_GAP + n_pooled * POOLED_H else 0)
+  height    <- HEADER_PAD + body_h + AXIS_PAD + BOTTOM_PAD
+
+  # Domain + tick positions.
+  xlim  <- forest_xlimits(scale, rows, pooled)
+  xmin  <- xlim[1]; xmax <- xlim[2]
+  xfn   <- forest_xscale(scale, xmin, xmax, PLOT_LEFT, PLOT_W)
+  ticks <- forest_ticks(scale, xmin, xmax)
+
   ref_line <- switch(scale, rr = 1, md = 0, prop = NA_real_)
-  x_log    <- identical(scale, "rr")
+  plot_bottom <- HEADER_PAD + body_h
+  plot_top    <- HEADER_PAD - 4
 
-  # Order rows from top (first) to bottom (last); ggplot's y is numeric
-  # going up, so reverse.
-  rows$y <- rev(seq_len(nrow(rows)))
-  rows$size_w <- if (all(is.na(rows$weight_fe))) 0.5
-                 else pmax(0.15, sqrt(rows$weight_fe / max(rows$weight_fe, na.rm = TRUE)))
+  # CI digits: tighter for proportions because they tend to cluster.
+  ci_digits <- if (identical(scale, "prop")) 3 else 2
 
-  # Diamonds for pooled rows, vertically below all trial rows.
-  pooled_geom <- NULL
-  if (!is.null(pooled) && nrow(pooled)) {
-    pooled$y <- -seq_len(nrow(pooled)) * 0.8
-    diamonds <- do.call(rbind, lapply(seq_len(nrow(pooled)), function(i) {
-      p <- pooled[i, ]
-      hh <- 0.28
-      data.frame(
-        kind = p$kind,
-        x = c(p$lo, p$est, p$hi, p$est),
-        y = p$y + c(0, hh, 0, -hh)
-      )
-    }))
-    diamonds$y_id <- factor(rep(pooled$kind, each = 4))
-    pooled_geom <- list(
-      geom_polygon(data = diamonds,
-                   aes(x = x, y = y, group = y_id, fill = kind, colour = kind),
-                   alpha = 0.55),
-      geom_text(data = pooled,
-                aes(x = max(rows$hi, hi, na.rm = TRUE) * (if (x_log) 1.6 else 1),
-                    y = y,
-                    label = sprintf("%s: %s", kind,
-                                    fmt_ci(est, lo, hi,
-                                           if (scale == "prop") 3 else 2))),
-                hjust = 0, size = 3, colour = "#1a1f2c")
+  # Per-row square size from FE weight; clamped to a readable range.
+  max_w <- suppressWarnings(max(rows$weight_fe, na.rm = TRUE))
+  square_size <- if (!is.finite(max_w) || max_w <= 0) {
+    rep(8, n_trials)
+  } else {
+    pmax(5, pmin(12, 5 + 7 * sqrt(rows$weight_fe / max_w)))
+  }
+  square_size[is.na(square_size)] <- 8
+
+  parts <- character(0)
+
+  # Open the SVG element.
+  parts[length(parts) + 1L] <- sprintf(
+    '<svg class="ma-forest" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="100%%" height="%dpx" preserveAspectRatio="xMinYMin meet" role="img">',
+    width, as.integer(height), as.integer(height))
+
+  # Plot-area background (subtle).
+  parts[length(parts) + 1L] <- sprintf(
+    '<rect class="ma-plot-bg" x="%g" y="%g" width="%g" height="%g"/>',
+    PLOT_LEFT, plot_top, PLOT_W, plot_bottom - plot_top)
+
+  # Reference line (RR=1, MD=0; nothing for proportions).
+  if (!is.na(ref_line) && ref_line >= xmin && ref_line <= xmax) {
+    rx <- xfn(ref_line)
+    parts[length(parts) + 1L] <- sprintf(
+      '<line class="ma-refline" x1="%g" y1="%g" x2="%g" y2="%g"/>',
+      rx, plot_top, rx, plot_bottom)
+  }
+
+  # Per-trial rows: label, CI line, square (with <title> tooltip),
+  # right-aligned numeric CI text.
+  for (i in seq_len(n_trials)) {
+    yc <- HEADER_PAD + (i - 0.5) * ROW_H
+    xL <- xfn(rows$lo[i]); xR <- xfn(rows$hi[i]); xE <- xfn(rows$est[i])
+    sz <- square_size[i]
+    label    <- esc(rows$label[i])
+    ci_text  <- esc(fmt_ci(rows$est[i], rows$lo[i], rows$hi[i], ci_digits))
+    tt       <- esc(rows$tooltip[i] %||% label)
+    weight_pct <- if (is.finite(rows$weight_fe[i]))
+      esc(fmt_pct(rows$weight_fe[i], 1)) else ""
+    parts[length(parts) + 1L] <- paste0(
+      '<g class="ma-row">',
+      '<title>', tt, '</title>',
+      sprintf('<text class="ma-rowlabel" x="%g" y="%g">%s</text>',
+              LEFT_MARGIN - 10, yc + 4, label),
+      sprintf('<line class="ma-ci" x1="%g" y1="%g" x2="%g" y2="%g"/>',
+              xL, yc, xR, yc),
+      sprintf('<rect class="ma-square" x="%g" y="%g" width="%g" height="%g"/>',
+              xE - sz / 2, yc - sz / 2, sz, sz),
+      sprintf('<text class="ma-citext" x="%g" y="%g">%s</text>',
+              width - RIGHT_MARGIN + 14, yc + 4, ci_text),
+      if (nzchar(weight_pct))
+        sprintf('<text class="ma-weight" x="%g" y="%g">%s</text>',
+                width - 6, yc + 4, weight_pct)
+      else "",
+      '</g>'
     )
   }
 
-  fill_vals <- c(FE = "#7f8fa6", RE = "#1F4E8C")
-  if (emphasis == "FE") fill_vals <- c(FE = "#1F4E8C", RE = "#c9d3df")
-  else                  fill_vals <- c(FE = "#c9d3df", RE = "#1F4E8C")
-
-  p <- ggplot(rows, aes(x = est, y = y)) +
-    geom_vline(xintercept = ref_line, linetype = "dashed",
-               colour = "#aab1bd", na.rm = TRUE) +
-    geom_errorbar(aes(xmin = lo, xmax = hi), width = 0,
-                  orientation = "y", colour = "#5a6478", na.rm = TRUE) +
-    geom_point_interactive(aes(size = size_w, tooltip = tooltip,
-                                data_id = as.character(y)),
-                            shape = 15, colour = "#1a1f2c", na.rm = TRUE) +
-    scale_size_continuous(range = c(2, 6), guide = "none") +
-    scale_y_continuous(breaks = rows$y, labels = rows$label,
-                       expand = expansion(add = c(2.5, 0.6))) +
-    labs(x = NULL, y = NULL, title = title) +
-    theme_minimal(base_size = 11) +
-    theme(panel.grid.minor = element_blank(),
-          panel.grid.major.y = element_blank(),
-          axis.text.y = element_text(colour = "#1a1f2c"),
-          legend.position = "top",
-          plot.title = element_text(size = 12, face = "bold",
-                                    colour = "#1a1f2c"))
-  if (x_log) p <- p + scale_x_log10()
-  if (!is.null(pooled_geom)) {
-    p <- p + pooled_geom +
-      scale_fill_manual(values = fill_vals, name = NULL) +
-      scale_colour_manual(values = fill_vals, guide = "none")
+  # Pooled rows: diamond + label (kind + CI). FE in mid-grey, RE in brand
+  # blue. Both always drawn — there is no toggle.
+  if (n_pooled) {
+    for (i in seq_len(n_pooled)) {
+      yc <- HEADER_PAD + n_trials * ROW_H + POOLED_GAP +
+              (i - 0.5) * POOLED_H
+      xL <- xfn(pooled$lo[i]); xR <- xfn(pooled$hi[i]); xE <- xfn(pooled$est[i])
+      kind  <- pooled$kind[i]
+      klass <- if (identical(kind, "FE")) "ma-pooled-fe" else "ma-pooled-re"
+      pts   <- forest_diamond_points(xL, xE, xR, yc, 7)
+      pooled_label <- sprintf("%s: %s",
+                              if (identical(kind, "FE")) "Common (FE)"
+                              else "Random (RE)",
+                              fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i],
+                                     ci_digits))
+      tt <- esc(sprintf("%s\n%s",
+                        if (identical(kind, "FE")) "Common-effect (FE) pooled estimate"
+                        else "Random-effects (RE, REML) pooled estimate",
+                        fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i],
+                               ci_digits)))
+      parts[length(parts) + 1L] <- paste0(
+        sprintf('<g class="ma-pooled %s">', klass),
+        '<title>', tt, '</title>',
+        sprintf('<text class="ma-rowlabel ma-pooled-label" x="%g" y="%g">%s</text>',
+                LEFT_MARGIN - 10, yc + 4,
+                if (identical(kind, "FE")) "Common (FE)" else "Random (RE)"),
+        sprintf('<polygon class="ma-diamond" points="%s"/>', pts),
+        sprintf('<text class="ma-citext" x="%g" y="%g">%s</text>',
+                width - RIGHT_MARGIN + 14, yc + 4,
+                esc(fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i],
+                           ci_digits))),
+        '</g>'
+      )
+    }
   }
 
-  height_in <- 0.5 + 0.25 * nrow(rows) +
-               (if (!is.null(pooled)) 0.4 * nrow(pooled) else 0)
-  girafe(ggobj = p, width_svg = 9, height_svg = max(2.2, height_in),
-         options = list(
-           opts_tooltip(css = "background:#1a1f2c;color:#fff;padding:6px 9px;
-                              border-radius:5px;font-size:12px;
-                              box-shadow:0 2px 8px rgba(0,0,0,0.25);"),
-           opts_hover(css = "stroke:#c0392b;stroke-width:2px;"),
-           opts_sizing(rescale = TRUE, width = 1)
-         ))
+  # X-axis: a horizontal line + tick marks + labels.
+  axis_y <- plot_bottom + 6
+  parts[length(parts) + 1L] <- sprintf(
+    '<line class="ma-axis" x1="%g" y1="%g" x2="%g" y2="%g"/>',
+    PLOT_LEFT, axis_y, PLOT_LEFT + PLOT_W, axis_y)
+  for (t in ticks) {
+    tx <- xfn(t)
+    parts[length(parts) + 1L] <- sprintf(
+      '<line class="ma-tick" x1="%g" y1="%g" x2="%g" y2="%g"/>',
+      tx, axis_y, tx, axis_y + 4)
+    parts[length(parts) + 1L] <- sprintf(
+      '<text class="ma-ticklabel" x="%g" y="%g">%s</text>',
+      tx, axis_y + 16, esc(forest_tick_label(scale, t)))
+  }
+
+  parts[length(parts) + 1L] <- "</svg>"
+  paste(parts, collapse = "")
 }
 
 # --- Data fetchers used by the modal ---------------------------------------
@@ -1246,9 +1389,34 @@ ui <- fluidPage(
                           padding: 12px 0; }
     .ma-modal .ma-footer-meta { font-size: 12px; color: #888;
                                 margin-right: auto; }
-    .ma-modal .ma-toggle { display: inline-flex; align-items: center;
-                            gap: 6px; margin-right: 12px; font-size: 13px; }
-    .ma-modal .ma-toggle .radio-inline { margin-left: 6px; }
+    /* Inline-SVG forest plot styling. All forest plots share these rules;
+       the SVG content itself is produced by forest_svg() (no ggplot). */
+    .ma-forest { display: block; max-width: 100%; height: auto;
+                 font-family: inherit; }
+    .ma-forest .ma-plot-bg   { fill: #fafbfc; stroke: none; }
+    .ma-forest .ma-refline   { stroke: #aab1bd; stroke-width: 1;
+                                stroke-dasharray: 4 4; }
+    .ma-forest .ma-axis      { stroke: #5a6478; stroke-width: 1; }
+    .ma-forest .ma-tick      { stroke: #5a6478; stroke-width: 1; }
+    .ma-forest .ma-ticklabel { fill: #5a6478; font-size: 11px;
+                                text-anchor: middle; }
+    .ma-forest .ma-rowlabel  { fill: #1a1f2c; font-size: 12px;
+                                text-anchor: end; }
+    .ma-forest .ma-ci        { stroke: #5a6478; stroke-width: 1.2; }
+    .ma-forest .ma-square    { fill: #1a1f2c; stroke: none; }
+    .ma-forest .ma-citext    { fill: #1a1f2c; font-size: 11px;
+                                text-anchor: start; }
+    .ma-forest .ma-weight    { fill: #5a6478; font-size: 11px;
+                                text-anchor: end; }
+    .ma-forest .ma-pooled-fe .ma-diamond { fill: #7f8fa6; stroke: #5a6478;
+                                            stroke-width: 1; }
+    .ma-forest .ma-pooled-re .ma-diamond { fill: #1F4E8C; stroke: #14376a;
+                                            stroke-width: 1; }
+    .ma-forest .ma-pooled-label { font-weight: 600; }
+    /* Subtle hover highlight; native <title> tooltips appear automatically. */
+    .ma-forest .ma-row:hover .ma-square,
+    .ma-forest .ma-row:hover .ma-ci   { stroke: #c0392b; }
+    .ma-forest .ma-row:hover .ma-square { fill: #c0392b; }
   "))),
   div(class = "title-bar",
       titlePanel("Psoriasis RCT Explorer"),
@@ -1570,16 +1738,10 @@ server <- function(input, output, session) {
   # Empty-canvas click -> clear
   observeEvent(input$nma_clear, { filter_state(NULL) })
 
-  # Meta-analysis modal. Reads the precomputed ma_* tables and renders one
-  # forest plot per outcome in the active endpoint group. Dispatch on
-  # filter_state(): NULL -> drug vs placebo, edge -> pairwise, node -> single
-  # arm proportion.
-  ma_emphasis <- reactiveVal("RE")
-  observeEvent(input$ma_emphasis, {
-    req(input$ma_emphasis %in% c("FE", "RE"))
-    ma_emphasis(input$ma_emphasis)
-  })
-
+  # Meta-analysis modal. All forest plots are rendered as plain inline SVG
+  # at modal-open time -- no Shiny output bindings, no ggplot, no ggiraph.
+  # Both common-effect (FE) and random-effects (RE, REML) diamonds are
+  # always drawn together at the bottom of each plot.
   observeEvent(input$show_ma, {
     state  <- filter_state()
     tab_id <- input$view %||% names(endpoint_groups)[1]
@@ -1617,9 +1779,10 @@ server <- function(input, output, session) {
                  else "All drugs"
     group_lbl <- endpoint_groups[[tab_id]]$groups[[gid]]$label %||% gid
 
-    # Build a plot block per outcome.
+    # Build a plot block per outcome. Each block contains a heading, a
+    # stats summary, and the SVG itself (or a "no data" message). All
+    # rendering happens synchronously here -- no Shiny output bindings.
     plot_blocks <- lapply(outcomes, function(outc) {
-      out_id <- paste0("ma_plot_", tab_id, "_", gid, "_", outc$code)
       inputs <- tryCatch(build_forest_inputs(state, tab_id, outc),
                         error = function(e) NULL)
       if (is.null(inputs)) {
@@ -1636,7 +1799,7 @@ server <- function(input, output, session) {
         re <- inputs$pooled[inputs$pooled$kind == "RE", ]
         sm_lbl <- switch(eff_scale, rr = "RR", md = "MD", prop = "Proportion")
         digits <- if (eff_scale == "prop") 3 else 2
-        sprintf("FE: %s %s | RE: %s %s | %d studies",
+        sprintf("FE %s: %s | RE %s: %s | %d studies",
                 sm_lbl, fmt_ci(fe$est, fe$lo, fe$hi, digits),
                 sm_lbl, fmt_ci(re$est, re$lo, re$hi, digits),
                 nrow(inputs$rows))
@@ -1645,10 +1808,11 @@ server <- function(input, output, session) {
                 nrow(inputs$rows),
                 if (is.null(state)) "drugs" else "rows")
       }
+      svg_html <- forest_svg(inputs$rows, inputs$pooled, scale = eff_scale)
       div(class = "ma-plot-block",
           div(class = "ma-plot-title", outc$label),
           div(class = "ma-plot-stats", stats),
-          girafeOutput(out_id, height = "auto"))
+          HTML(svg_html))
     })
 
     showModal(modalDialog(
@@ -1658,39 +1822,15 @@ server <- function(input, output, session) {
         span(class = "ma-footer-meta",
              if (!is.na(MA_BUILT_AT)) sprintf("Built: %s UTC", MA_BUILT_AT)
              else "Built: unknown"),
-        span(class = "ma-toggle",
-             "Emphasise:",
-             radioButtons("ma_emphasis", label = NULL,
-                          choices = c("Random effects" = "RE",
-                                       "Fixed effect"   = "FE"),
-                          selected = ma_emphasis(),
-                          inline = TRUE)),
         modalButton("Close")
       ),
       div(
         div(class = "ma-summary",
-            sprintf("%s | endpoint group: %s | random-effects pooling via REML",
+            sprintf("%s | endpoint group: %s | both common (FE) and random (RE, REML) pooled estimates shown",
                     state_lbl, group_lbl)),
         plot_blocks
       )
     ))
-
-    # Register one renderer per plot. Reactive on ma_emphasis() so the diamond
-    # colour swap is live.
-    for (outc in outcomes) local({
-      this_outc <- outc
-      out_id    <- paste0("ma_plot_", tab_id, "_", gid, "_", this_outc$code)
-      output[[out_id]] <- renderGirafe({
-        inputs <- tryCatch(build_forest_inputs(state, tab_id, this_outc),
-                          error = function(e) NULL)
-        if (is.null(inputs)) return(NULL)
-        forest_ggiraph(inputs$rows, inputs$pooled,
-                       scale = inputs$effective_scale %||% this_outc$scale,
-                       emphasis = ma_emphasis(),
-                       title = NULL,
-                       output_id = out_id)
-      })
-    })
   })
 
   observeEvent(input$show_about, {

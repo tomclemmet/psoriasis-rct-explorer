@@ -135,14 +135,15 @@ project root and run `convert.R` (see below) to regenerate the SQLite file.
 ## One-time setup
 
 R 4.5 already has `shiny`, `DBI`, `RSQLite`, `odbc`, `dplyr` installed. The app
-also needs `DT`, `visNetwork`, `ggplot2`, `ggiraph`, and `meta`:
+also needs `DT`, `visNetwork`, and `meta`:
 
 ```r
-install.packages(c("DT", "visNetwork", "ggplot2", "ggiraph", "meta"))
+install.packages(c("DT", "visNetwork", "meta"))
 ```
 
-(`ggplot2` + `ggiraph` render the interactive forest plots in the Meta-analyse
-modal; `meta` is only needed by `meta_analyse.R` at build time.)
+(`meta` is only needed by `meta_analyse.R` at build time. Forest plots in the
+Meta-analyse modal are rendered as plain inline SVG by `app.R` itself — no
+plotting library is required at runtime.)
 
 The 64-bit "Microsoft Access Driver (*.mdb, *.accdb)" must be installed (it
 already is on this machine — it ships with the 64-bit Access Database Engine).
