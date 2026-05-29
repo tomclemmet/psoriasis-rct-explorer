@@ -964,12 +964,16 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   emit_data_row <- function(yc, est, lo, hi, sz, label_left, ci_text,
                             tooltip, klass = "ma-square-default") {
     xL_raw <- xfn(lo); xR_raw <- xfn(hi); xE_raw <- xfn(est)
-    xL <- max(X_MIN_PX, xL_raw)
-    xR <- min(X_MAX_PX, xR_raw)
+    # NA-safe helpers: NA/NaN positions mean "no data", treated as in-range.
+    finite_or <- function(x, fallback) if (is.finite(x)) x else fallback
+    xL <- max(X_MIN_PX, finite_or(xL_raw, X_MIN_PX))
+    xR <- min(X_MAX_PX, finite_or(xR_raw, X_MAX_PX))
+    xE_raw_safe <- finite_or(xE_raw, (X_MIN_PX + X_MAX_PX) / 2)
     # Clamp the square's centre so its body stays inside the plot.
-    xE_clamped <- min(max(xE_raw, X_MIN_PX + sz / 2), X_MAX_PX - sz / 2)
-    off_left  <- xL_raw < X_MIN_PX
-    off_right <- xR_raw > X_MAX_PX
+    xE_clamped <- min(max(xE_raw_safe, X_MIN_PX + sz / 2), X_MAX_PX - sz / 2)
+    off_left  <- is.finite(xL_raw) && xL_raw < X_MIN_PX
+    off_right <- is.finite(xR_raw) && xR_raw > X_MAX_PX
+    has_data  <- is.finite(xE_raw)   # hide CI bar + square if estimate is NA
     paste0(
       '<g class="ma-row" data-tt="', esc_attr(tooltip), '">',
       sprintf('<text class="ma-rowlabel" x="%g" y="%g">%s</text>',
@@ -977,8 +981,9 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
       # Hover catcher: full row, makes it easy to trigger the tooltip.
       sprintf('<rect class="ma-rowhit" x="%g" y="%g" width="%g" height="%g"/>',
               PLOT_LEFT, yc - ROW_H / 2 + 1, PLOT_W, ROW_H - 2),
-      if (xL < xR) sprintf('<line class="ma-ci" x1="%g" y1="%g" x2="%g" y2="%g"/>',
-              xL, yc, xR, yc) else "",
+      if (has_data && xL < xR)
+        sprintf('<line class="ma-ci" x1="%g" y1="%g" x2="%g" y2="%g"/>',
+                xL, yc, xR, yc) else "",
       if (off_left)
         sprintf('<polygon class="ma-ci-arrow" points="%g,%g %g,%g %g,%g"/>',
                 X_MIN_PX, yc, X_MIN_PX + 6, yc - 4, X_MIN_PX + 6, yc + 4)
@@ -987,8 +992,10 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
         sprintf('<polygon class="ma-ci-arrow" points="%g,%g %g,%g %g,%g"/>',
                 X_MAX_PX, yc, X_MAX_PX - 6, yc - 4, X_MAX_PX - 6, yc + 4)
       else "",
-      sprintf('<rect class="ma-square %s" x="%g" y="%g" width="%g" height="%g"/>',
-              klass, xE_clamped - sz / 2, yc - sz / 2, sz, sz),
+      if (has_data)
+        sprintf('<rect class="ma-square %s" x="%g" y="%g" width="%g" height="%g"/>',
+                klass, xE_clamped - sz / 2, yc - sz / 2, sz, sz)
+      else "",
       sprintf('<text class="ma-citext" x="%g" y="%g">%s</text>',
               width - RIGHT_MARGIN + 10, yc + 4, esc(ci_text)),
       '</g>'
@@ -1019,8 +1026,10 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
               (i - 0.5) * POOLED_H
       xL_raw <- xfn(pooled$lo[i]); xR_raw <- xfn(pooled$hi[i])
       xE_raw <- xfn(pooled$est[i])
-      xL <- max(X_MIN_PX, xL_raw); xR <- min(X_MAX_PX, xR_raw)
-      xE <- min(max(xE_raw, X_MIN_PX), X_MAX_PX)
+      xL <- max(X_MIN_PX, if (is.finite(xL_raw)) xL_raw else X_MIN_PX)
+      xR <- min(X_MAX_PX, if (is.finite(xR_raw)) xR_raw else X_MAX_PX)
+      xE <- if (is.finite(xE_raw)) min(max(xE_raw, X_MIN_PX), X_MAX_PX)
+            else (X_MIN_PX + X_MAX_PX) / 2
       kind  <- pooled$kind[i]
       klass <- if (identical(kind, "FE")) "ma-pooled-fe" else "ma-pooled-re"
       pts   <- forest_diamond_points(xL, xE, xR, yc, 7)
@@ -1485,16 +1494,26 @@ ui <- fluidPage(
     .view-summary-wrap { display: contents; }
     .row.split .col-table .tab-content .view-summary {
       position: sticky; top: 46px; z-index: 3;
-      background: #ffffff; padding: 10px 4px 10px 4px;
+      background: #ffffff; padding: 9px 4px;
+      min-height: 52px; box-sizing: border-box;
       font-size: 16px; font-weight: 500; color: #1a1f2c;
       border-bottom: 1px solid #e3e6ea;
       display: flex; align-items: center; gap: 12px;
     }
     .view-summary-text { flex: 1 1 auto; min-width: 0; }
-    .view-summary .ma-btn { flex: 0 0 auto; padding: 4px 10px;
-                            font-size: 12px; }
+    .view-summary .ma-btn {
+      flex: 0 0 auto; align-self: center;
+      padding: 6px 14px; font-size: 13px; font-weight: 600;
+      background: #1F4E8C; border-color: #1F4E8C; color: #ffffff;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+    }
+    .view-summary .ma-btn:hover,
+    .view-summary .ma-btn:focus {
+      background: #163a6b; border-color: #163a6b; color: #ffffff;
+    }
+    .view-summary .ma-btn .fa { margin-right: 4px; }
     .row.split .col-table .tab-content table.dataTable thead th {
-      position: sticky; top: 90px; background: #ffffff; z-index: 2;
+      position: sticky; top: 98px; background: #ffffff; z-index: 2;
       box-shadow: inset 0 -1px 0 #ddd;
     }
     .app-footer { margin-top: 12px; font-size: 12px; color: #888; }
@@ -1736,9 +1755,9 @@ server <- function(input, output, session) {
                       pluralise(s$n_trials,   "trial"),
                       pluralise(s$n_refs,     "publication"),
                       pluralise(s$n_patients, "patient"))),
-          actionButton(paste0("show_ma_", this_tab), "Meta-analyse",
+          actionButton(paste0("show_ma_", this_tab), "Meta-analysis",
                        icon = icon("chart-column"),
-                       class = "btn btn-default btn-sm ma-btn"))
+                       class = "btn btn-sm ma-btn"))
     })
 
     output[[paste0("tbl_", this_tab)]] <- renderDT({
