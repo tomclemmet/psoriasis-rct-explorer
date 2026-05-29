@@ -135,15 +135,30 @@ project root and run `convert.R` (see below) to regenerate the SQLite file.
 ## One-time setup
 
 R 4.5 already has `shiny`, `DBI`, `RSQLite`, `odbc`, `dplyr` installed. The app
-also needs `DT`, `visNetwork`, and `meta`:
+also needs `DT`, `visNetwork`, `meta`, and `netmeta`:
 
 ```r
-install.packages(c("DT", "visNetwork", "meta"))
+install.packages(c("DT", "visNetwork", "meta", "netmeta"))
 ```
 
-(`meta` is only needed by `meta_analyse.R` at build time. Forest plots in the
-Meta-analyse modal are rendered as plain inline SVG by `app.R` itself — no
-plotting library is required at runtime.)
+(`meta` and `netmeta` are only needed by `meta_analyse.R` at build time —
+`meta` for the pairwise and single-arm meta-analyses, `netmeta` for the
+no-filter network meta-analysis. Forest plots in the Meta-analysis modal
+are rendered as plain inline SVG by `app.R` itself — no plotting library
+is required at runtime.)
+
+The **Meta-analysis** modal shows pooled effect estimates based on the
+active filter:
+
+- **No filter**: a **network meta-analysis** vs Placebo for each outcome
+  in the active endpoint group, with a Random/Common-effects toggle at
+  the top of the modal. Outcomes whose network can't be fit (e.g. very
+  sparse safety endpoints) show a "Network too sparse" note instead of a
+  plot.
+- **Edge filter**: per-trial pairwise meta-analysis with both FE and RE
+  pooled diamonds.
+- **Node filter**: pooled response rate (single-arm meta-analysis of the
+  selected drug) with both FE and RE diamonds.
 
 The 64-bit "Microsoft Access Driver (*.mdb, *.accdb)" must be installed (it
 already is on this machine — it ships with the 64-bit Access Database Engine).

@@ -1135,6 +1135,26 @@ fetch_drugs_vs_placebo <- function(endpoint_group, outcome_code) {
     params = list(endpoint_group, outcome_code))
 }
 
+# Network meta-analysis: one row per drug-vs-placebo NMA estimate plus
+# network-level heterogeneity / inconsistency stats. Returns a list with
+#   $status   "ok" | "sparse" | "missing"  (missing = network row not found)
+#   $estimates  data frame of drug-vs-placebo rows (empty when sparse/missing)
+#   $summary    one-row data frame of network-level stats
+fetch_nma_vs_placebo <- function(endpoint_group, outcome_code) {
+  n <- read_db(
+    "SELECT * FROM ma_nma WHERE endpoint_group = ? AND outcome_code = ?",
+    params = list(endpoint_group, outcome_code))
+  if (!nrow(n)) return(list(status = "missing"))
+  if (!identical(n$status[1], "ok"))
+    return(list(status = n$status[1], summary = n[1, , drop = FALSE]))
+  est <- read_db(
+    "SELECT e.* FROM ma_nma_estimates e
+      WHERE e.network_id = ? AND e.drug_b = 'Placebo' AND e.drug_a <> 'Placebo'
+      ORDER BY e.drug_a",
+    params = list(n$network_id[1]))
+  list(status = "ok", summary = n[1, , drop = FALSE], estimates = est)
+}
+
 # Single-arm proportion + per-trial rows for one (drug, outcome).
 fetch_proportion <- function(drug, endpoint_group, outcome_code) {
   r <- read_db(
@@ -1150,7 +1170,7 @@ fetch_proportion <- function(drug, endpoint_group, outcome_code) {
 
 # Translate one MA "outcome spec" + the current filter into a rows/pooled
 # bundle for `forest_ggiraph`. Returns NULL when no data is available.
-build_forest_inputs <- function(state, tab_id, outcome) {
+build_forest_inputs <- function(state, tab_id, outcome, ma_kind = "RE") {
   endpoint_group <- ma_endpoint_group(tab_id, outcome)
   digits <- if (identical(outcome$scale, "md")) 2 else 2
 
@@ -1167,32 +1187,43 @@ build_forest_inputs <- function(state, tab_id, outcome) {
                        "Effect (95% CI)")
 
   if (is.null(state)) {
-    # No filter -> two interleaved rows per drug (RE on top, FE underneath),
-    # colour-coded so the two estimates are read side by side.
-    df <- fetch_drugs_vs_placebo(endpoint_group, outcome$code)
+    # No filter -> network meta-analysis vs Placebo. One row per drug, single
+    # estimate (FE or RE, controlled by `ma_kind`).
+    nma <- fetch_nma_vs_placebo(endpoint_group, outcome$code)
+    if (identical(nma$status, "missing")) return(NULL)
+    if (identical(nma$status, "sparse")) {
+      return(list(empty_reason = paste0(
+        "Network too sparse for meta-analysis on this outcome ",
+        "(no connected network with Placebo)."),
+        nma_summary = nma$summary))
+    }
+    df <- nma$estimates
     if (!nrow(df)) return(NULL)
-    n_drugs <- nrow(df)
     bt <- function(x) if (identical(outcome$scale, "rr")) exp(x) else x
-    re_est <- bt(df$te_re); re_lo <- bt(df$lo_re); re_hi <- bt(df$hi_re)
-    fe_est <- bt(df$te_fe); fe_lo <- bt(df$lo_fe); fe_hi <- bt(df$hi_fe)
+    use_re <- identical(ma_kind, "RE")
+    est <- bt(if (use_re) df$te_re else df$te_fe)
+    lo  <- bt(if (use_re) df$lo_re else df$lo_fe)
+    hi  <- bt(if (use_re) df$hi_re else df$hi_fe)
     rows <- data.frame(
-      label = as.vector(rbind(sprintf("%s — RE", df$drug_a),
-                              rep("— FE", n_drugs))),
-      est   = as.vector(rbind(re_est, fe_est)),
-      lo    = as.vector(rbind(re_lo,  fe_lo)),
-      hi    = as.vector(rbind(re_hi,  fe_hi)),
+      label     = df$drug_a,
+      est       = est, lo = lo, hi = hi,
       weight_fe = NA_real_, weight_re = NA_real_,
-      klass = rep(c("ma-square-re", "ma-square-fe"), n_drugs),
+      klass     = if (use_re) "ma-square-re" else "ma-square-fe",
       stringsAsFactors = FALSE
     )
+    kind_lbl <- if (use_re) "Random effects" else "Common effect"
+    ns       <- nma$summary
+    i2_str   <- if (!is.na(ns$i2)) sprintf("%.1f%%", 100 * ns$i2) else "n/a"
     rows$tooltip <- vapply(seq_len(nrow(rows)), function(i) {
-      di  <- ((i - 1L) %/% 2L) + 1L
-      knd <- if (i %% 2L == 1L) "RE" else "FE"
-      hdr <- sprintf("%s vs Placebo — %s pooled", df$drug_a[di], knd)
-      ma_tooltip(hdr, rows$est[i], rows$lo[i], rows$hi[i],
-                 NA_real_, NA_real_,
-                 extra = c("n trials" = df$n_studies[di],
-                           "I-squared" = sprintf("%.1f%%", 100 * df$i2[di])))
+      ma_tooltip(
+        sprintf("%s vs Placebo — NMA pooled (%s)",
+                df$drug_a[i], if (use_re) "RE" else "FE"),
+        rows$est[i], rows$lo[i], rows$hi[i],
+        NA_real_, NA_real_,
+        extra = c(
+          "Direct studies"  = as.character(df$n_direct[i]),
+          "Network studies" = as.character(ns$n_studies),
+          "Network I-squared" = i2_str))
     }, character(1))
     if (identical(outcome$scale, "rr")) {
       if (is_harm) {
@@ -1202,12 +1233,17 @@ build_forest_inputs <- function(state, tab_id, outcome) {
         dir_left  <- "← favours placebo"
         dir_right <- "favours drug →"
       }
+    } else if (identical(outcome$scale, "md")) {
+      # MD: PASI/DLQI lower is better, so MD < 0 favours drug.
+      dir_left  <- "← favours drug"
+      dir_right <- "favours placebo →"
     } else {
       dir_left <- dir_right <- NULL
     }
     return(list(rows = rows, pooled = NULL,
                 axis_label = axis_label,
-                dir_left = dir_left, dir_right = dir_right))
+                dir_left = dir_left, dir_right = dir_right,
+                nma_summary = ns, ma_kind = ma_kind))
   }
   if (identical(state$kind, "edge")) {
     # Edge filter -> per-trial pairwise forest, with FE + RE diamonds.
@@ -1576,6 +1612,24 @@ ui <- fluidPage(
                                margin-bottom: 6px; }
     .ma-modal .ma-empty { color: #5a6478; font-style: italic;
                           padding: 12px 0; }
+    /* FE/RE toggle row (no-filter NMA view only). Segmented look. */
+    .ma-modal .ma-toggle-row {
+      display: flex; align-items: center; gap: 12px;
+      margin: 4px 0 16px 0; padding: 8px 12px;
+      background: #f6f7f9; border: 1px solid #e3e6ea; border-radius: 6px;
+    }
+    .ma-modal .ma-toggle-label {
+      font-size: 12px; font-weight: 600; color: #1a1f2c;
+      text-transform: uppercase; letter-spacing: 0.4px;
+    }
+    .ma-modal .ma-toggle-row .shiny-options-group { margin: 0; }
+    .ma-modal .ma-toggle-row .radio-inline {
+      font-size: 13px; color: #1a1f2c; margin-right: 14px;
+      padding-left: 0;
+    }
+    .ma-modal .ma-toggle-row .radio-inline input[type=radio] {
+      margin-right: 4px;
+    }
     .ma-modal .ma-footer-meta { font-size: 12px; color: #888;
                                 margin-right: auto; }
     /* Inline-SVG forest plot styling. All forest plots share these rules;
@@ -1950,8 +2004,81 @@ server <- function(input, output, session) {
 
   # Meta-analysis modal. All forest plots are rendered as plain inline SVG
   # at modal-open time -- no Shiny output bindings, no ggplot, no ggiraph.
-  # Both common-effect (FE) and random-effects (RE, REML) diamonds are
-  # always drawn together at the bottom of each plot.
+  # No-filter view shows a network meta-analysis vs Placebo with a
+  # user-controlled FE/RE switch; edge/node views still draw both FE and RE
+  # diamonds together (no switch).
+  ma_ctx <- reactiveValues(active = FALSE, tab_id = NULL, state = NULL,
+                           gid = NULL, outcomes = NULL, state_lbl = NULL,
+                           group_lbl = NULL)
+  ma_kind_state <- reactiveValues()  # per-tab last-selected ("RE"/"FE")
+
+  # Build a single plot block for one outcome under the active state.
+  build_plot_block <- function(state, tab_id, outc, ma_kind) {
+    inputs <- tryCatch(build_forest_inputs(state, tab_id, outc, ma_kind),
+                       error = function(e) NULL)
+    if (is.null(inputs)) {
+      return(div(class = "ma-plot-block",
+                 div(class = "ma-plot-title", outc$label),
+                 div(class = "ma-empty",
+                     "No meta-analysable data for this comparison.")))
+    }
+    # Sparse-network sentinel from the no-filter NMA branch.
+    if (!is.null(inputs$empty_reason)) {
+      return(div(class = "ma-plot-block",
+                 div(class = "ma-plot-title", outc$label),
+                 div(class = "ma-empty", inputs$empty_reason)))
+    }
+    eff_scale <- inputs$effective_scale %||% outc$scale
+    stats <- if (!is.null(inputs$pooled)) {
+      fe <- inputs$pooled[inputs$pooled$kind == "FE", ]
+      re <- inputs$pooled[inputs$pooled$kind == "RE", ]
+      sm_lbl <- switch(eff_scale, rr = "RR", md = "MD", prop = "Proportion")
+      digits <- if (eff_scale == "prop") 3 else 2
+      sprintf("Pooled %s — FE: %s • RE: %s • %d studies",
+              sm_lbl,
+              fmt_ci(fe$est, fe$lo, fe$hi, digits),
+              fmt_ci(re$est, re$lo, re$hi, digits),
+              nrow(inputs$rows))
+    } else if (!is.null(inputs$nma_summary)) {
+      ns <- inputs$nma_summary
+      kind_lbl <- if (identical(ma_kind, "FE")) "common effect (FE)"
+                  else "random effects (RE, REML)"
+      i2_str <- if (!is.na(ns$i2)) sprintf("%.1f%%", 100 * ns$i2) else "n/a"
+      pinc <- if (!is.na(ns$p_inc)) sprintf("%.2f", ns$p_inc) else "n/a"
+      sprintf("Network MA, %s — %d studies, %d treatments • I² = %s • inconsistency p = %s",
+              kind_lbl, ns$n_studies, ns$n_treatments, i2_str, pinc)
+    } else {
+      sprintf("%d %s",
+              nrow(inputs$rows),
+              if (is.null(state)) "drugs" else "rows")
+    }
+    svg_html <- forest_svg(inputs$rows, inputs$pooled, scale = eff_scale,
+                           axis_label = inputs$axis_label,
+                           dir_left   = inputs$dir_left,
+                           dir_right  = inputs$dir_right)
+    div(class = "ma-plot-block",
+        div(class = "ma-plot-title", outc$label),
+        div(class = "ma-plot-stats", stats),
+        HTML(svg_html))
+  }
+
+  # Reactively rendered plot area. Driven by ma_ctx (set on modal open) and
+  # input$ma_kind (toggle). Edge/node views ignore ma_kind.
+  output$ma_plot_area <- renderUI({
+    req(ma_ctx$active, ma_ctx$tab_id, ma_ctx$gid, ma_ctx$outcomes)
+    tab_id   <- ma_ctx$tab_id
+    state    <- ma_ctx$state
+    outcomes <- ma_ctx$outcomes
+    ma_kind  <- input$ma_kind %||% (ma_kind_state[[tab_id]] %||% "RE")
+    lapply(outcomes, function(outc) build_plot_block(state, tab_id, outc, ma_kind))
+  })
+
+  # Persist toggle selection per tab across modal opens.
+  observeEvent(input$ma_kind, {
+    if (!is.null(ma_ctx$tab_id) && nzchar(input$ma_kind))
+      ma_kind_state[[ma_ctx$tab_id]] <- input$ma_kind
+  })
+
   open_ma_modal <- function(tab_id) {
     state  <- filter_state()
     gid    <- input[[paste0("group_", tab_id)]]
@@ -1979,8 +2106,7 @@ server <- function(input, output, session) {
       return(invisible(NULL))
     }
 
-    # Resolve title + summary line.
-    state_lbl <- if (is.null(state)) "All drugs vs placebo"
+    state_lbl <- if (is.null(state)) "Network meta-analysis vs Placebo"
                  else if (identical(state$kind, "edge"))
                    sprintf("%s vs %s", state$from, state$to)
                  else if (identical(state$kind, "node"))
@@ -1988,45 +2114,31 @@ server <- function(input, output, session) {
                  else "All drugs"
     group_lbl <- endpoint_groups[[tab_id]]$groups[[gid]]$label %||% gid
 
-    # Build a plot block per outcome. Each block contains a heading, a
-    # stats summary, and the SVG itself (or a "no data" message). All
-    # rendering happens synchronously here -- no Shiny output bindings.
-    plot_blocks <- lapply(outcomes, function(outc) {
-      inputs <- tryCatch(build_forest_inputs(state, tab_id, outc),
-                        error = function(e) NULL)
-      if (is.null(inputs)) {
-        return(div(class = "ma-plot-block",
-                   div(class = "ma-plot-title", outc$label),
-                   div(class = "ma-empty",
-                       "No meta-analysable data for this comparison.")))
-      }
-      # `effective_scale` lets the dispatcher override outc$scale -- e.g. a
-      # node filter on a binary outcome plots single-arm proportions, not RR.
-      eff_scale <- inputs$effective_scale %||% outc$scale
-      stats <- if (!is.null(inputs$pooled)) {
-        fe <- inputs$pooled[inputs$pooled$kind == "FE", ]
-        re <- inputs$pooled[inputs$pooled$kind == "RE", ]
-        sm_lbl <- switch(eff_scale, rr = "RR", md = "MD", prop = "Proportion")
-        digits <- if (eff_scale == "prop") 3 else 2
-        sprintf("Pooled %s — FE: %s • RE: %s • %d studies",
-                sm_lbl,
-                fmt_ci(fe$est, fe$lo, fe$hi, digits),
-                fmt_ci(re$est, re$lo, re$hi, digits),
-                nrow(inputs$rows))
-      } else {
-        sprintf("%d %s",
-                nrow(inputs$rows),
-                if (is.null(state)) "drugs" else "rows")
-      }
-      svg_html <- forest_svg(inputs$rows, inputs$pooled, scale = eff_scale,
-                             axis_label = inputs$axis_label,
-                             dir_left   = inputs$dir_left,
-                             dir_right  = inputs$dir_right)
-      div(class = "ma-plot-block",
-          div(class = "ma-plot-title", outc$label),
-          div(class = "ma-plot-stats", stats),
-          HTML(svg_html))
-    })
+    # Stash context for the reactive plot area to consume.
+    ma_ctx$tab_id    <- tab_id
+    ma_ctx$state     <- state
+    ma_ctx$gid       <- gid
+    ma_ctx$outcomes  <- outcomes
+    ma_ctx$state_lbl <- state_lbl
+    ma_ctx$group_lbl <- group_lbl
+    ma_ctx$active    <- TRUE
+
+    summary_text <- if (is.null(state))
+      sprintf("%s | endpoint group: %s | toggle FE/RE below",
+              state_lbl, group_lbl)
+    else
+      sprintf("%s | endpoint group: %s | both common (FE) and random (RE, REML) pooled estimates shown",
+              state_lbl, group_lbl)
+
+    toggle_ui <- if (is.null(state)) {
+      cur_kind <- ma_kind_state[[tab_id]] %||% "RE"
+      div(class = "ma-toggle-row",
+          tags$span(class = "ma-toggle-label", "Network model:"),
+          radioButtons("ma_kind", label = NULL,
+                       choices = c("Random effects (RE)" = "RE",
+                                   "Common effect (FE)"  = "FE"),
+                       selected = cur_kind, inline = TRUE))
+    } else NULL
 
     showModal(modalDialog(
       title = tagList(icon("chart-column"), " Meta-analysis"),
@@ -2038,13 +2150,13 @@ server <- function(input, output, session) {
         modalButton("Close")
       ),
       div(
-        div(class = "ma-summary",
-            sprintf("%s | endpoint group: %s | both common (FE) and random (RE, REML) pooled estimates shown",
-                    state_lbl, group_lbl)),
-        plot_blocks
+        div(class = "ma-summary", summary_text),
+        toggle_ui,
+        uiOutput("ma_plot_area")
       )
     ))
   }
+
 
   # One observer per tab — the button lives inside each tab's summary
   # output (so it's visually associated with the active filter context).
