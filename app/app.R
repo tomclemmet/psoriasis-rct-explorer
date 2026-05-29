@@ -814,7 +814,13 @@ forest_ticks <- function(scale, xmin, xmax) {
     candidates <- c(0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100)
     candidates[candidates >= xmin & candidates <= xmax]
   } else if (identical(scale, "prop")) {
-    seq(0, 1, by = 0.25)
+    # Pick a tick interval that gives 4-6 ticks across the actual range.
+    span <- xmax - xmin   # xmin is always 0
+    step <- if      (span <= 0.10) 0.02
+            else if (span <= 0.20) 0.05
+            else if (span <= 0.50) 0.10
+            else                   0.25
+    seq(0, xmax, by = step)
   } else {
     # mean diff: ~5 pretty ticks within the data range.
     pretty(c(xmin, xmax), n = 5)
@@ -863,7 +869,18 @@ forest_xlimits <- function(scale, rows, pooled) {
     hi <- min(candidates[candidates >= hi], 200)
     c(lo, hi)
   } else if (identical(scale, "prop")) {
-    c(0, 1)
+    # Always start at 0. Upper bound: if all CIs fit below 0.5 use a tight
+    # ceiling snapped to a clean fraction; otherwise fall back to 1.
+    hi_data <- max(vals)
+    if (hi_data <= 0.5) {
+      # Snap upper bound outward to the nearest 0.05 increment, with a little
+      # headroom so the highest CI tip doesn't sit at the edge.
+      pad <- max(hi_data * 0.10, 0.02)
+      hi_snap <- ceiling((hi_data + pad) / 0.05) * 0.05
+      c(0, min(hi_snap, 0.5))
+    } else {
+      c(0, 1)
+    }
   } else {
     pad <- (max(vals) - min(vals)) * 0.1
     # Linear (MD): also pull the null (0) inside the range when CIs lie on
