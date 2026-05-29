@@ -51,12 +51,33 @@
 #
 # Subgroup rows are preserved in `measurements` (subgroup_id > 0); the four
 # views filter to subgroup_id = 0 so the app behaves as before.
+#
+# Build configuration (see flags just below the library() calls): by default the
+# SQLite is slimmed to only what the Shiny app reads now -- subgroup tables/rows,
+# demographic & baseline-characteristic measurements, the descriptive `studies`
+# columns, and timepoints beyond 24 weeks are all dropped. Every exclusion is
+# reversible: flip the relevant flag and re-run. The Access file is the source of
+# truth and is never modified, so nothing is ever lost.
 
 suppressPackageStartupMessages({
   library(DBI)
   library(odbc)
   library(RSQLite)
 })
+
+# --- Build configuration ---------------------------------------------------
+# Controls what lands in the SQLite. Every exclusion is reversible: flip a flag
+# and re-run convert.R (Access is never modified).
+INCLUDE_SUBGROUPS      <- FALSE  # study_subgroups + arm_subgroups tables and
+                                 # subgroup_id > 0 rows in measurements
+INCLUDE_BASELINE_CHARS <- FALSE  # demographic / baseline-characteristic
+                                 # measurement rows. Baseline PASI (outcome 11)
+                                 # is ALWAYS kept -- the app relies on it.
+INCLUDE_TRIAL_INFO     <- FALSE  # studies columns: design, study_date, location,
+                                 # phase, inclusion_criteria, exclusion_criteria,
+                                 # population_restriction
+MAX_TIMEPOINT_WK       <- 24     # drop measurements beyond this many (week-
+                                 # equivalent) weeks; NA = keep all timepoints
 
 resolve_script_dir <- function() {
   # Rscript: --file=... is on commandArgs.
@@ -214,18 +235,6 @@ CREATE TABLE subgroups (
   subgroup_id    INTEGER PRIMARY KEY,
   subgroup_name  TEXT
 );
-CREATE TABLE studies (
-  study_id                INTEGER PRIMARY KEY,  -- = primary publication's RefID
-  trial                   TEXT,    -- Cochrane Study ID (CatID 49)
-  design                  TEXT,    -- CatID 50
-  study_date              TEXT,    -- CatID 51 (free-form date range)
-  location                TEXT,    -- CatID 52
-  phase                   TEXT,    -- CatID 53 (resolved from lookup)
-  inclusion_criteria      TEXT,    -- CatID 54
-  exclusion_criteria      TEXT,    -- CatID 55
-  population_restriction  TEXT,    -- CatID 60
-  timepoint_unit_id       INTEGER REFERENCES timepoint_units(unit_id)
-);
 CREATE TABLE publications (
   publication_id  INTEGER PRIMARY KEY,         -- = tblRefs.ID
   study_id        INTEGER NOT NULL REFERENCES studies(study_id),
@@ -268,6 +277,33 @@ CREATE TABLE measurements (
   UNIQUE (arm_id, outcome_id, subgroup_id, timepoint)
 );
 CREATE INDEX idx_measurements_outcome_arm ON measurements(outcome_id, arm_id);
+"
+
+# `studies` schema is built dynamically: the descriptive columns are emitted only
+# when INCLUDE_TRIAL_INFO. study_id / trial / timepoint_unit_id are always
+# present (the views need trial + timepoint_unit_id). The column order here must
+# match studies_df below.
+studies_trial_info_cols <- c(
+  "design                  TEXT",    # CatID 50
+  "study_date              TEXT",    # CatID 51 (free-form date range)
+  "location                TEXT",    # CatID 52
+  "phase                   TEXT",    # CatID 53 (resolved from lookup)
+  "inclusion_criteria      TEXT",    # CatID 54
+  "exclusion_criteria      TEXT",    # CatID 55
+  "population_restriction  TEXT"     # CatID 60
+)
+studies_cols <- c(
+  "study_id                INTEGER PRIMARY KEY",  # = primary publication's RefID
+  "trial                   TEXT",                 # Cochrane Study ID (CatID 49)
+  if (INCLUDE_TRIAL_INFO) studies_trial_info_cols,
+  "timepoint_unit_id       INTEGER REFERENCES timepoint_units(unit_id)"
+)
+ddl <- paste0(ddl, sprintf("\nCREATE TABLE studies (\n  %s\n);\n",
+                           paste(studies_cols, collapse = ",\n  ")))
+
+# Subgroup denominator tables are only created when subgroups are included.
+if (INCLUDE_SUBGROUPS) {
+  ddl <- paste0(ddl, "
 CREATE TABLE study_subgroups (
   study_id       INTEGER NOT NULL REFERENCES studies(study_id),
   subgroup_id    INTEGER NOT NULL REFERENCES subgroups(subgroup_id),
@@ -283,7 +319,8 @@ CREATE TABLE arm_subgroups (
   n              INTEGER,
   PRIMARY KEY (arm_id, subgroup_id)
 );
-"
+")
+}
 for (stmt in strsplit(ddl, ";\\s*\n", perl = TRUE)[[1]]) {
   s <- trimws(stmt)
   if (nzchar(s)) dbExecute(dst, s)
@@ -316,10 +353,16 @@ dbWriteTable(dst, "outcomes", outcomes_df, append = TRUE)
 
 # Subgroup IDs referenced anywhere: measurements, per-study denominators,
 # per-arm denominators. Plus 0 (the main-analysis sentinel) which has no
-# row in tblSubgroups but is implied throughout.
-subgroup_ids <- sort(unique(as.integer(c(
-  0L, intra$SubgroupID, sg_st$SubgroupID, sg_arm$SubgroupID
-))))
+# row in tblSubgroups but is implied throughout. When subgroups are excluded
+# only the sentinel 0 ("Main analysis") is kept, since measurements then hold
+# subgroup_id = 0 exclusively.
+subgroup_ids <- if (INCLUDE_SUBGROUPS) {
+  sort(unique(as.integer(c(
+    0L, intra$SubgroupID, sg_st$SubgroupID, sg_arm$SubgroupID
+  ))))
+} else {
+  0L
+}
 subgroup_ids <- subgroup_ids[!is.na(subgroup_ids)]
 sg_name_of <- setNames(sgnames$SubgroupName, as.character(sgnames$SubgroupID))
 subgroups_df <- data.frame(
@@ -449,25 +492,41 @@ tp_unit_by_ref <- tapply(ld_join$strUnit, ld_join$RefID,
 
 pick <- function(map, ids) unname(map[as.character(ids)])
 
-studies_df <- data.frame(
-  study_id               = all_ref_ids,
-  trial                  = pick(trial_of,      all_ref_ids),
-  design                 = pick(design_of,     all_ref_ids),
-  study_date             = pick(date_of,       all_ref_ids),
-  location               = pick(location_of,   all_ref_ids),
-  phase                  = pick(phase_of,      all_ref_ids),
-  inclusion_criteria     = pick(inc_of,        all_ref_ids),
-  exclusion_criteria     = pick(exc_of,        all_ref_ids),
-  population_restriction = pick(pop_restr_of,  all_ref_ids),
-  timepoint_unit_id      = unname(tp_unit_id_of[
-    ifelse(is.na(tp_unit_by_ref[as.character(all_ref_ids)]),
-           "wk", tp_unit_by_ref[as.character(all_ref_ids)])
-  ]),
-  stringsAsFactors = FALSE
+# Per-study timepoint unit *name* (defaulting to "wk"), keyed by study_id. Used
+# both for the timepoint_unit_id column and for the week-equivalent timepoint
+# cutoff applied to measurements further down.
+study_tp_unit_name <- setNames(
+  ifelse(is.na(tp_unit_by_ref[as.character(all_ref_ids)]),
+         "wk", tp_unit_by_ref[as.character(all_ref_ids)]),
+  as.character(all_ref_ids)
 )
-# Blank strings -> NA.
-for (col in c("trial","design","study_date","location","phase",
-              "inclusion_criteria","exclusion_criteria","population_restriction")) {
+
+# Column order must match the studies DDL above: study_id, trial,
+# [descriptive columns only when INCLUDE_TRIAL_INFO], timepoint_unit_id.
+studies_cols_data <- list(
+  study_id = all_ref_ids,
+  trial    = pick(trial_of, all_ref_ids)
+)
+if (INCLUDE_TRIAL_INFO) {
+  studies_cols_data <- c(studies_cols_data, list(
+    design                 = pick(design_of,     all_ref_ids),
+    study_date             = pick(date_of,       all_ref_ids),
+    location               = pick(location_of,   all_ref_ids),
+    phase                  = pick(phase_of,      all_ref_ids),
+    inclusion_criteria     = pick(inc_of,        all_ref_ids),
+    exclusion_criteria     = pick(exc_of,        all_ref_ids),
+    population_restriction = pick(pop_restr_of,  all_ref_ids)
+  ))
+}
+studies_cols_data <- c(studies_cols_data, list(
+  timepoint_unit_id = unname(tp_unit_id_of[study_tp_unit_name])
+))
+studies_df <- data.frame(studies_cols_data, stringsAsFactors = FALSE)
+
+# Blank strings -> NA (only for the text columns actually present).
+for (col in intersect(c("trial","design","study_date","location","phase",
+                        "inclusion_criteria","exclusion_criteria",
+                        "population_restriction"), names(studies_df))) {
   v <- studies_df[[col]]
   studies_df[[col]][!is.na(v) & !nzchar(v)] <- NA
 }
@@ -578,15 +637,50 @@ dbWriteTable(dst, "arms", arms_df, append = TRUE)
 # (arm_id, study_id, arm_no) -> arm_id, for the measurements join.
 arm_id_of <- setNames(arms_df$arm_id, key(arms_df$study_id, arms_df$arm_no))
 
-# --- 8. Measurements (long format, all outcomes, all subgroups) -----------
-# Carry every tblIntraData row to measurements. Demographics / baseline
-# characteristics (Age, Sex, Weight, BMI, baseline PASI, ethnicity, prior
-# therapy, etc.) land here alongside the on-treatment endpoints. The four
-# v_* views still filter to the 21 wide-view outcomes, so the app behaves
-# identically. The %in% guard is just FK safety — drops rows whose
-# OutcomeID is missing from tblOutcomeDefs (none in this dataset).
-m <- intra[intra$OutcomeID %in% outcomes_df$outcome_id & intra$ArmNo > 0, ]
+# --- 8. Measurements (long format) ----------------------------------------
+# Carry tblIntraData rows to measurements. By default this is slimmed to what
+# the app reads (see flags at the top): the 21 wide-view outcomes plus baseline
+# PASI, main-analysis subgroup only, and timepoints within MAX_TIMEPOINT_WK.
+# Flip the flags to restore the full long table:
+#   INCLUDE_BASELINE_CHARS  -> demographics / baseline-characteristic outcomes
+#   INCLUDE_SUBGROUPS       -> subgroup_id > 0 rows
+#   MAX_TIMEPOINT_WK <- NA  -> timepoints beyond 24 (week-equivalent) weeks
+# The %in% guard is FK safety — drops rows whose OutcomeID is missing from
+# tblOutcomeDefs (none in this dataset).
+
+# Outcomes to retain. Baseline PASI (outcome 11) is always kept: the app uses
+# it as the Absolute-PASI baseline fallback even though it has no view `code`.
+BASELINE_PASI_OUTCOME_ID <- 11L
+keep_outcome_ids <- if (INCLUDE_BASELINE_CHARS) {
+  outcomes_df$outcome_id
+} else {
+  unique(c(wide_outcomes_df$outcome_id, BASELINE_PASI_OUTCOME_ID))
+}
+
+m <- intra[intra$OutcomeID %in% outcomes_df$outcome_id &
+           intra$OutcomeID %in% keep_outcome_ids &
+           intra$ArmNo > 0, ]
 m$subgroup_id <- ifelse(is.na(m$SubgroupID), 0L, as.integer(m$SubgroupID))
+if (!INCLUDE_SUBGROUPS) {
+  m <- m[m$subgroup_id == 0L, ]
+}
+
+# Week-equivalent timepoint cutoff. Each study has a timepoint unit; convert the
+# raw timepoint to weeks before comparing to MAX_TIMEPOINT_WK. Rows with no
+# timepoint are always kept (no timepoint = not "beyond N weeks"); unknown units
+# are kept rather than silently dropped.
+if (!is.na(MAX_TIMEPOINT_WK)) {
+  wk_per_unit <- c(wk = 1, d = 1/7, mo = 52/12, min = 1/(7*24*60))
+  unit_for_m  <- unname(study_tp_unit_name[as.character(m$RefID)])
+  factor_for_m <- unname(wk_per_unit[unit_for_m])
+  wk_equiv    <- m$TimePeriod * factor_for_m
+  keep_tp <- is.na(m$TimePeriod) | is.na(factor_for_m) | wk_equiv <= MAX_TIMEPOINT_WK
+  n_dropped_tp <- sum(!keep_tp)
+  m <- m[keep_tp, ]
+  cat(sprintf("Dropped %d measurement row(s) beyond %g week-equivalent weeks\n",
+              n_dropped_tp, MAX_TIMEPOINT_WK))
+}
+
 m$arm_id <- unname(arm_id_of[key(m$RefID, m$ArmNo)])
 
 if (any(is.na(m$arm_id))) {
@@ -626,29 +720,33 @@ if (anyDuplicated(key4)) {
 dbWriteTable(dst, "measurements", measurements_df, append = TRUE)
 
 # --- 8b. Subgroup denominators --------------------------------------------
-study_sg <- sg_st[sg_st$RefID %in% all_ref_ids &
-                  sg_st$SubgroupID %in% subgroup_ids, ]
-study_subgroups_df <- data.frame(
-  study_id      = study_sg$RefID,
-  subgroup_id   = study_sg$SubgroupID,
-  n             = as.integer(study_sg$N),
-  subgroup_type = study_sg$SubgroupType,
-  notes         = study_sg$SubgroupNotes,
-  excluded      = as.integer(as.logical(study_sg$blnExc)),
-  stringsAsFactors = FALSE
-)
-dbWriteTable(dst, "study_subgroups", study_subgroups_df, append = TRUE)
+# Only populated when INCLUDE_SUBGROUPS; otherwise these tables are never even
+# created (see DDL above).
+if (INCLUDE_SUBGROUPS) {
+  study_sg <- sg_st[sg_st$RefID %in% all_ref_ids &
+                    sg_st$SubgroupID %in% subgroup_ids, ]
+  study_subgroups_df <- data.frame(
+    study_id      = study_sg$RefID,
+    subgroup_id   = study_sg$SubgroupID,
+    n             = as.integer(study_sg$N),
+    subgroup_type = study_sg$SubgroupType,
+    notes         = study_sg$SubgroupNotes,
+    excluded      = as.integer(as.logical(study_sg$blnExc)),
+    stringsAsFactors = FALSE
+  )
+  dbWriteTable(dst, "study_subgroups", study_subgroups_df, append = TRUE)
 
-arm_sg <- sg_arm[sg_arm$SubgroupID %in% subgroup_ids, ]
-arm_sg$arm_id <- unname(arm_id_of[key(arm_sg$RefID, arm_sg$ArmNo)])
-arm_sg <- arm_sg[!is.na(arm_sg$arm_id), ]
-arm_subgroups_df <- data.frame(
-  arm_id      = arm_sg$arm_id,
-  subgroup_id = arm_sg$SubgroupID,
-  n           = as.integer(arm_sg$N),
-  stringsAsFactors = FALSE
-)
-dbWriteTable(dst, "arm_subgroups", arm_subgroups_df, append = TRUE)
+  arm_sg <- sg_arm[sg_arm$SubgroupID %in% subgroup_ids, ]
+  arm_sg$arm_id <- unname(arm_id_of[key(arm_sg$RefID, arm_sg$ArmNo)])
+  arm_sg <- arm_sg[!is.na(arm_sg$arm_id), ]
+  arm_subgroups_df <- data.frame(
+    arm_id      = arm_sg$arm_id,
+    subgroup_id = arm_sg$SubgroupID,
+    n           = as.integer(arm_sg$N),
+    stringsAsFactors = FALSE
+  )
+  dbWriteTable(dst, "arm_subgroups", arm_subgroups_df, append = TRUE)
+}
 
 # --- 9. Views (the contract the app reads) --------------------------------
 # Common arm/study context CTE used by every view. Mirrors the column names
@@ -805,7 +903,10 @@ cat(sprintf("\nDistinct drugs in v_pasi: %d\n", n_drug))
 cat(sprintf("Outcomes catalogued: %d  (of which exposed via a view: %d)\n",
             dbGetQuery(dst, "SELECT COUNT(*) AS n FROM outcomes")$n,
             dbGetQuery(dst, "SELECT COUNT(*) AS n FROM outcomes WHERE code IS NOT NULL")$n))
-cat(sprintf("Measurements rows (all outcomes, all subgroups): %d\n",
+cat(sprintf("Build flags: subgroups=%s baseline_chars=%s trial_info=%s max_timepoint_wk=%s\n",
+            INCLUDE_SUBGROUPS, INCLUDE_BASELINE_CHARS, INCLUDE_TRIAL_INFO,
+            if (is.na(MAX_TIMEPOINT_WK)) "all" else MAX_TIMEPOINT_WK))
+cat(sprintf("Measurements rows: %d\n",
             dbGetQuery(dst, "SELECT COUNT(*) AS n FROM measurements")$n))
 cat(sprintf("  of which subgroup_id > 0: %d\n",
             dbGetQuery(dst, "SELECT COUNT(*) AS n FROM measurements WHERE subgroup_id > 0")$n))
@@ -815,12 +916,21 @@ cat(sprintf("  baseline-characteristic rows (Demographics / Psoriasis chars / Pr
               JOIN outcomes o ON o.outcome_id = m.outcome_id
               WHERE o.subcategory IN ('Demographics','Psoriasis characteristics',
                                       'Previous therapy','Comorbidity')")$n))
-cat(sprintf("study_subgroups rows: %d   arm_subgroups rows: %d\n",
-            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM study_subgroups")$n,
-            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM arm_subgroups")$n))
-cat(sprintf("Studies with non-null design: %d / %d\n",
-            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM studies WHERE design IS NOT NULL")$n,
-            dbGetQuery(dst, "SELECT COUNT(*) AS n FROM studies")$n))
+if (INCLUDE_SUBGROUPS) {
+  cat(sprintf("study_subgroups rows: %d   arm_subgroups rows: %d\n",
+              dbGetQuery(dst, "SELECT COUNT(*) AS n FROM study_subgroups")$n,
+              dbGetQuery(dst, "SELECT COUNT(*) AS n FROM arm_subgroups")$n))
+} else {
+  cat("study_subgroups / arm_subgroups: excluded (tables not created)\n")
+}
+if (INCLUDE_TRIAL_INFO) {
+  cat(sprintf("Studies with non-null design: %d / %d\n",
+              dbGetQuery(dst, "SELECT COUNT(*) AS n FROM studies WHERE design IS NOT NULL")$n,
+              dbGetQuery(dst, "SELECT COUNT(*) AS n FROM studies")$n))
+} else {
+  cat(sprintf("Studies: %d (descriptive trial-info columns excluded)\n",
+              dbGetQuery(dst, "SELECT COUNT(*) AS n FROM studies")$n))
+}
 cat(sprintf("Publications: %d (primary: %d, secondary: %d)\n",
             dbGetQuery(dst, "SELECT COUNT(*) AS n FROM publications")$n,
             dbGetQuery(dst, "SELECT COUNT(*) AS n FROM publications WHERE is_primary = 1")$n,
