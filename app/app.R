@@ -880,8 +880,16 @@ forest_diamond_points <- function(xL, xC, xR, yC, hh) {
 
 # Render one forest plot to a complete <svg> string. Width is fixed; height
 # scales with the number of rows.
-forest_svg <- function(rows, pooled, scale = "rr", width = 880) {
+#
+# `axis_label`  : single string drawn centred beneath the axis
+#                 (e.g. "Risk ratio (95% CI, log scale)").
+# `dir_left`    : optional small label drawn at the left end of the axis line
+#                 (e.g. "favours placebo →" reversed).
+# `dir_right`   : optional small label drawn at the right end.
+forest_svg <- function(rows, pooled, scale = "rr", width = 880,
+                       axis_label = NULL, dir_left = NULL, dir_right = NULL) {
   esc <- function(x) htmltools::htmlEscape(x, attribute = FALSE)
+  esc_attr <- function(x) htmltools::htmlEscape(x, attribute = TRUE)
   if (!nrow(rows)) {
     return(sprintf('<div class="ma-empty">No meta-analysable data for this comparison.</div>'))
   }
@@ -892,16 +900,17 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880) {
   POOLED_GAP   <- 14
   POOLED_H     <- 22
   AXIS_PAD     <- 28
+  AXIS_LABEL_H <- if (length(axis_label) || length(dir_left) || length(dir_right)) 22 else 0
   BOTTOM_PAD   <- 6
-  LEFT_MARGIN  <- 200       # row labels
-  RIGHT_MARGIN <- 235       # CI text (always shown — printable)
+  LEFT_MARGIN  <- 220       # row labels (a touch wider for "Pooled estimate" rows)
+  RIGHT_MARGIN <- 175       # CI text only -- weight column dropped
   PLOT_LEFT    <- LEFT_MARGIN
   PLOT_W       <- width - LEFT_MARGIN - RIGHT_MARGIN
 
   n_trials  <- nrow(rows)
   n_pooled  <- if (!is.null(pooled)) nrow(pooled) else 0L
   body_h    <- n_trials * ROW_H + (if (n_pooled) POOLED_GAP + n_pooled * POOLED_H else 0)
-  height    <- HEADER_PAD + body_h + AXIS_PAD + BOTTOM_PAD
+  height    <- HEADER_PAD + body_h + AXIS_PAD + AXIS_LABEL_H + BOTTOM_PAD
 
   # Domain + tick positions.
   xlim  <- forest_xlimits(scale, rows, pooled)
@@ -945,67 +954,92 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880) {
       rx, plot_top, rx, plot_bottom)
   }
 
-  # Per-trial rows: label, CI line, square (with <title> tooltip),
-  # right-aligned numeric CI text.
-  for (i in seq_len(n_trials)) {
-    yc <- HEADER_PAD + (i - 0.5) * ROW_H
-    xL <- xfn(rows$lo[i]); xR <- xfn(rows$hi[i]); xE <- xfn(rows$est[i])
-    sz <- square_size[i]
-    label    <- esc(rows$label[i])
-    ci_text  <- esc(fmt_ci(rows$est[i], rows$lo[i], rows$hi[i], ci_digits))
-    tt       <- esc(rows$tooltip[i] %||% label)
-    weight_pct <- if (is.finite(rows$weight_fe[i]))
-      esc(fmt_pct(rows$weight_fe[i], 1)) else ""
-    parts[length(parts) + 1L] <- paste0(
-      '<g class="ma-row">',
-      '<title>', tt, '</title>',
+  # CI domain pixel boundaries (for clamping + off-scale arrows).
+  X_MIN_PX <- PLOT_LEFT
+  X_MAX_PX <- PLOT_LEFT + PLOT_W
+
+  # Build a single trial / drug row. Squares clamp inside the axis;
+  # CI lines that exceed bounds are drawn up to the edge and capped
+  # with a triangular "off-scale" arrowhead.
+  emit_data_row <- function(yc, est, lo, hi, sz, label_left, ci_text,
+                            tooltip, klass = "ma-square-default") {
+    xL_raw <- xfn(lo); xR_raw <- xfn(hi); xE_raw <- xfn(est)
+    xL <- max(X_MIN_PX, xL_raw)
+    xR <- min(X_MAX_PX, xR_raw)
+    # Clamp the square's centre so its body stays inside the plot.
+    xE_clamped <- min(max(xE_raw, X_MIN_PX + sz / 2), X_MAX_PX - sz / 2)
+    off_left  <- xL_raw < X_MIN_PX
+    off_right <- xR_raw > X_MAX_PX
+    paste0(
+      '<g class="ma-row" data-tt="', esc_attr(tooltip), '">',
       sprintf('<text class="ma-rowlabel" x="%g" y="%g">%s</text>',
-              LEFT_MARGIN - 10, yc + 4, label),
-      sprintf('<line class="ma-ci" x1="%g" y1="%g" x2="%g" y2="%g"/>',
-              xL, yc, xR, yc),
-      sprintf('<rect class="ma-square" x="%g" y="%g" width="%g" height="%g"/>',
-              xE - sz / 2, yc - sz / 2, sz, sz),
-      sprintf('<text class="ma-citext" x="%g" y="%g">%s</text>',
-              width - RIGHT_MARGIN + 14, yc + 4, ci_text),
-      if (nzchar(weight_pct))
-        sprintf('<text class="ma-weight" x="%g" y="%g">%s</text>',
-                width - 6, yc + 4, weight_pct)
+              LEFT_MARGIN - 10, yc + 4, esc(label_left)),
+      # Hover catcher: full row, makes it easy to trigger the tooltip.
+      sprintf('<rect class="ma-rowhit" x="%g" y="%g" width="%g" height="%g"/>',
+              PLOT_LEFT, yc - ROW_H / 2 + 1, PLOT_W, ROW_H - 2),
+      if (xL < xR) sprintf('<line class="ma-ci" x1="%g" y1="%g" x2="%g" y2="%g"/>',
+              xL, yc, xR, yc) else "",
+      if (off_left)
+        sprintf('<polygon class="ma-ci-arrow" points="%g,%g %g,%g %g,%g"/>',
+                X_MIN_PX, yc, X_MIN_PX + 6, yc - 4, X_MIN_PX + 6, yc + 4)
       else "",
+      if (off_right)
+        sprintf('<polygon class="ma-ci-arrow" points="%g,%g %g,%g %g,%g"/>',
+                X_MAX_PX, yc, X_MAX_PX - 6, yc - 4, X_MAX_PX - 6, yc + 4)
+      else "",
+      sprintf('<rect class="ma-square %s" x="%g" y="%g" width="%g" height="%g"/>',
+              klass, xE_clamped - sz / 2, yc - sz / 2, sz, sz),
+      sprintf('<text class="ma-citext" x="%g" y="%g">%s</text>',
+              width - RIGHT_MARGIN + 10, yc + 4, esc(ci_text)),
       '</g>'
     )
   }
 
+  # Optional per-row colour class (FE/RE in no-filter view); default = black.
+  row_klass <- if (!is.null(rows$klass)) rows$klass
+               else rep("ma-square-default", n_trials)
+
+  for (i in seq_len(n_trials)) {
+    yc <- HEADER_PAD + (i - 0.5) * ROW_H
+    parts[length(parts) + 1L] <- emit_data_row(
+      yc, rows$est[i], rows$lo[i], rows$hi[i],
+      sz = square_size[i],
+      label_left = rows$label[i],
+      ci_text    = fmt_ci(rows$est[i], rows$lo[i], rows$hi[i], ci_digits),
+      tooltip    = rows$tooltip[i] %||% rows$label[i],
+      klass      = row_klass[i]
+    )
+  }
+
   # Pooled rows: diamond + label (kind + CI). FE in mid-grey, RE in brand
-  # blue. Both always drawn — there is no toggle.
+  # blue. Both always drawn -- there is no toggle.
   if (n_pooled) {
     for (i in seq_len(n_pooled)) {
       yc <- HEADER_PAD + n_trials * ROW_H + POOLED_GAP +
               (i - 0.5) * POOLED_H
-      xL <- xfn(pooled$lo[i]); xR <- xfn(pooled$hi[i]); xE <- xfn(pooled$est[i])
+      xL_raw <- xfn(pooled$lo[i]); xR_raw <- xfn(pooled$hi[i])
+      xE_raw <- xfn(pooled$est[i])
+      xL <- max(X_MIN_PX, xL_raw); xR <- min(X_MAX_PX, xR_raw)
+      xE <- min(max(xE_raw, X_MIN_PX), X_MAX_PX)
       kind  <- pooled$kind[i]
       klass <- if (identical(kind, "FE")) "ma-pooled-fe" else "ma-pooled-re"
       pts   <- forest_diamond_points(xL, xE, xR, yc, 7)
-      pooled_label <- sprintf("%s: %s",
-                              if (identical(kind, "FE")) "Common (FE)"
-                              else "Random (RE)",
-                              fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i],
-                                     ci_digits))
-      tt <- esc(sprintf("%s\n%s",
-                        if (identical(kind, "FE")) "Common-effect (FE) pooled estimate"
-                        else "Random-effects (RE, REML) pooled estimate",
-                        fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i],
-                               ci_digits)))
+      kind_lbl <- if (identical(kind, "FE")) "Pooled estimate (FE)"
+                  else "Pooled estimate (RE)"
+      ci_str <- fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i], ci_digits)
+      tt <- sprintf("%s\n%s",
+                    if (identical(kind, "FE")) "Common-effect (FE) pooled estimate"
+                    else "Random-effects (RE, REML) pooled estimate",
+                    ci_str)
       parts[length(parts) + 1L] <- paste0(
-        sprintf('<g class="ma-pooled %s">', klass),
-        '<title>', tt, '</title>',
+        sprintf('<g class="ma-pooled %s" data-tt="%s">', klass, esc_attr(tt)),
         sprintf('<text class="ma-rowlabel ma-pooled-label" x="%g" y="%g">%s</text>',
-                LEFT_MARGIN - 10, yc + 4,
-                if (identical(kind, "FE")) "Common (FE)" else "Random (RE)"),
+                LEFT_MARGIN - 10, yc + 4, kind_lbl),
+        sprintf('<rect class="ma-rowhit" x="%g" y="%g" width="%g" height="%g"/>',
+                PLOT_LEFT, yc - POOLED_H / 2 + 1, PLOT_W, POOLED_H - 2),
         sprintf('<polygon class="ma-diamond" points="%s"/>', pts),
         sprintf('<text class="ma-citext" x="%g" y="%g">%s</text>',
-                width - RIGHT_MARGIN + 14, yc + 4,
-                esc(fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i],
-                           ci_digits))),
+                width - RIGHT_MARGIN + 10, yc + 4, esc(ci_str)),
         '</g>'
       )
     }
@@ -1024,6 +1058,26 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880) {
     parts[length(parts) + 1L] <- sprintf(
       '<text class="ma-ticklabel" x="%g" y="%g">%s</text>',
       tx, axis_y + 16, esc(forest_tick_label(scale, t)))
+  }
+
+  # Axis label / directional cues, drawn below the tick labels.
+  if (AXIS_LABEL_H > 0) {
+    label_y <- axis_y + 30
+    if (length(dir_left) && nzchar(dir_left)) {
+      parts[length(parts) + 1L] <- sprintf(
+        '<text class="ma-dir ma-dir-left" x="%g" y="%g">%s</text>',
+        PLOT_LEFT, label_y, esc(dir_left))
+    }
+    if (length(dir_right) && nzchar(dir_right)) {
+      parts[length(parts) + 1L] <- sprintf(
+        '<text class="ma-dir ma-dir-right" x="%g" y="%g">%s</text>',
+        PLOT_LEFT + PLOT_W, label_y, esc(dir_right))
+    }
+    if (length(axis_label) && nzchar(axis_label)) {
+      parts[length(parts) + 1L] <- sprintf(
+        '<text class="ma-axislabel" x="%g" y="%g">%s</text>',
+        PLOT_LEFT + PLOT_W / 2, label_y, esc(axis_label))
+    }
   }
 
   parts[length(parts) + 1L] <- "</svg>"
@@ -1073,29 +1127,61 @@ fetch_proportion <- function(drug, endpoint_group, outcome_code) {
 build_forest_inputs <- function(state, tab_id, outcome) {
   endpoint_group <- ma_endpoint_group(tab_id, outcome)
   digits <- if (identical(outcome$scale, "md")) 2 else 2
+
+  # Direction semantics. For benefit endpoints (PASI/DLQI responders),
+  # higher = better, so RR > 1 favours drug_a. For harm endpoints (safety),
+  # lower = better, so RR < 1 favours drug_a — directions flip.
+  is_harm <- identical(tab_id, "safety")
+
+  # Axis text presets per scale, refined below for specific filter contexts.
+  axis_label <- switch(outcome$scale,
+                       rr   = "Risk ratio (95% CI, log scale)",
+                       md   = "Mean difference (95% CI)",
+                       prop = "Proportion (95% CI)",
+                       "Effect (95% CI)")
+
   if (is.null(state)) {
-    # No filter -> one row per drug vs placebo.
+    # No filter -> two interleaved rows per drug (RE on top, FE underneath),
+    # colour-coded so the two estimates are read side by side.
     df <- fetch_drugs_vs_placebo(endpoint_group, outcome$code)
     if (!nrow(df)) return(NULL)
+    n_drugs <- nrow(df)
+    bt <- function(x) if (identical(outcome$scale, "rr")) exp(x) else x
+    re_est <- bt(df$te_re); re_lo <- bt(df$lo_re); re_hi <- bt(df$hi_re)
+    fe_est <- bt(df$te_fe); fe_lo <- bt(df$lo_fe); fe_hi <- bt(df$hi_fe)
     rows <- data.frame(
-      label = df$drug_a,
-      est   = df$te_re,
-      lo    = df$lo_re,
-      hi    = df$hi_re,
-      weight_fe = NA_real_,
-      weight_re = NA_real_,
+      label = as.vector(rbind(sprintf("%s — RE", df$drug_a),
+                              rep("— FE", n_drugs))),
+      est   = as.vector(rbind(re_est, fe_est)),
+      lo    = as.vector(rbind(re_lo,  fe_lo)),
+      hi    = as.vector(rbind(re_hi,  fe_hi)),
+      weight_fe = NA_real_, weight_re = NA_real_,
+      klass = rep(c("ma-square-re", "ma-square-fe"), n_drugs),
       stringsAsFactors = FALSE
     )
-    if (identical(outcome$scale, "rr")) {
-      rows$est <- exp(rows$est); rows$lo <- exp(rows$lo); rows$hi <- exp(rows$hi)
-    }
-    rows$tooltip <- vapply(seq_len(nrow(rows)), function(i)
-      ma_tooltip(rows$label[i], rows$est[i], rows$lo[i], rows$hi[i],
+    rows$tooltip <- vapply(seq_len(nrow(rows)), function(i) {
+      di  <- ((i - 1L) %/% 2L) + 1L
+      knd <- if (i %% 2L == 1L) "RE" else "FE"
+      hdr <- sprintf("%s vs Placebo — %s pooled", df$drug_a[di], knd)
+      ma_tooltip(hdr, rows$est[i], rows$lo[i], rows$hi[i],
                  NA_real_, NA_real_,
-                 extra = c("n trials" = df$n_studies[i],
-                           "I² " = sprintf("%.1f%%", 100 * df$i2[i]))),
-      character(1))
-    return(list(rows = rows, pooled = NULL))
+                 extra = c("n trials" = df$n_studies[di],
+                           "I-squared" = sprintf("%.1f%%", 100 * df$i2[di])))
+    }, character(1))
+    if (identical(outcome$scale, "rr")) {
+      if (is_harm) {
+        dir_left  <- "← favours drug"
+        dir_right <- "favours placebo →"
+      } else {
+        dir_left  <- "← favours placebo"
+        dir_right <- "favours drug →"
+      }
+    } else {
+      dir_left <- dir_right <- NULL
+    }
+    return(list(rows = rows, pooled = NULL,
+                axis_label = axis_label,
+                dir_left = dir_left, dir_right = dir_right))
   }
   if (identical(state$kind, "edge")) {
     # Edge filter -> per-trial pairwise forest, with FE + RE diamonds.
@@ -1135,8 +1221,25 @@ build_forest_inputs <- function(state, tab_id, outcome) {
                  rows$weight_fe[i], rows$weight_re[i],
                  extra = extra)
     }, character(1))
-    return(list(rows = rows, pooled = pooled, comparison = sprintf("%s vs %s",
-                                                                    s$drug_a, s$drug_b)))
+    dir_left  <- dir_right <- NULL
+    if (identical(outcome$scale, "rr")) {
+      if (is_harm) {
+        dir_left  <- sprintf("← favours %s", s$drug_a)
+        dir_right <- sprintf("favours %s →", s$drug_b)
+      } else {
+        dir_left  <- sprintf("← favours %s", s$drug_b)
+        dir_right <- sprintf("favours %s →", s$drug_a)
+      }
+    } else if (identical(outcome$scale, "md")) {
+      # PASI / DLQI absolute scores: lower is better, so a negative MD
+      # (drug_a − drug_b < 0) favours drug_a.
+      dir_left  <- sprintf("← favours %s", s$drug_a)
+      dir_right <- sprintf("favours %s →", s$drug_b)
+    }
+    return(list(rows = rows, pooled = pooled,
+                comparison = sprintf("%s vs %s", s$drug_a, s$drug_b),
+                axis_label = axis_label,
+                dir_left = dir_left, dir_right = dir_right))
   }
   if (identical(state$kind, "node")) {
     # Node filter -> single-arm proportion (binary outcomes only).
@@ -1166,7 +1269,9 @@ build_forest_inputs <- function(state, tab_id, outcome) {
     )
     # Proportions are already back-transformed in storage; force linear scale.
     return(list(rows = rows, pooled = pooled, drug = state$drug,
-                effective_scale = "prop"))
+                effective_scale = "prop",
+                axis_label = sprintf("Response rate, %s (95%% CI)", state$drug),
+                dir_left = NULL, dir_right = NULL))
   }
   NULL
 }
@@ -1228,6 +1333,48 @@ ui <- fluidPage(
         if (ev.key === 'Escape') hide();
       });
       window.addEventListener('scroll', hide, true);
+    })();
+
+    // Fast-popup tooltip for forest plot rows. Triggered on mouseover of any
+    // element carrying data-tt; positioned next to the cursor with a tiny
+    // offset and dismissed on mouseleave. No delay (the browser's native
+    // <title> attribute has a ~500 ms hover delay we want to avoid).
+    (function() {
+      var tt = null;
+      function ensure() {
+        if (tt) return tt;
+        tt = document.createElement('div');
+        tt.className = 'ma-tt-popover';
+        tt.style.display = 'none';
+        document.body.appendChild(tt);
+        return tt;
+      }
+      function hide() { if (tt) tt.style.display = 'none'; }
+      function show(el, ev) {
+        var t = ensure();
+        t.textContent = el.getAttribute('data-tt') || '';
+        t.style.display = 'block';
+        var pw = t.offsetWidth, ph = t.offsetHeight;
+        var x = ev.clientX + 14, y = ev.clientY + 14;
+        if (x + pw > window.innerWidth - 8)  x = ev.clientX - pw - 14;
+        if (y + ph > window.innerHeight - 8) y = ev.clientY - ph - 14;
+        t.style.left = (window.scrollX + Math.max(4, x)) + 'px';
+        t.style.top  = (window.scrollY + Math.max(4, y)) + 'px';
+      }
+      document.addEventListener('mouseover', function(ev) {
+        var el = ev.target.closest && ev.target.closest('[data-tt]');
+        if (el) show(el, ev);
+      });
+      document.addEventListener('mousemove', function(ev) {
+        var el = ev.target.closest && ev.target.closest('[data-tt]');
+        if (el && tt && tt.style.display !== 'none') show(el, ev);
+        else if (!el) hide();
+      });
+      document.addEventListener('mouseout', function(ev) {
+        if (!ev.relatedTarget ||
+            !(ev.relatedTarget.closest && ev.relatedTarget.closest('[data-tt]')))
+          hide();
+      });
     })();
   "))),
   tags$head(tags$script(HTML(paste0(
@@ -1341,7 +1488,11 @@ ui <- fluidPage(
       background: #ffffff; padding: 10px 4px 10px 4px;
       font-size: 16px; font-weight: 500; color: #1a1f2c;
       border-bottom: 1px solid #e3e6ea;
+      display: flex; align-items: center; gap: 12px;
     }
+    .view-summary-text { flex: 1 1 auto; min-width: 0; }
+    .view-summary .ma-btn { flex: 0 0 auto; padding: 4px 10px;
+                            font-size: 12px; }
     .row.split .col-table .tab-content table.dataTable thead th {
       position: sticky; top: 90px; background: #ffffff; z-index: 2;
       box-shadow: inset 0 -1px 0 #ddd;
@@ -1403,29 +1554,46 @@ ui <- fluidPage(
     .ma-forest .ma-rowlabel  { fill: #1a1f2c; font-size: 12px;
                                 text-anchor: end; }
     .ma-forest .ma-ci        { stroke: #5a6478; stroke-width: 1.2; }
-    .ma-forest .ma-square    { fill: #1a1f2c; stroke: none; }
+    .ma-forest .ma-ci-arrow  { fill: #5a6478; stroke: none; }
+    .ma-forest .ma-square    { stroke: none; }
+    .ma-forest .ma-square-default { fill: #1a1f2c; }
+    .ma-forest .ma-square-fe { fill: #7f8fa6; }
+    .ma-forest .ma-square-re { fill: #1F4E8C; }
     .ma-forest .ma-citext    { fill: #1a1f2c; font-size: 11px;
                                 text-anchor: start; }
-    .ma-forest .ma-weight    { fill: #5a6478; font-size: 11px;
-                                text-anchor: end; }
     .ma-forest .ma-pooled-fe .ma-diamond { fill: #7f8fa6; stroke: #5a6478;
                                             stroke-width: 1; }
     .ma-forest .ma-pooled-re .ma-diamond { fill: #1F4E8C; stroke: #14376a;
                                             stroke-width: 1; }
     .ma-forest .ma-pooled-label { font-weight: 600; }
-    /* Subtle hover highlight; native <title> tooltips appear automatically. */
+    .ma-forest .ma-axislabel { fill: #1a1f2c; font-size: 12px;
+                                text-anchor: middle; font-weight: 500; }
+    .ma-forest .ma-dir       { fill: #5a6478; font-size: 11px;
+                                font-style: italic; }
+    .ma-forest .ma-dir-left  { text-anchor: start; }
+    .ma-forest .ma-dir-right { text-anchor: end; }
+    /* Invisible row hit-area: gives the cursor a wide target so the tooltip
+       fires almost anywhere on the row, not just over the 8 px square. */
+    .ma-forest .ma-rowhit { fill: transparent; pointer-events: all;
+                            cursor: default; }
     .ma-forest .ma-row:hover .ma-square,
     .ma-forest .ma-row:hover .ma-ci   { stroke: #c0392b; }
-    .ma-forest .ma-row:hover .ma-square { fill: #c0392b; }
+    .ma-forest .ma-row:hover .ma-square-default { fill: #c0392b; }
+    .ma-forest .ma-pooled:hover .ma-diamond { stroke: #c0392b; stroke-width: 1.5; }
+    /* Fast-popup tooltip (JS-driven; replaces native <title>). */
+    .ma-tt-popover {
+      position: absolute; z-index: 1100; pointer-events: none;
+      background: #1a1f2c; color: #f6f7f9; font-size: 12px;
+      line-height: 1.4; padding: 6px 9px; border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.18); white-space: pre-line;
+      max-width: 320px;
+    }
   "))),
   div(class = "title-bar",
       titlePanel("Psoriasis RCT Explorer"),
       div(class = "title-actions",
           downloadButton("download_db", "Download SQLite",
                          class = "btn btn-default"),
-          actionButton("show_ma", "Meta-analyse",
-                       icon = icon("chart-column"),
-                       class = "btn btn-default ma-btn"),
           actionButton("show_about", "About", icon = icon("circle-info"),
                        class = "btn btn-default about-btn"))
   ),
@@ -1560,13 +1728,17 @@ server <- function(input, output, session) {
         query_view(grp$table, filter_state()))
       s <- summarise_view(surv)
       div(class = "view-summary",
-          tags$span(class = "view-summary-filter",
-                    filter_text(filter_state())),
-          tags$span(class = "view-summary-sep", " • "),
-          sprintf("%s across %s • %s",
-                  pluralise(s$n_trials,   "trial"),
-                  pluralise(s$n_refs,     "publication"),
-                  pluralise(s$n_patients, "patient")))
+          tags$span(class = "view-summary-text",
+              tags$span(class = "view-summary-filter",
+                        filter_text(filter_state())),
+              tags$span(class = "view-summary-sep", " • "),
+              sprintf("%s across %s • %s",
+                      pluralise(s$n_trials,   "trial"),
+                      pluralise(s$n_refs,     "publication"),
+                      pluralise(s$n_patients, "patient"))),
+          actionButton(paste0("show_ma_", this_tab), "Meta-analyse",
+                       icon = icon("chart-column"),
+                       class = "btn btn-default btn-sm ma-btn"))
     })
 
     output[[paste0("tbl_", this_tab)]] <- renderDT({
@@ -1742,9 +1914,8 @@ server <- function(input, output, session) {
   # at modal-open time -- no Shiny output bindings, no ggplot, no ggiraph.
   # Both common-effect (FE) and random-effects (RE, REML) diamonds are
   # always drawn together at the bottom of each plot.
-  observeEvent(input$show_ma, {
+  open_ma_modal <- function(tab_id) {
     state  <- filter_state()
-    tab_id <- input$view %||% names(endpoint_groups)[1]
     gid    <- input[[paste0("group_", tab_id)]]
     req(gid)
 
@@ -1799,16 +1970,20 @@ server <- function(input, output, session) {
         re <- inputs$pooled[inputs$pooled$kind == "RE", ]
         sm_lbl <- switch(eff_scale, rr = "RR", md = "MD", prop = "Proportion")
         digits <- if (eff_scale == "prop") 3 else 2
-        sprintf("FE %s: %s | RE %s: %s | %d studies",
-                sm_lbl, fmt_ci(fe$est, fe$lo, fe$hi, digits),
-                sm_lbl, fmt_ci(re$est, re$lo, re$hi, digits),
+        sprintf("Pooled %s — FE: %s • RE: %s • %d studies",
+                sm_lbl,
+                fmt_ci(fe$est, fe$lo, fe$hi, digits),
+                fmt_ci(re$est, re$lo, re$hi, digits),
                 nrow(inputs$rows))
       } else {
         sprintf("%d %s",
                 nrow(inputs$rows),
                 if (is.null(state)) "drugs" else "rows")
       }
-      svg_html <- forest_svg(inputs$rows, inputs$pooled, scale = eff_scale)
+      svg_html <- forest_svg(inputs$rows, inputs$pooled, scale = eff_scale,
+                             axis_label = inputs$axis_label,
+                             dir_left   = inputs$dir_left,
+                             dir_right  = inputs$dir_right)
       div(class = "ma-plot-block",
           div(class = "ma-plot-title", outc$label),
           div(class = "ma-plot-stats", stats),
@@ -1831,6 +2006,15 @@ server <- function(input, output, session) {
         plot_blocks
       )
     ))
+  }
+
+  # One observer per tab — the button lives inside each tab's summary
+  # output (so it's visually associated with the active filter context).
+  for (tab_id in names(endpoint_groups)) local({
+    this_tab <- tab_id
+    observeEvent(input[[paste0("show_ma_", this_tab)]], {
+      open_ma_modal(this_tab)
+    })
   })
 
   observeEvent(input$show_about, {
