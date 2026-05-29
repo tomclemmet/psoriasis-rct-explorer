@@ -1262,11 +1262,12 @@ build_forest_inputs <- function(state, tab_id, outcome) {
       weight_fe = t$weight_fe, weight_re = t$weight_re,
       stringsAsFactors = FALSE
     )
+    event_lbl <- if (is_harm) "Events" else "Responders"
     rows$tooltip <- vapply(seq_len(nrow(rows)), function(i)
       ma_tooltip(rows$label[i], rows$est[i], rows$lo[i], rows$hi[i],
                  rows$weight_fe[i], rows$weight_re[i],
-                 extra = c("Responders" = sprintf("%d / %d",
-                                                  t$k[i], t$n[i])),
+                 extra = c(setNames(sprintf("%d / %d", t$k[i], t$n[i]),
+                                    event_lbl)),
                  digits = 3),
       character(1))
     pooled <- data.frame(
@@ -1277,9 +1278,10 @@ build_forest_inputs <- function(state, tab_id, outcome) {
       stringsAsFactors = FALSE
     )
     # Proportions are already back-transformed in storage; force linear scale.
+    prop_lbl <- if (is_harm) "Event rate" else "Response rate"
     return(list(rows = rows, pooled = pooled, drug = state$drug,
                 effective_scale = "prop",
-                axis_label = sprintf("Response rate, %s (95%% CI)", state$drug),
+                axis_label = sprintf("%s, %s (95%% CI)", prop_lbl, state$drug),
                 dir_left = NULL, dir_right = NULL))
   }
   NULL
