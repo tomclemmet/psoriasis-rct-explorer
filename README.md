@@ -135,11 +135,14 @@ project root and run `convert.R` (see below) to regenerate the SQLite file.
 ## One-time setup
 
 R 4.5 already has `shiny`, `DBI`, `RSQLite`, `odbc`, `dplyr` installed. The app
-also needs `DT` and `visNetwork`:
+also needs `DT`, `visNetwork`, `ggplot2`, `ggiraph`, and `meta`:
 
 ```r
-install.packages(c("DT", "visNetwork"))
+install.packages(c("DT", "visNetwork", "ggplot2", "ggiraph", "meta"))
 ```
+
+(`ggplot2` + `ggiraph` render the interactive forest plots in the Meta-analyse
+modal; `meta` is only needed by `meta_analyse.R` at build time.)
 
 The 64-bit "Microsoft Access Driver (*.mdb, *.accdb)" must be installed (it
 already is on this machine — it ships with the 64-bit Access Database Engine).
@@ -152,7 +155,13 @@ From the project root:
 # 1. Build / rebuild the SQLite copy (only needed once, or after RevPal.accdb changes)
 & "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" app\convert.R
 
-# 2. Launch the Shiny app (opens in your browser)
+# 2. Build / rebuild the meta-analysis tables (only needed once, or after
+#    convert.R is re-run). Populates ma_pairwise, ma_pairwise_trials,
+#    ma_proportion, ma_proportion_trials inside the same SQLite file. The
+#    "Meta-analyse" button in the app reads these directly.
+& "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" app\meta_analyse.R
+
+# 3. Launch the Shiny app (opens in your browser)
 & "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" -e "shiny::runApp('app', launch.browser = TRUE)"
 ```
 

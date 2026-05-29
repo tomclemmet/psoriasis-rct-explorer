@@ -5,6 +5,8 @@ suppressPackageStartupMessages({
   library(DT)
   library(visNetwork)
   library(jsonlite)
+  library(ggplot2)
+  library(ggiraph)
 })
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -680,6 +682,352 @@ for (.tid in names(endpoint_groups)) {
 nodes_df <- master_network$nodes
 edges_df <- master_network$edges
 
+# ---------------------------------------------------------------------------
+# Meta-analysis catalogue. Maps each (tab_id, group_id) in `endpoint_groups`
+# to the precomputed MA outcomes drawn in the modal. `scale` controls the
+# x-axis treatment ("rr" = log scale, ref line at 1; "md" = linear, ref 0;
+# "prop" = 0..1, no ref line). `label` is the plot title.
+# ---------------------------------------------------------------------------
+ma_catalog <- list(
+  pasi = list(
+    response = list(
+      list(code = "pasi50",  label = "PASI 50", scale = "rr"),
+      list(code = "pasi75",  label = "PASI 75", scale = "rr"),
+      list(code = "pasi90",  label = "PASI 90", scale = "rr"),
+      list(code = "pasi100", label = "PASI 100", scale = "rr")
+    ),
+    absolute = list(
+      list(code = "abs_pasi_change", label = "Δ from baseline (absolute PASI)",
+           scale = "md", endpoint_group = "pasi_abs")
+    )
+  ),
+  dlqi = list(
+    zero = list(
+      list(code = "dlqi_0_1", label = "DLQI 0/1", scale = "rr"),
+      list(code = "dlqi_0",   label = "DLQI 0",   scale = "rr")
+    ),
+    threshold = list(
+      list(code = "dlqi_le5", label = "DLQI ≤ 5", scale = "rr")
+    ),
+    change = list(
+      list(code = "dlqi_5pt_dec", label = "5+ point decrease", scale = "rr"),
+      list(code = "dlqi_4pt_dec", label = "4+ point decrease", scale = "rr")
+    ),
+    absolute = list(
+      list(code = "abs_dlqi_change", label = "Δ from baseline (absolute DLQI)",
+           scale = "md", endpoint_group = "dlqi_abs")
+    )
+  ),
+  safety = list(
+    sae                = list(list(code = "sae", label = "Any SAE", scale = "rr")),
+    disc               = list(
+      list(code = "disc_any", label = "Discontinuation (any)", scale = "rr"),
+      list(code = "disc_ae",  label = "Discontinuation (AE)", scale = "rr")
+    ),
+    serious_infection  = list(
+      list(code = "serious_infection", label = "Serious infection", scale = "rr")
+    ),
+    injection_site_rxn = list(
+      list(code = "injection_site_rxn", label = "Injection-site reaction",
+           scale = "rr")
+    ),
+    malignancy = list(
+      list(code = "malignancy",          label = "Malignancy", scale = "rr"),
+      list(code = "nmsc",                label = "NMSC", scale = "rr"),
+      list(code = "malignancy_non_nmsc", label = "Malignancy (non-NMSC)",
+           scale = "rr")
+    )
+  )
+)
+
+# Endpoint-group key used inside the MA tables. Defaults to the tab id,
+# overridden by `endpoint_group` on outcomes that live in a different bucket
+# (the absolute-value endpoints).
+ma_endpoint_group <- function(tab_id, outcome) {
+  outcome$endpoint_group %||% tab_id
+}
+
+# Single source of truth for whether the MA build step has been run.
+ma_tables_present <- function() {
+  con <- dbConnect(SQLite(), DB_PATH, flags = SQLITE_RO)
+  on.exit(dbDisconnect(con), add = TRUE)
+  tabs <- dbListTables(con)
+  all(c("ma_pairwise", "ma_pairwise_trials",
+        "ma_proportion", "ma_proportion_trials") %in% tabs)
+}
+HAS_MA <- ma_tables_present()
+MA_BUILT_AT <- if (HAS_MA) {
+  tryCatch(read_db("SELECT MAX(built_at) AS b FROM ma_pairwise")$b,
+           error = function(e) NA_character_)
+} else NA_character_
+
+# ---------------------------------------------------------------------------
+# Forest-plot helpers. One renderer (`forest_ggiraph`) is reused for all
+# three modal kinds; the only thing that varies is what each row represents
+# (per-trial squares for "pairwise" and "proportion", per-drug squares for
+# "drug_vs_placebo"). Tooltips carry trial/drug name, n / N, effect, CI
+# and FE+RE weights.
+# ---------------------------------------------------------------------------
+fmt_ci <- function(est, lo, hi, digits = 2) {
+  sprintf("%.*f (%.*f to %.*f)",
+          digits, est, digits, lo, digits, hi)
+}
+
+fmt_pct <- function(x, digits = 0) {
+  sprintf("%.*f%%", digits, 100 * x)
+}
+
+# Build a tooltip string (HTML) for a forest-plot row. `extra` is an
+# optional named character vector of additional label/value pairs.
+ma_tooltip <- function(label, est, lo, hi, weight_fe, weight_re, extra = NULL,
+                       digits = 2) {
+  parts <- c(
+    sprintf("<b>%s</b>", htmltools::htmlEscape(label)),
+    sprintf("Effect: %s", fmt_ci(est, lo, hi, digits)),
+    if (!is.na(weight_fe))
+      sprintf("Weight (FE): %s", fmt_pct(weight_fe, 1)),
+    if (!is.na(weight_re))
+      sprintf("Weight (RE): %s", fmt_pct(weight_re, 1))
+  )
+  if (length(extra))
+    parts <- c(parts, sprintf("%s: %s", names(extra), as.character(extra)))
+  paste(parts, collapse = "<br/>")
+}
+
+# Render one forest plot. `rows` is a data.frame with columns:
+#   label, est, lo, hi, weight_fe, weight_re, tooltip
+# Optional `pooled` rows are drawn as diamonds at the bottom; each pooled
+# row has label, est, lo, hi, kind ("FE" or "RE"). `scale` is one of
+# "rr", "md", "prop". `emphasis` is "FE" or "RE" (the highlighted diamond).
+forest_ggiraph <- function(rows, pooled, scale = "rr", emphasis = "RE",
+                            title = NULL, output_id) {
+  if (!nrow(rows)) {
+    return(girafe(ggobj = ggplot() +
+                    annotate("text", x = 0, y = 0, label = "No data") +
+                    theme_void(),
+                  width_svg = 7, height_svg = 1.5))
+  }
+
+  ref_line <- switch(scale, rr = 1, md = 0, prop = NA_real_)
+  x_log    <- identical(scale, "rr")
+
+  # Order rows from top (first) to bottom (last); ggplot's y is numeric
+  # going up, so reverse.
+  rows$y <- rev(seq_len(nrow(rows)))
+  rows$size_w <- if (all(is.na(rows$weight_fe))) 0.5
+                 else pmax(0.15, sqrt(rows$weight_fe / max(rows$weight_fe, na.rm = TRUE)))
+
+  # Diamonds for pooled rows, vertically below all trial rows.
+  pooled_geom <- NULL
+  if (!is.null(pooled) && nrow(pooled)) {
+    pooled$y <- -seq_len(nrow(pooled)) * 0.8
+    diamonds <- do.call(rbind, lapply(seq_len(nrow(pooled)), function(i) {
+      p <- pooled[i, ]
+      hh <- 0.28
+      data.frame(
+        kind = p$kind,
+        x = c(p$lo, p$est, p$hi, p$est),
+        y = p$y + c(0, hh, 0, -hh)
+      )
+    }))
+    diamonds$y_id <- factor(rep(pooled$kind, each = 4))
+    pooled_geom <- list(
+      geom_polygon(data = diamonds,
+                   aes(x = x, y = y, group = y_id, fill = kind, colour = kind),
+                   alpha = 0.55),
+      geom_text(data = pooled,
+                aes(x = max(rows$hi, hi, na.rm = TRUE) * (if (x_log) 1.6 else 1),
+                    y = y,
+                    label = sprintf("%s: %s", kind,
+                                    fmt_ci(est, lo, hi,
+                                           if (scale == "prop") 3 else 2))),
+                hjust = 0, size = 3, colour = "#1a1f2c")
+    )
+  }
+
+  fill_vals <- c(FE = "#7f8fa6", RE = "#1F4E8C")
+  if (emphasis == "FE") fill_vals <- c(FE = "#1F4E8C", RE = "#c9d3df")
+  else                  fill_vals <- c(FE = "#c9d3df", RE = "#1F4E8C")
+
+  p <- ggplot(rows, aes(x = est, y = y)) +
+    geom_vline(xintercept = ref_line, linetype = "dashed",
+               colour = "#aab1bd", na.rm = TRUE) +
+    geom_errorbar(aes(xmin = lo, xmax = hi), width = 0,
+                  orientation = "y", colour = "#5a6478", na.rm = TRUE) +
+    geom_point_interactive(aes(size = size_w, tooltip = tooltip,
+                                data_id = as.character(y)),
+                            shape = 15, colour = "#1a1f2c", na.rm = TRUE) +
+    scale_size_continuous(range = c(2, 6), guide = "none") +
+    scale_y_continuous(breaks = rows$y, labels = rows$label,
+                       expand = expansion(add = c(2.5, 0.6))) +
+    labs(x = NULL, y = NULL, title = title) +
+    theme_minimal(base_size = 11) +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major.y = element_blank(),
+          axis.text.y = element_text(colour = "#1a1f2c"),
+          legend.position = "top",
+          plot.title = element_text(size = 12, face = "bold",
+                                    colour = "#1a1f2c"))
+  if (x_log) p <- p + scale_x_log10()
+  if (!is.null(pooled_geom)) {
+    p <- p + pooled_geom +
+      scale_fill_manual(values = fill_vals, name = NULL) +
+      scale_colour_manual(values = fill_vals, guide = "none")
+  }
+
+  height_in <- 0.5 + 0.25 * nrow(rows) +
+               (if (!is.null(pooled)) 0.4 * nrow(pooled) else 0)
+  girafe(ggobj = p, width_svg = 9, height_svg = max(2.2, height_in),
+         options = list(
+           opts_tooltip(css = "background:#1a1f2c;color:#fff;padding:6px 9px;
+                              border-radius:5px;font-size:12px;
+                              box-shadow:0 2px 8px rgba(0,0,0,0.25);"),
+           opts_hover(css = "stroke:#c0392b;stroke-width:2px;"),
+           opts_sizing(rescale = TRUE, width = 1)
+         ))
+}
+
+# --- Data fetchers used by the modal ---------------------------------------
+
+# Pull a single pairwise MA row + its trial rows. Returns NULL if absent.
+fetch_pairwise <- function(drug_a, drug_b, endpoint_group, outcome_code) {
+  r <- read_db(
+    "SELECT * FROM ma_pairwise
+     WHERE drug_a = ? AND drug_b = ?
+       AND endpoint_group = ? AND outcome_code = ?",
+    params = list(drug_a, drug_b, endpoint_group, outcome_code))
+  if (!nrow(r)) return(NULL)
+  trials <- read_db(
+    "SELECT * FROM ma_pairwise_trials WHERE comparison_id = ?",
+    params = list(r$comparison_id[1]))
+  list(summary = r[1, , drop = FALSE], trials = trials)
+}
+
+# All drug-vs-placebo MA rows for one outcome (no per-trial detail).
+fetch_drugs_vs_placebo <- function(endpoint_group, outcome_code) {
+  read_db(
+    "SELECT * FROM ma_pairwise
+     WHERE drug_b = 'Placebo' AND endpoint_group = ? AND outcome_code = ?
+     ORDER BY drug_a",
+    params = list(endpoint_group, outcome_code))
+}
+
+# Single-arm proportion + per-trial rows for one (drug, outcome).
+fetch_proportion <- function(drug, endpoint_group, outcome_code) {
+  r <- read_db(
+    "SELECT * FROM ma_proportion
+     WHERE drug = ? AND endpoint_group = ? AND outcome_code = ?",
+    params = list(drug, endpoint_group, outcome_code))
+  if (!nrow(r)) return(NULL)
+  trials <- read_db(
+    "SELECT * FROM ma_proportion_trials WHERE proportion_id = ?",
+    params = list(r$proportion_id[1]))
+  list(summary = r[1, , drop = FALSE], trials = trials)
+}
+
+# Translate one MA "outcome spec" + the current filter into a rows/pooled
+# bundle for `forest_ggiraph`. Returns NULL when no data is available.
+build_forest_inputs <- function(state, tab_id, outcome) {
+  endpoint_group <- ma_endpoint_group(tab_id, outcome)
+  digits <- if (identical(outcome$scale, "md")) 2 else 2
+  if (is.null(state)) {
+    # No filter -> one row per drug vs placebo.
+    df <- fetch_drugs_vs_placebo(endpoint_group, outcome$code)
+    if (!nrow(df)) return(NULL)
+    rows <- data.frame(
+      label = df$drug_a,
+      est   = df$te_re,
+      lo    = df$lo_re,
+      hi    = df$hi_re,
+      weight_fe = NA_real_,
+      weight_re = NA_real_,
+      stringsAsFactors = FALSE
+    )
+    if (identical(outcome$scale, "rr")) {
+      rows$est <- exp(rows$est); rows$lo <- exp(rows$lo); rows$hi <- exp(rows$hi)
+    }
+    rows$tooltip <- vapply(seq_len(nrow(rows)), function(i)
+      ma_tooltip(rows$label[i], rows$est[i], rows$lo[i], rows$hi[i],
+                 NA_real_, NA_real_,
+                 extra = c("n trials" = df$n_studies[i],
+                           "I² " = sprintf("%.1f%%", 100 * df$i2[i]))),
+      character(1))
+    return(list(rows = rows, pooled = NULL))
+  }
+  if (identical(state$kind, "edge")) {
+    # Edge filter -> per-trial pairwise forest, with FE + RE diamonds.
+    # Order (a, b) so the stored direction is hit: drug_a vs drug_b. We
+    # check both orientations to be tolerant.
+    for (orient in list(c(state$from, state$to), c(state$to, state$from))) {
+      res <- fetch_pairwise(orient[1], orient[2], endpoint_group, outcome$code)
+      if (!is.null(res)) break
+    }
+    if (is.null(res)) return(NULL)
+    s  <- res$summary; t <- res$trials
+    rows <- data.frame(
+      label = t$trial,
+      est   = t$te, lo = t$lo, hi = t$hi,
+      weight_fe = t$weight_fe, weight_re = t$weight_re,
+      stringsAsFactors = FALSE
+    )
+    pooled <- data.frame(
+      kind = c("FE", "RE"),
+      est  = c(s$te_fe, s$te_re),
+      lo   = c(s$lo_fe, s$lo_re),
+      hi   = c(s$hi_fe, s$hi_re),
+      stringsAsFactors = FALSE
+    )
+    if (identical(outcome$scale, "rr")) {
+      rows$est <- exp(rows$est); rows$lo <- exp(rows$lo); rows$hi <- exp(rows$hi)
+      pooled$est <- exp(pooled$est); pooled$lo <- exp(pooled$lo); pooled$hi <- exp(pooled$hi)
+    }
+    rows$tooltip <- vapply(seq_len(nrow(rows)), function(i) {
+      extra <- if (identical(outcome$scale, "rr"))
+        c("Arm A" = sprintf("%d / %d", t$event_a[i], t$n_a[i]),
+          "Arm B" = sprintf("%d / %d", t$event_b[i], t$n_b[i]))
+      else
+        c("A: mean (SD), n" = sprintf("%.2f (%.2f), %d", t$mean_a[i], t$sd_a[i], t$n_a[i]),
+          "B: mean (SD), n" = sprintf("%.2f (%.2f), %d", t$mean_b[i], t$sd_b[i], t$n_b[i]))
+      ma_tooltip(rows$label[i], rows$est[i], rows$lo[i], rows$hi[i],
+                 rows$weight_fe[i], rows$weight_re[i],
+                 extra = extra)
+    }, character(1))
+    return(list(rows = rows, pooled = pooled, comparison = sprintf("%s vs %s",
+                                                                    s$drug_a, s$drug_b)))
+  }
+  if (identical(state$kind, "node")) {
+    # Node filter -> single-arm proportion (binary outcomes only).
+    if (!identical(outcome$scale, "rr")) return(NULL)
+    res <- fetch_proportion(state$drug, endpoint_group, outcome$code)
+    if (is.null(res)) return(NULL)
+    s <- res$summary; t <- res$trials
+    rows <- data.frame(
+      label = t$trial,
+      est   = t$p, lo = t$lo, hi = t$hi,
+      weight_fe = t$weight_fe, weight_re = t$weight_re,
+      stringsAsFactors = FALSE
+    )
+    rows$tooltip <- vapply(seq_len(nrow(rows)), function(i)
+      ma_tooltip(rows$label[i], rows$est[i], rows$lo[i], rows$hi[i],
+                 rows$weight_fe[i], rows$weight_re[i],
+                 extra = c("Responders" = sprintf("%d / %d",
+                                                  t$k[i], t$n[i])),
+                 digits = 3),
+      character(1))
+    pooled <- data.frame(
+      kind = c("FE", "RE"),
+      est  = c(s$te_fe, s$te_re),
+      lo   = c(s$lo_fe, s$lo_re),
+      hi   = c(s$hi_fe, s$hi_re),
+      stringsAsFactors = FALSE
+    )
+    # Proportions are already back-transformed in storage; force linear scale.
+    return(list(rows = rows, pooled = pooled, drug = state$drug,
+                effective_scale = "prop"))
+  }
+  NULL
+}
+
 ui <- fluidPage(
   tags$head(tags$script(HTML("
     // Disable specific <option> values inside a Shiny select input. Used to
@@ -882,12 +1230,34 @@ ui <- fluidPage(
                                max-height: 70vh; overflow-y: auto; }
     .about-modal .modal-body h4 { margin-top: 18px; color: #1F4E8C; }
     .about-modal .modal-body h4:first-child { margin-top: 0; }
+    /* Meta-analysis modal: a touch wider than About for forest plots. */
+    .ma-modal .modal-dialog { width: 92%; max-width: 1100px; }
+    .ma-modal .modal-body { max-height: 75vh; overflow-y: auto;
+                            padding: 14px 18px; }
+    .ma-modal h4 { margin-top: 4px; color: #1F4E8C; font-size: 15px; }
+    .ma-modal .ma-summary { font-size: 13px; color: #5a6478;
+                            margin-bottom: 14px; }
+    .ma-modal .ma-plot-block { margin-bottom: 22px; }
+    .ma-modal .ma-plot-title { font-weight: 600; color: #1a1f2c;
+                               font-size: 14px; margin: 8px 0 2px 0; }
+    .ma-modal .ma-plot-stats { font-size: 12px; color: #5a6478;
+                               margin-bottom: 6px; }
+    .ma-modal .ma-empty { color: #5a6478; font-style: italic;
+                          padding: 12px 0; }
+    .ma-modal .ma-footer-meta { font-size: 12px; color: #888;
+                                margin-right: auto; }
+    .ma-modal .ma-toggle { display: inline-flex; align-items: center;
+                            gap: 6px; margin-right: 12px; font-size: 13px; }
+    .ma-modal .ma-toggle .radio-inline { margin-left: 6px; }
   "))),
   div(class = "title-bar",
       titlePanel("Psoriasis RCT Explorer"),
       div(class = "title-actions",
           downloadButton("download_db", "Download SQLite",
                          class = "btn btn-default"),
+          actionButton("show_ma", "Meta-analyse",
+                       icon = icon("chart-column"),
+                       class = "btn btn-default ma-btn"),
           actionButton("show_about", "About", icon = icon("circle-info"),
                        class = "btn btn-default about-btn"))
   ),
@@ -1199,6 +1569,129 @@ server <- function(input, output, session) {
 
   # Empty-canvas click -> clear
   observeEvent(input$nma_clear, { filter_state(NULL) })
+
+  # Meta-analysis modal. Reads the precomputed ma_* tables and renders one
+  # forest plot per outcome in the active endpoint group. Dispatch on
+  # filter_state(): NULL -> drug vs placebo, edge -> pairwise, node -> single
+  # arm proportion.
+  ma_emphasis <- reactiveVal("RE")
+  observeEvent(input$ma_emphasis, {
+    req(input$ma_emphasis %in% c("FE", "RE"))
+    ma_emphasis(input$ma_emphasis)
+  })
+
+  observeEvent(input$show_ma, {
+    state  <- filter_state()
+    tab_id <- input$view %||% names(endpoint_groups)[1]
+    gid    <- input[[paste0("group_", tab_id)]]
+    req(gid)
+
+    if (!HAS_MA) {
+      showModal(modalDialog(
+        title = "Meta-analysis", easyClose = TRUE,
+        footer = modalButton("Close"), class = "ma-modal",
+        tags$p("No precomputed meta-analysis tables found. Run ",
+               tags$code("Rscript app/meta_analyse.R"),
+               " after ", tags$code("convert.R"),
+               " to build them, then reload the app.")
+      ))
+      return(invisible(NULL))
+    }
+
+    outcomes <- ma_catalog[[tab_id]][[gid]]
+    if (is.null(outcomes) || !length(outcomes)) {
+      showModal(modalDialog(
+        title = "Meta-analysis", easyClose = TRUE,
+        footer = modalButton("Close"), class = "ma-modal",
+        tags$p("Meta-analysis isn't configured for this endpoint group yet.")
+      ))
+      return(invisible(NULL))
+    }
+
+    # Resolve title + summary line.
+    state_lbl <- if (is.null(state)) "All drugs vs placebo"
+                 else if (identical(state$kind, "edge"))
+                   sprintf("%s vs %s", state$from, state$to)
+                 else if (identical(state$kind, "node"))
+                   sprintf("Pooled response rate, %s", state$drug)
+                 else "All drugs"
+    group_lbl <- endpoint_groups[[tab_id]]$groups[[gid]]$label %||% gid
+
+    # Build a plot block per outcome.
+    plot_blocks <- lapply(outcomes, function(outc) {
+      out_id <- paste0("ma_plot_", tab_id, "_", gid, "_", outc$code)
+      inputs <- tryCatch(build_forest_inputs(state, tab_id, outc),
+                        error = function(e) NULL)
+      if (is.null(inputs)) {
+        return(div(class = "ma-plot-block",
+                   div(class = "ma-plot-title", outc$label),
+                   div(class = "ma-empty",
+                       "No meta-analysable data for this comparison.")))
+      }
+      # `effective_scale` lets the dispatcher override outc$scale -- e.g. a
+      # node filter on a binary outcome plots single-arm proportions, not RR.
+      eff_scale <- inputs$effective_scale %||% outc$scale
+      stats <- if (!is.null(inputs$pooled)) {
+        fe <- inputs$pooled[inputs$pooled$kind == "FE", ]
+        re <- inputs$pooled[inputs$pooled$kind == "RE", ]
+        sm_lbl <- switch(eff_scale, rr = "RR", md = "MD", prop = "Proportion")
+        digits <- if (eff_scale == "prop") 3 else 2
+        sprintf("FE: %s %s | RE: %s %s | %d studies",
+                sm_lbl, fmt_ci(fe$est, fe$lo, fe$hi, digits),
+                sm_lbl, fmt_ci(re$est, re$lo, re$hi, digits),
+                nrow(inputs$rows))
+      } else {
+        sprintf("%d %s",
+                nrow(inputs$rows),
+                if (is.null(state)) "drugs" else "rows")
+      }
+      div(class = "ma-plot-block",
+          div(class = "ma-plot-title", outc$label),
+          div(class = "ma-plot-stats", stats),
+          girafeOutput(out_id, height = "auto"))
+    })
+
+    showModal(modalDialog(
+      title = tagList(icon("chart-column"), " Meta-analysis"),
+      easyClose = TRUE, size = "l", class = "ma-modal",
+      footer = tagList(
+        span(class = "ma-footer-meta",
+             if (!is.na(MA_BUILT_AT)) sprintf("Built: %s UTC", MA_BUILT_AT)
+             else "Built: unknown"),
+        span(class = "ma-toggle",
+             "Emphasise:",
+             radioButtons("ma_emphasis", label = NULL,
+                          choices = c("Random effects" = "RE",
+                                       "Fixed effect"   = "FE"),
+                          selected = ma_emphasis(),
+                          inline = TRUE)),
+        modalButton("Close")
+      ),
+      div(
+        div(class = "ma-summary",
+            sprintf("%s | endpoint group: %s | random-effects pooling via REML",
+                    state_lbl, group_lbl)),
+        plot_blocks
+      )
+    ))
+
+    # Register one renderer per plot. Reactive on ma_emphasis() so the diamond
+    # colour swap is live.
+    for (outc in outcomes) local({
+      this_outc <- outc
+      out_id    <- paste0("ma_plot_", tab_id, "_", gid, "_", this_outc$code)
+      output[[out_id]] <- renderGirafe({
+        inputs <- tryCatch(build_forest_inputs(state, tab_id, this_outc),
+                          error = function(e) NULL)
+        if (is.null(inputs)) return(NULL)
+        forest_ggiraph(inputs$rows, inputs$pooled,
+                       scale = inputs$effective_scale %||% this_outc$scale,
+                       emphasis = ma_emphasis(),
+                       title = NULL,
+                       output_id = out_id)
+      })
+    })
+  })
 
   observeEvent(input$show_about, {
     showModal(modalDialog(
