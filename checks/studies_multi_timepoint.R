@@ -47,12 +47,11 @@ rows <- DBI::dbGetQuery(con, "
          s.trial      AS trial,
          dr.drug_name AS drug,
          m.timepoint  AS timepoint,
-         tu.unit_name AS timepoint_unit
+         s.timepoint_unit AS timepoint_unit
   FROM   measurements m
   JOIN   arms a              ON a.arm_id = m.arm_id
   JOIN   studies s           ON s.study_id = a.study_id
   LEFT   JOIN drugs dr       ON dr.drug_id = a.drug_id
-  LEFT   JOIN timepoint_units tu ON tu.unit_id = s.timepoint_unit_id
   WHERE  m.subgroup_id = 0
     AND  m.timepoint IS NOT NULL
     AND  m.timepoint <> 0
