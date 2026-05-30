@@ -173,13 +173,25 @@ From the project root:
 
 # 2. Build / rebuild the meta-analysis tables (only needed once, or after
 #    convert.R is re-run). Populates ma_pairwise, ma_pairwise_trials,
-#    ma_proportion, ma_proportion_trials inside the same SQLite file. The
-#    "Meta-analyse" button in the app reads these directly.
+#    ma_proportion, ma_proportion_trials, ma_nma, ma_nma_estimates inside the
+#    same SQLite file. The "Meta-analyse" button in the app reads these directly.
 & "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" app\meta_analyse.R
+
+#    Rebuild only one family of tables (faster when iterating on a slow model):
+& "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" app\meta_analyse.R --only nma
+#    (families: pairwise | proportion | nma, comma-separated; the other tables
+#    are left untouched.)
 
 # 3. Launch the Shiny app (opens in your browser)
 & "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" -e "shiny::runApp('app', launch.browser = TRUE)"
 ```
+
+`app\meta_analyse.R` is the **driver** (data prep + SQLite write); the actual
+statistical models live in `app\ma_models.R`, which is the file to edit when you
+want to change how an estimate is computed or drop in a custom (e.g. Bayesian)
+model. Its header documents the result contract and the conventions the app
+relies on. Both the driver and the app read/write the same six `ma_*` tables, so
+changing a model needs no app changes as long as the contract is honoured.
 
 ## Known data quirks
 
