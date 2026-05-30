@@ -1612,23 +1612,31 @@ ui <- fluidPage(
                                margin-bottom: 6px; }
     .ma-modal .ma-empty { color: #5a6478; font-style: italic;
                           padding: 12px 0; }
-    /* FE/RE toggle row (no-filter NMA view only). Segmented look. */
+    /* FE/RE toggle row (no-filter NMA view only). */
     .ma-modal .ma-toggle-row {
       display: flex; align-items: center; gap: 12px;
-      margin: 4px 0 16px 0; padding: 8px 12px;
+      margin: 4px 0 16px 0; padding: 7px 12px;
       background: #f6f7f9; border: 1px solid #e3e6ea; border-radius: 6px;
     }
     .ma-modal .ma-toggle-label {
-      font-size: 12px; font-weight: 600; color: #1a1f2c;
-      text-transform: uppercase; letter-spacing: 0.4px;
+      font-size: 12px; font-weight: 600; color: #5a6478;
+      white-space: nowrap; flex: 0 0 auto; line-height: 1;
     }
-    .ma-modal .ma-toggle-row .shiny-options-group { margin: 0; }
+    /* Strip Bootstrap's default form-group bottom margin so flex alignment works */
+    .ma-modal .ma-toggle-row .shiny-input-container {
+      margin-bottom: 0; flex: 0 0 auto;
+    }
+    .ma-modal .ma-toggle-row .shiny-options-group {
+      display: flex; flex-direction: row; align-items: center;
+      gap: 0 16px; margin: 0;
+    }
     .ma-modal .ma-toggle-row .radio-inline {
-      font-size: 13px; color: #1a1f2c; margin-right: 14px;
-      padding-left: 0;
+      font-size: 13px; color: #1a1f2c;
+      margin: 0; padding-left: 0; line-height: 1;
     }
     .ma-modal .ma-toggle-row .radio-inline input[type=radio] {
-      margin-right: 4px;
+      margin: 0 5px 0 0; vertical-align: middle;
+      position: relative; top: -1px;
     }
     .ma-modal .ma-footer-meta { font-size: 12px; color: #888;
                                 margin-right: auto; }
@@ -2041,8 +2049,8 @@ server <- function(input, output, session) {
               nrow(inputs$rows))
     } else if (!is.null(inputs$nma_summary)) {
       ns <- inputs$nma_summary
-      kind_lbl <- if (identical(ma_kind, "FE")) "common effect (FE)"
-                  else "random effects (RE, REML)"
+      kind_lbl <- if (identical(ma_kind, "FE")) "fixed effects"
+                  else "random effects (REML)"
       i2_str <- if (!is.na(ns$i2)) sprintf("%.1f%%", 100 * ns$i2) else "n/a"
       pinc <- if (!is.na(ns$p_inc)) sprintf("%.2f", ns$p_inc) else "n/a"
       sprintf("Network MA, %s — %d studies, %d treatments • I² = %s • inconsistency p = %s",
@@ -2135,8 +2143,8 @@ server <- function(input, output, session) {
       div(class = "ma-toggle-row",
           tags$span(class = "ma-toggle-label", "Network model:"),
           radioButtons("ma_kind", label = NULL,
-                       choices = c("Random effects (RE)" = "RE",
-                                   "Common effect (FE)"  = "FE"),
+                       choices = c("Random effects" = "RE",
+                                   "Fixed effects"  = "FE"),
                        selected = cur_kind, inline = TRUE))
     } else NULL
 
