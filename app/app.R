@@ -763,31 +763,23 @@ MA_BUILT_AT <- if (HAS_MA) {
 # Forest-plot helpers. One renderer (`forest_ggiraph`) is reused for all
 # three modal kinds; the only thing that varies is what each row represents
 # (per-trial squares for "pairwise" and "proportion", per-drug squares for
-# "drug_vs_placebo"). Tooltips carry trial/drug name, n / N, effect, CI
-# and FE+RE weights.
+# "drug_vs_placebo"). Tooltips carry trial/drug name, n / N, effect and CI.
+# Per-trial squares are sized by the trial's sample size; per-drug network
+# rows are drawn uniform.
 # ---------------------------------------------------------------------------
 fmt_ci <- function(est, lo, hi, digits = 2) {
   sprintf("%.*f (%.*f to %.*f)",
           digits, est, digits, lo, digits, hi)
 }
 
-fmt_pct <- function(x, digits = 0) {
-  sprintf("%.*f%%", digits, 100 * x)
-}
-
 # Plain-text tooltip for native SVG <title> elements. Multi-line via "\n";
 # browsers honour newlines in <title> as a multi-line hover tooltip without
 # any extra JS. `extra` is an optional named character vector of additional
 # label / value pairs.
-ma_tooltip <- function(label, est, lo, hi, weight_fe, weight_re, extra = NULL,
-                       digits = 2) {
+ma_tooltip <- function(label, est, lo, hi, extra = NULL, digits = 2) {
   parts <- c(
     label,
-    sprintf("Effect: %s", fmt_ci(est, lo, hi, digits)),
-    if (!is.na(weight_fe))
-      sprintf("Weight (FE): %s", fmt_pct(weight_fe, 1)),
-    if (!is.na(weight_re))
-      sprintf("Weight (RE): %s", fmt_pct(weight_re, 1))
+    sprintf("Effect: %s", fmt_ci(est, lo, hi, digits))
   )
   if (length(extra))
     parts <- c(parts, sprintf("%s: %s", names(extra), as.character(extra)))
@@ -802,7 +794,9 @@ ma_tooltip <- function(label, est, lo, hi, weight_fe, weight_re, extra = NULL,
 # hover tooltips automatically).
 #
 # `rows` is a data.frame with columns
-#   label, est, lo, hi, weight_fe, weight_re, tooltip
+#   label, est, lo, hi, square_n, tooltip
+# `square_n` is the trial's sample size used to size its square; NA on every
+# row (e.g. network pooled rows) draws all squares uniform.
 # Optional `pooled` rows are drawn as diamonds below; each has kind ("FE"
 # or "RE"), est, lo, hi. `scale` is one of "rr", "md", "prop".
 
@@ -942,12 +936,14 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   # CI digits: tighter for proportions because they tend to cluster.
   ci_digits <- if (identical(scale, "prop")) 3 else 2
 
-  # Per-row square size from FE weight; clamped to a readable range.
-  max_w <- suppressWarnings(max(rows$weight_fe, na.rm = TRUE))
-  square_size <- if (!is.finite(max_w) || max_w <= 0) {
+  # Per-row square size from the trial's sample size; clamped to a readable
+  # range. Rows without a sample size (e.g. network pooled rows) draw uniform.
+  square_n <- if (!is.null(rows$square_n)) rows$square_n else rep(NA_real_, n_trials)
+  max_n <- suppressWarnings(max(square_n, na.rm = TRUE))
+  square_size <- if (!is.finite(max_n) || max_n <= 0) {
     rep(8, n_trials)
   } else {
-    pmax(5, pmin(12, 5 + 7 * sqrt(rows$weight_fe / max_w)))
+    pmax(5, pmin(12, 5 + 7 * sqrt(square_n / max_n)))
   }
   square_size[is.na(square_size)] <- 8
 
@@ -1207,7 +1203,7 @@ build_forest_inputs <- function(state, tab_id, outcome, ma_kind = "RE") {
     rows <- data.frame(
       label     = df$drug_a,
       est       = est, lo = lo, hi = hi,
-      weight_fe = NA_real_, weight_re = NA_real_,
+      square_n  = NA_real_,
       klass     = if (use_re) "ma-square-re" else "ma-square-fe",
       stringsAsFactors = FALSE
     )
@@ -1219,7 +1215,6 @@ build_forest_inputs <- function(state, tab_id, outcome, ma_kind = "RE") {
         sprintf("%s vs Placebo — NMA pooled (%s)",
                 df$drug_a[i], if (use_re) "RE" else "FE"),
         rows$est[i], rows$lo[i], rows$hi[i],
-        NA_real_, NA_real_,
         extra = c(
           "Direct studies"  = as.character(df$n_direct[i]),
           "Network studies" = as.character(ns$n_studies),
@@ -1258,7 +1253,7 @@ build_forest_inputs <- function(state, tab_id, outcome, ma_kind = "RE") {
     rows <- data.frame(
       label = t$trial,
       est   = t$te, lo = t$lo, hi = t$hi,
-      weight_fe = t$weight_fe, weight_re = t$weight_re,
+      square_n = t$n_a + t$n_b,
       stringsAsFactors = FALSE
     )
     pooled <- data.frame(
@@ -1280,7 +1275,6 @@ build_forest_inputs <- function(state, tab_id, outcome, ma_kind = "RE") {
         c("A: mean (SD), n" = sprintf("%.2f (%.2f), %d", t$mean_a[i], t$sd_a[i], t$n_a[i]),
           "B: mean (SD), n" = sprintf("%.2f (%.2f), %d", t$mean_b[i], t$sd_b[i], t$n_b[i]))
       ma_tooltip(rows$label[i], rows$est[i], rows$lo[i], rows$hi[i],
-                 rows$weight_fe[i], rows$weight_re[i],
                  extra = extra)
     }, character(1))
     dir_left  <- dir_right <- NULL
@@ -1312,13 +1306,12 @@ build_forest_inputs <- function(state, tab_id, outcome, ma_kind = "RE") {
     rows <- data.frame(
       label = t$trial,
       est   = t$p, lo = t$lo, hi = t$hi,
-      weight_fe = t$weight_fe, weight_re = t$weight_re,
+      square_n = t$n,
       stringsAsFactors = FALSE
     )
     event_lbl <- if (is_harm) "Events" else "Responders"
     rows$tooltip <- vapply(seq_len(nrow(rows)), function(i)
       ma_tooltip(rows$label[i], rows$est[i], rows$lo[i], rows$hi[i],
-                 rows$weight_fe[i], rows$weight_re[i],
                  extra = c(setNames(sprintf("%d / %d", t$k[i], t$n[i]),
                                     event_lbl)),
                  digits = 3),

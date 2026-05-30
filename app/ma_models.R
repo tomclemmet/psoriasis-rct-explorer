@@ -51,9 +51,10 @@
 # 2. FE vs RE. The app toggles between the *_fe and *_re columns. A Bayesian fit
 #    with a single posterior estimate should put it in BOTH -- use both(te,lo,hi)
 #    which returns all six columns -- or one toggle state shows blanks.
-# 3. WEIGHTS. weight_fe / weight_re size the forest squares and must be present.
-#    MCMC fits have no natural weight: weights_from_se(se) gives a normalised
-#    inverse-variance default (equal weights when no SE is available).
+#
+# (Forest-plot square sizes are NOT a model concern: the app sizes per-trial
+# squares from the trial's sample size n, and draws network/pooled rows uniform.
+# Detail rows just need to carry n -- no study weights are stored or required.)
 # ===========================================================================
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -72,16 +73,6 @@ both <- function(te, lo, hi) {
        te_re = te, lo_re = lo, hi_re = hi)
 }
 
-# Normalised inverse-variance weights; equal weights when no usable SE.
-weights_from_se <- function(se) {
-  n <- length(se)
-  if (!n) return(numeric(0))
-  w <- 1 / se^2
-  w[!is.finite(w)] <- NA_real_
-  s <- sum(w, na.rm = TRUE)
-  if (!is.finite(s) || s <= 0) rep(1 / n, n) else w / s
-}
-
 # ---------------------------------------------------------------------------
 # Result contract: canonical column orders (mirror the existing ma_* tables so
 # app.R needs no changes) + constructors that validate essentials and fill the
@@ -95,7 +86,7 @@ weights_from_se <- function(se) {
   "te_re", "se_re", "lo_re", "hi_re", "z_re", "p_re",
   "tau2", "i2", "q", "q_df", "q_pval", "method_tau")
 .PAIRWISE_DETAIL_COLS <- c(
-  "ref_id", "trial", "te", "se", "lo", "hi", "weight_fe", "weight_re",
+  "ref_id", "trial", "te", "se", "lo", "hi",
   "event_a", "n_a", "event_b", "n_b", "mean_a", "sd_a", "mean_b", "sd_b",
   "outcome_code")
 
@@ -104,7 +95,7 @@ weights_from_se <- function(se) {
   "te_fe", "lo_fe", "hi_fe", "te_re", "lo_re", "hi_re",
   "tau2", "i2", "q", "q_df", "q_pval", "method_tau")
 .PROP_DETAIL_COLS <- c(
-  "ref_id", "trial", "k", "n", "p", "lo", "hi", "weight_fe", "weight_re",
+  "ref_id", "trial", "k", "n", "p", "lo", "hi",
   "outcome_code")
 
 .NMA_SUMMARY_COLS <- c(
@@ -140,7 +131,7 @@ pairwise_result <- function(summary, detail) {
         "te_fe", "lo_fe", "hi_fe", "te_re", "lo_re", "hi_re"),
       "pairwise summary"),
     detail = .fit_contract(detail, .PAIRWISE_DETAIL_COLS,
-      c("outcome_code", "trial", "te", "lo", "hi", "weight_fe", "weight_re"),
+      c("outcome_code", "trial", "te", "lo", "hi"),
       "pairwise detail"))
 }
 
@@ -151,8 +142,7 @@ proportion_result <- function(summary, detail) {
         "te_fe", "lo_fe", "te_re", "lo_re", "hi_re"),
       "proportion summary"),
     detail = .fit_contract(detail, .PROP_DETAIL_COLS,
-      c("outcome_code", "trial", "k", "n", "p", "lo", "hi",
-        "weight_fe", "weight_re"),
+      c("outcome_code", "trial", "k", "n", "p", "lo", "hi"),
       "proportion detail"))
 }
 
@@ -187,14 +177,10 @@ tidy_pairwise <- function(ma, pt, drug_a, drug_b, group, outcome, kind) {
     q = ma$Q, q_df = ma$df.Q, q_pval = ma$pval.Q,
     method_tau = "REML", stringsAsFactors = FALSE)
 
-  w_fe <- ma$w.common / sum(ma$w.common, na.rm = TRUE)
-  w_re_sum <- sum(ma$w.random, na.rm = TRUE)
-  w_re <- if (w_re_sum > 0) ma$w.random / w_re_sum
-          else rep(NA_real_, length(ma$w.random))
   detail <- data.frame(
     ref_id = pt$ref_id, trial = pt$trial,
     te = ma$TE, se = ma$seTE, lo = ma$lower, hi = ma$upper,
-    weight_fe = w_fe, weight_re = w_re, stringsAsFactors = FALSE)
+    stringsAsFactors = FALSE)
   if (kind == "binary") {
     detail$event_a <- pt$event_a; detail$n_a <- pt$n_a
     detail$event_b <- pt$event_b; detail$n_b <- pt$n_b
@@ -222,10 +208,6 @@ tidy_proportion <- function(ma, agg, drug, group, outcome) {
     q = ma$Q, q_df = ma$df.Q, q_pval = ma$pval.Q,
     method_tau = "REML", stringsAsFactors = FALSE)
 
-  w_fe <- ma$w.common / sum(ma$w.common, na.rm = TRUE)
-  w_re_sum <- sum(ma$w.random, na.rm = TRUE)
-  w_re <- if (w_re_sum > 0) ma$w.random / w_re_sum
-          else rep(NA_real_, length(ma$w.random))
   p_hat <- agg$k / agg$n
   z <- 1.959964
   denom  <- 1 + z^2 / agg$n
@@ -234,7 +216,6 @@ tidy_proportion <- function(ma, agg, drug, group, outcome) {
   detail <- data.frame(
     ref_id = agg$ref_id, trial = agg$trial, k = agg$k, n = agg$n, p = p_hat,
     lo = pmax(0, centre - half), hi = pmin(1, centre + half),
-    weight_fe = w_fe, weight_re = w_re,
     outcome_code = outcome, stringsAsFactors = FALSE)
   list(summary = summary, detail = detail)
 }
