@@ -60,7 +60,9 @@ SCRIPT_DIR <- resolve_script_dir()
 DB_PATH    <- file.path(SCRIPT_DIR, "psoriasis-rcts.sqlite")
 if (!file.exists(DB_PATH)) stop("psoriasis-rcts.sqlite not found - run convert.R first.")
 
-# The model functions + result contract live next door.
+# The result format/validators (ma_contract.R) and the models that produce it
+# (ma_models.R) live next door. Source the contract first -- the models use it.
+source(file.path(SCRIPT_DIR, "ma_contract.R"))
 source(file.path(SCRIPT_DIR, "ma_models.R"))
 
 # meta:::settings.meta() chatter is just noise here.
@@ -140,7 +142,6 @@ spec_ep <- function(spec, oc)
 # Pull each view once (a view may back several outcomes).
 # ---------------------------------------------------------------------------
 con <- dbConnect(SQLite(), DB_PATH)
-on.exit(dbDisconnect(con), add = TRUE)
 
 view_cache <- new.env(parent = emptyenv())
 get_view <- function(name) {
@@ -526,3 +527,4 @@ for (tbl in names(writes)) {
 }
 
 cat(sprintf("Done. %s\n", paste(written, collapse = ", ")))
+dbDisconnect(con)

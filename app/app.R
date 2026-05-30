@@ -920,7 +920,9 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
 
   n_trials  <- nrow(rows)
   n_pooled  <- if (!is.null(pooled)) nrow(pooled) else 0L
-  body_h    <- n_trials * ROW_H + (if (n_pooled) POOLED_GAP + n_pooled * POOLED_H else 0)
+
+  body_h    <- n_trials * ROW_H +
+    (if (n_pooled) POOLED_GAP + n_pooled * POOLED_H else 0)
   height    <- HEADER_PAD + body_h + AXIS_PAD + AXIS_LABEL_H + BOTTOM_PAD
 
   # Domain + tick positions.
@@ -1031,12 +1033,13 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
     )
   }
 
-  # Pooled rows: diamond + label (kind + CI). FE in mid-grey, RE in brand
-  # blue. Both always drawn -- there is no toggle.
+  # Pooled rows: diamond + label (kind + CI). Colour-coded by model only:
+  # FE (pairwise or network) = mid-grey, RE = brand blue. Each row is labelled
+  # on the left so pairwise vs network estimates are distinguished by text.
   if (n_pooled) {
     for (i in seq_len(n_pooled)) {
-      yc <- HEADER_PAD + n_trials * ROW_H + POOLED_GAP +
-              (i - 0.5) * POOLED_H
+      yc <- HEADER_PAD + n_trials * ROW_H + POOLED_GAP + (i - 0.5) * POOLED_H
+
       xL_raw <- xfn(pooled$lo[i]); xR_raw <- xfn(pooled$hi[i])
       xE_raw <- xfn(pooled$est[i])
       xL <- max(X_MIN_PX, if (is.finite(xL_raw)) xL_raw else X_MIN_PX)
@@ -1044,15 +1047,31 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
       xE <- if (is.finite(xE_raw)) min(max(xE_raw, X_MIN_PX), X_MAX_PX)
             else (X_MIN_PX + X_MAX_PX) / 2
       kind  <- pooled$kind[i]
-      klass <- if (identical(kind, "FE")) "ma-pooled-fe" else "ma-pooled-re"
-      pts   <- forest_diamond_points(xL, xE, xR, yc, 7)
-      kind_lbl <- if (identical(kind, "FE")) "Pooled estimate (FE)"
-                  else "Pooled estimate (RE)"
+      klass <- switch(kind,
+        "FE"     = "ma-pooled-fe",
+        "RE"     = "ma-pooled-re",
+        "NMA-FE" = "ma-pooled-fe",
+        "NMA-RE" = "ma-pooled-re",
+        "ma-pooled-fe")
+      kind_lbl <- switch(kind,
+        "FE"     = "Pooled estimate (FE)",
+        "RE"     = "Pooled estimate (RE)",
+        "NMA-FE" = "Network estimate (FE)",
+        "NMA-RE" = "Network estimate (RE)",
+        kind)
+      pts    <- forest_diamond_points(xL, xE, xR, yc, 7)
       ci_str <- fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i], ci_digits)
-      tt <- sprintf("%s\n%s",
-                    if (identical(kind, "FE")) "Common-effect (FE) pooled estimate"
-                    else "Random-effects (RE, REML) pooled estimate",
-                    ci_str)
+      tt_hdr <- switch(kind,
+        "FE"     = "Common-effect (FE) pooled estimate",
+        "RE"     = "Random-effects (RE, REML) pooled estimate",
+        "NMA-FE" = "Network MA common-effect (FE) estimate",
+        "NMA-RE" = "Network MA random-effects (RE, REML) estimate",
+        kind)
+      tt_extra <- if (!is.null(pooled$n_direct) && !is.na(pooled$n_direct[i]))
+        sprintf("%s\nDirect studies: %d", ci_str, pooled$n_direct[i])
+      else
+        ci_str
+      tt <- sprintf("%s\n%s", tt_hdr, tt_extra)
       parts[length(parts) + 1L] <- paste0(
         sprintf('<g class="ma-pooled %s" data-tt="%s">', klass, esc_attr(tt)),
         sprintf('<text class="ma-rowlabel ma-pooled-label" x="%g" y="%g">%s</text>',
@@ -1149,6 +1168,29 @@ fetch_nma_vs_placebo <- function(endpoint_group, outcome_code) {
       ORDER BY e.drug_a",
     params = list(n$network_id[1]))
   list(status = "ok", summary = n[1, , drop = FALSE], estimates = est)
+}
+
+# NMA estimate for a specific drug pair from one network. Returns NULL when
+# the pair isn't in the network or the network is absent/sparse. `flipped`
+# is TRUE when the stored row is drug_b vs drug_a; callers must negate log
+# estimates and swap lo/hi before use.
+fetch_nma_for_pair <- function(drug_a, drug_b, endpoint_group, outcome_code) {
+  n <- read_db(
+    "SELECT * FROM ma_nma WHERE endpoint_group = ? AND outcome_code = ?",
+    params = list(endpoint_group, outcome_code))
+  if (!nrow(n) || !identical(n$status[1], "ok")) return(NULL)
+  nid <- n$network_id[1]
+  for (orient in list(c(drug_a, drug_b), c(drug_b, drug_a))) {
+    e <- read_db(
+      "SELECT * FROM ma_nma_estimates WHERE network_id = ? AND drug_a = ? AND drug_b = ?",
+      params = list(nid, orient[1], orient[2]))
+    if (nrow(e)) {
+      return(list(est     = e[1, , drop = FALSE],
+                  flipped = !identical(orient[1], drug_a),
+                  summary = n[1, , drop = FALSE]))
+    }
+  }
+  NULL
 }
 
 # Single-arm proportion + per-trial rows for one (drug, outcome).
@@ -1257,12 +1299,44 @@ build_forest_inputs <- function(state, tab_id, outcome, ma_kind = "RE") {
       stringsAsFactors = FALSE
     )
     pooled <- data.frame(
-      kind = c("FE", "RE"),
-      est  = c(s$te_fe, s$te_re),
-      lo   = c(s$lo_fe, s$lo_re),
-      hi   = c(s$hi_fe, s$hi_re),
+      kind    = c("FE", "RE"),
+      est     = c(s$te_fe, s$te_re),
+      lo      = c(s$lo_fe, s$lo_re),
+      hi      = c(s$hi_fe, s$hi_re),
+      n_direct = NA_integer_,
       stringsAsFactors = FALSE
     )
+    # Append NMA estimate for this pair (both FE and RE) when available.
+    # Orient the lookup against the pairwise display direction (drug_a vs
+    # drug_b) so the NMA estimate matches the per-trial rows, not state$from/to.
+    nma_pair <- tryCatch(
+      fetch_nma_for_pair(s$drug_a, s$drug_b, endpoint_group, outcome$code),
+      error = function(e) NULL)
+    if (!is.null(nma_pair)) {
+      e <- nma_pair$est
+      if (nma_pair$flipped) {
+        # Negate log estimate and swap lo/hi to restore the drug_a→drug_b
+        # direction used by the pairwise rows.
+        nma_pooled <- data.frame(
+          kind    = c("NMA-FE", "NMA-RE"),
+          est     = c(-e$te_fe, -e$te_re),
+          lo      = c(-e$hi_fe, -e$hi_re),
+          hi      = c(-e$lo_fe, -e$lo_re),
+          n_direct = as.integer(e$n_direct),
+          stringsAsFactors = FALSE
+        )
+      } else {
+        nma_pooled <- data.frame(
+          kind    = c("NMA-FE", "NMA-RE"),
+          est     = c(e$te_fe, e$te_re),
+          lo      = c(e$lo_fe, e$lo_re),
+          hi      = c(e$hi_fe, e$hi_re),
+          n_direct = as.integer(e$n_direct),
+          stringsAsFactors = FALSE
+        )
+      }
+      pooled <- rbind(pooled, nma_pooled)
+    }
     if (identical(outcome$scale, "rr")) {
       rows$est <- exp(rows$est); rows$lo <- exp(rows$lo); rows$hi <- exp(rows$hi)
       pooled$est <- exp(pooled$est); pooled$lo <- exp(pooled$lo); pooled$hi <- exp(pooled$hi)
