@@ -224,26 +224,6 @@ cites_html_by_study <- cites_html_by_study[nzchar(cites_html_by_study)]
 studies_with_cites <- names(cites_html_by_study)
 cites_json <- jsonlite::toJSON(as.list(cites_html_by_study), auto_unbox = TRUE)
 
-# Baseline PASI recorded as a "Psoriasis characteristics" outcome
-# (outcome_id 11) — used as a fallback for the Absolute PASI table when an
-# arm has no week-0 abs_pasi row. Curators usually record baseline PASI as
-# a baseline characteristic; week 0 of the absolute-PASI longitudinal series
-# is only present for the minority of arms where that timepoint was
-# explicitly extracted.
-.baseline_pasi <- read_db("
-  SELECT a.study_id AS ref_id, a.arm_no AS arm_no,
-         MAX(m.mean) AS mean, MAX(m.sd) AS sd
-  FROM   measurements m
-  JOIN   arms a ON a.arm_id = m.arm_id
-  WHERE  m.outcome_id = 11 AND m.subgroup_id = 0
-  GROUP  BY a.study_id, a.arm_no
-")
-.baseline_pasi_key <- paste(.baseline_pasi$ref_id, .baseline_pasi$arm_no, sep = "|")
-baseline_pasi_lookup <- list(
-  mean = setNames(.baseline_pasi$mean, .baseline_pasi_key),
-  sd   = setNames(.baseline_pasi$sd,   .baseline_pasi_key)
-)
-
 # Render trial text as a popover trigger. Clicking the trial name opens a
 # small floating panel listing every publication for that study (primary +
 # secondaries) as Vancouver-style citations with clickable DOIs. The popover
@@ -394,8 +374,15 @@ format_pasi_response <- function(df) {
 }
 
 format_pasi_absolute <- function(df) {
+  # Baseline PASI (outcome 11) rides v_pasi as an arm-level column; use it as
+  # the fallback when an arm has no week-0 abs_pasi row.
+  bp_key <- paste(df$ref_id, df$arm_no, sep = "|")
+  bp_fallback <- list(
+    mean = setNames(df$baseline_pasi_mean, bp_key),
+    sd   = setNames(df$baseline_pasi_sd,   bp_key)
+  )
   b <- baseline_lookup(df, "abs_pasi_mean", "abs_pasi_sd",
-                       fallback = baseline_pasi_lookup)
+                       fallback = bp_fallback)
   d <- derive_change(b$mean, df$abs_pasi_mean, df$abs_pasi_change_mean)
   df$baseline        <- fmt_mean_sd(b$mean, b$sd)
   df$on_tx           <- fmt_mean_sd(df$abs_pasi_mean, df$abs_pasi_sd)
@@ -453,7 +440,7 @@ endpoint_groups <- list(
       ),
       absolute = list(
         label    = "Absolute PASI",
-        table    = "v_pasi_abs",
+        table    = "v_pasi",
         fmt      = format_pasi_absolute,
         colnames = c("Trial", "Drug", "N",
                      "Baseline", "Follow-up", "Δ from baseline"),
