@@ -338,23 +338,23 @@ for (i in 1:nrow(outcomes)) {
     }
     results <- results |> bind_rows(tibble(
       ma_id = max(results$ma_id) + 1,
-      endpoint = NA,
+      endpoint = outcomes[i, 1],
       type = "pairwise",
       effects = "fixed",
       ref_tx = comparisons[[j, 1]],
       comp_tx = comparisons[[j, 2]],,
-      outcome = outcomes[i, 1],
+      outcome = "rd",
       mean = fit$TE.common,
       lower = fit$lower.common,
       upper = fit$upper.common
     ), tibble(
       ma_id = max(results$ma_id) + 1,
-      endpoint = NA,
+      endpoint = outcomes[i, 1],
       type = "pairwise",
       effects = "random",
       ref_tx = comparisons[[j, 1]],
       comp_tx = comparisons[[j, 2]],,
-      outcome = outcomes[i, 1],
+      outcome = "rd",
       mean = fit$TE.random,
       lower = fit$lower.random,
       upper = fit$upper.random
@@ -376,5 +376,6 @@ for (i in 1:nrow(outcomes)) {
 #                  common = TRUE, random = TRUE, warn = FALSE)
 
 
+dbWriteTable(con, name = "meta_analysis", value = results, overwrite = TRUE)
 
 dbDisconnect()
