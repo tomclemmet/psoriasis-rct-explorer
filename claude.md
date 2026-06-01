@@ -1,7 +1,11 @@
 This is an R shiny app for a meta-analysis of trial data, reporting the data and meta-analysis results
-There is script to convert a source-of-truth access database to a lightweight sqlite database
-There is also script to run meta-analyses on the data and save the results in the sqlite
-The checks folder contains checks for mistakes in the database
-When writing an R script, the only ways it will be run (unless sourced by another file) is by me within a project in R studio or by claude code from the terminal
-Don't include claude as a co-author on commits
-Don't waste tokens on simple checks I could easily do myself
+
+The app/ directory holds the app script and the sqlite database. The R/ directory includes R scripts I will run manually to produce the sqlite database, check for mistakes in the database, and run the meta-analysis
+
+Always assume scripts are run from the project root directory, no need for complex code resolving file paths
+
+When editing a file in the 'R/' directory, don't be overly defensive. These scripts will only ever be run by me, the priority is readability
+
+Don't include Claude as a co-author on commits
+
+Don't waste tokens on checks I could do myself
