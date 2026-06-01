@@ -23,6 +23,7 @@ LEFT JOIN v_safety s    ON p.ref_id = s.ref_id   AND p.arm_no = s.arm_no
 "
 
 data <- dbGetQuery(con, query) |> filter(!is.na(drug))
+results <- data.frame(NULL)
 
 # PASI Response NMA ===========================================================
 pasi_net <- set_agd_arm(
@@ -68,14 +69,14 @@ pasi_rate_fe <- predict(
   pasi_fit_fe, type = "response",
   baseline = distr(qnorm, pasi_ref_fe$TE.fixed, pasi_ref_fe$seTE.fixed)
 )$sims |> 
-  as_draws_df() |> 
+  posterior::as_draws_df() |> 
   pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
   summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |>  
   filter(substr(param, 1, 1) != ".") |> 
   mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
          endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])"))
 
-results <- bind_rows(data.frame(
+results <- results |> bind_rows(data.frame(
     endpoint = pasi_rd_fe$endpoint,
     type = "network",
     effects = "fixed",
@@ -116,7 +117,7 @@ pasi_rd_re <- predict(
   pasi_fit_re, type = "response",
   baseline = distr(qnorm, pasi_ref_re$TE.random, pasi_ref_re$seTE.random)
 )$sims |> 
-  as_draws_df() |>
+  posterior::as_draws_df() |>
   mutate(across(contains("pasi50"), \(x) x - `pred[Placebo, pasi50]`)) |> 
   mutate(across(contains("pasi75"), \(x) x - `pred[Placebo, pasi75]`)) |> 
   mutate(across(contains("pasi90"), \(x) x - `pred[Placebo, pasi90]`)) |> 
@@ -131,7 +132,7 @@ pasi_rate_re <- predict(
   pasi_fit_re, type = "response",
   baseline = distr(qnorm, pasi_ref_re$TE.random, pasi_ref_re$seTE.random)
 )$sims |> 
-  as_draws_df() |> 
+  posterior::as_draws_df() |> 
   pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
   summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |> 
   filter(substr(param, 1, 1) != ".") |> 
@@ -188,7 +189,7 @@ dlqi_rd_fe <- predict(
   dlqi_fit_fe, type = "response",
   baseline = distr(qnorm, dlqi_ref_fe$TE.fixed, dlqi_ref_fe$seTE.fixed)
 )$sims |> 
-  as_draws_df() |> 
+  posterior::as_draws_df() |> 
   mutate(across(contains("dlqi50"), \(x) x - `pred[Placebo, dlqi50]`)) |> 
   mutate(across(contains("dlqi75"), \(x) x - `pred[Placebo, dlqi75]`)) |> 
   mutate(across(contains("dlqi90"), \(x) x - `pred[Placebo, dlqi90]`)) |> 
@@ -203,7 +204,7 @@ dlqi_rate_fe <- predict(
   dlqi_fit_fe, type = "response",
   baseline = distr(qnorm, dlqi_ref_fe$TE.fixed, dlqi_ref_fe$seTE.fixed)
 )$sims |> 
-  as_draws_df() |> 
+  posterior::as_draws_df() |> 
   pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
   summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |> 
   filter(substr(param, 1, 1) != ".") |> 
@@ -239,7 +240,7 @@ dlqi_fit_re <- nma(
   prior_intercept = normal(scale = 100),
   prior_trt = normal(scale = 10),
   prior_aux = flat(),
-  iter = 1000
+  iter = 100
 )
 dlqi_ref_re <- metagen(
   TE = mean, 
@@ -250,7 +251,7 @@ dlqi_rd_re <- predict(
   dlqi_fit_re, type = "response",
   baseline = distr(qnorm, dlqi_ref_re$TE.random, dlqi_ref_re$seTE.random)
 )$sims |> 
-  as_draws_df() |> 
+  posterior::as_draws_df() |> 
   mutate(across(contains("dlqi50"), \(x) x - `pred[Placebo, dlqi50]`)) |> 
   mutate(across(contains("dlqi75"), \(x) x - `pred[Placebo, dlqi75]`)) |> 
   mutate(across(contains("dlqi90"), \(x) x - `pred[Placebo, dlqi90]`)) |> 
@@ -265,7 +266,7 @@ dlqi_rate_re <- predict(
   dlqi_fit_re, type = "response",
   baseline = distr(qnorm, dlqi_ref_re$TE.random, dlqi_ref_re$seTE.random)
 )$sims |> 
-  as_draws_df() |> 
+  posterior::as_draws_df() |> 
   pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
   summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |> 
   filter(substr(param, 1, 1) != ".") |> 
@@ -327,38 +328,78 @@ for (i in 1:nrow(outcomes)) {
       summarise(.by = c(ref_id, lab), n = sum(n), k = sum(k)) |> 
       tidyr::pivot_wider(names_from = lab, values_from = c(n, k))
     
-    if(nrow(comp_data) == 0 || n_distinct(comp_data$ref_id <= 1)) next
+    if(nrow(comp_data) == 0 || n_distinct(comp_data$ref_id) <= 1) next
       
     if (outcomes[i, 2] == "binary") {
-      fit <- meta::metabin(
-        event.e = comp_data$k_1, n.e = comp_data$n_1,
-        event.c = comp_data$k_2, n.c = comp_data$n_2,
-        studlab = comp_data$ref_id, sm = "RD"
+      fit <- metabin(
+        event.e = comp_data$k_1, n.e = comp_data$n_1,event.c = comp_data$k_2, 
+        n.c = comp_data$n_2, sm = "RD"
       )
+      abs_fit_1 <- metaprop(event = comp_data$k_1, n = comp_data$n_1)
+      abs_fit_2 <- metaprop(event = comp_data$k_2, n = comp_data$n_2)
     }
-    results <- results |> bind_rows(tibble(
-      ma_id = max(results$ma_id) + 1,
+    results <- results |> bind_rows(data.frame(
       endpoint = outcomes[i, 1],
       type = "pairwise",
       effects = "fixed",
       ref_tx = comparisons[[j, 1]],
-      comp_tx = comparisons[[j, 2]],,
+      comp_tx = comparisons[[j, 2]],
       outcome = "rd",
       mean = fit$TE.common,
       lower = fit$lower.common,
       upper = fit$upper.common
-    ), tibble(
-      ma_id = max(results$ma_id) + 1,
+    ), data.frame(
       endpoint = outcomes[i, 1],
       type = "pairwise",
       effects = "random",
       ref_tx = comparisons[[j, 1]],
-      comp_tx = comparisons[[j, 2]],,
+      comp_tx = comparisons[[j, 2]],
       outcome = "rd",
       mean = fit$TE.random,
       lower = fit$lower.random,
       upper = fit$upper.random
+    ), data.frame(
+      endpoint = outcomes[i, 1],
+      type = "univariate",
+      effects = "fixed",
+      ref_tx = NA,
+      comp_tx = comparisons[[j, 1]],
+      outcome = "rate",
+      mean = plogis(abs_fit_1$TE.fixed),
+      lower = plogis(abs_fit_1$lower.fixed),
+      upper = plogis(abs_fit_1$upper.fixed)
+    ), data.frame(
+      endpoint = outcomes[i, 1],
+      type = "univariate",
+      effects = "random",
+      ref_tx = NA,
+      comp_tx = comparisons[[j, 1]],
+      outcome = "rate",
+      mean = plogis(abs_fit_1$TE.random),
+      lower = plogis(abs_fit_1$lower.random),
+      upper = plogis(abs_fit_1$upper.random)
+    ), data.frame(
+      endpoint = outcomes[i, 1],
+      type = "univariate",
+      effects = "fixed",
+      ref_tx = NA,
+      comp_tx = comparisons[[j, 2]],
+      outcome = "rate",
+      mean = plogis(abs_fit_2$TE.fixed),
+      lower = plogis(abs_fit_2$lower.fixed),
+      upper = plogis(abs_fit_2$upper.fixed)
+    ), data.frame(
+      endpoint = outcomes[i, 1],
+      type = "univariate",
+      effects = "random",
+      ref_tx = NA,
+      comp_tx = comparisons[[j, 2]],
+      outcome = "rate",
+      mean = plogis(abs_fit_2$TE.random),
+      lower = plogis(abs_fit_2$lower.random),
+      upper = plogis(abs_fit_2$upper.random)
     ))
+    message(".", appendLF = FALSE)
   }
 }
 
