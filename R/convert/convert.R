@@ -454,7 +454,7 @@ if (anyDuplicated(key4)) {
 dbWriteTable(dst, "measurements", measurements_df, append = TRUE)
 
 # --- 9. Views (the contract the app reads) --------------------------------
-source("app/views.R")
+source("R/convert/views.R")
 build_views(dst)
 
 # --- 10. Wrap up ----------------------------------------------------------
