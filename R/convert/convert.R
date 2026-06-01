@@ -52,24 +52,8 @@ MAX_TIMEPOINT_WK <- 24
 # uses it as the Absolute-PASI baseline) even though it has no view `code`.
 BASELINE_PASI_OUTCOME_ID <- 11L
 
-resolve_script_dir <- function() {
-  # Terminal: Rscript puts --file=... on commandArgs.
-  file_arg <- sub("^--file=", "",
-                  grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE))
-  if (length(file_arg) && nzchar(file_arg[[1]])) {
-    return(normalizePath(dirname(file_arg[[1]]), mustWork = TRUE))
-  }
-  # RStudio: ask the IDE for the active source editor path.
-  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
-    return(normalizePath(dirname(rstudioapi::getSourceEditorContext()$path),
-                         mustWork = TRUE))
-  }
-  stop("Could not resolve script directory - run via Rscript or RStudio.")
-}
-
-here     <- resolve_script_dir()
-accdb    <- normalizePath(file.path(here, "..", "RevPal.accdb"), mustWork = TRUE)
-sqlite_p <- file.path(here, "psoriasis-rcts.sqlite")
+accdb    <- normalizePath("RevPal.accdb", mustWork = TRUE)
+sqlite_p <- "app/psoriasis-rcts.sqlite"
 
 if (file.exists(sqlite_p) && !file.remove(sqlite_p)) {
   stop("Could not remove existing ", sqlite_p,
@@ -470,7 +454,7 @@ if (anyDuplicated(key4)) {
 dbWriteTable(dst, "measurements", measurements_df, append = TRUE)
 
 # --- 9. Views (the contract the app reads) --------------------------------
-source(file.path(here, "views.R"))
+source("app/views.R")
 build_views(dst)
 
 # --- 10. Wrap up ----------------------------------------------------------
