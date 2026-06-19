@@ -5,6 +5,9 @@ library(tidyr)
 library(stringr)
 library(multinma)
 library(meta)
+options(mc.cores = parallel::detectCores())
+
+source("R/meta-analyse/ma-utils.R")
 
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 dbListTables(con)
@@ -13,19 +16,29 @@ query <- "
 SELECT 
     p.ref_id, p.arm_no, p.drug, p.timepoint, p.timepoint_unit, p.n,
     p.pasi50, p.pasi75, p.pasi90, p.pasi100, p.abs_pasi_change_mean, 
-    p.abs_pasi_change_sd,
+    p.abs_pasi_change_sd, p.abs_pasi_mean, p.abs_pasi_sd,
     d.dlqi_0_1, d.dlqi_0, d.abs_dlqi_change_mean, d.abs_dlqi_change_sd,
+    d.abs_dlqi_mean, d.abs_dlqi_sd,
     s.sae, s.disc_any, s.disc_ae, s.serious_infection, s.injection_site_rxn,
     s.malignancy
 FROM v_pasi p
 LEFT JOIN v_dlqi d      ON p.ref_id = d.ref_id   AND p.arm_no = d.arm_no
+                       AND p.timepoint = d.timepoint     
 LEFT JOIN v_safety s    ON p.ref_id = s.ref_id   AND p.arm_no = s.arm_no
+                       AND p.timepoint = s.timepoint
 "
 
-data <- dbGetQuery(con, query) |> filter(!is.na(drug))
-results <- data.frame(NULL)
+data <- dbGetQuery(con, query) |>
+  filter(!is.na(drug)) |> 
+  group_by(ref_id, arm_no) |> 
+  filter(timepoint == 0 | timepoint == max(timepoint)) |> 
+  ungroup()
+drugs <- unique(data$drug)
+comparisons <- as.data.frame(t(combn(drugs, 2)))
+results <- list()
+niter <- 2000
 
-# PASI Response NMA ===========================================================
+# pasi Response NMA ===========================================================
 pasi_net <- set_agd_arm(
   filter(data, !if_all(pasi50:pasi100, \(x) is.na(x))),
   study = ref_id,
@@ -42,7 +55,7 @@ pasi_fit_fe <- nma(
   prior_intercept = normal(scale = 100),
   prior_trt = normal(scale = 10),
   prior_aux = flat(),
-  iter = 100
+  iter = niter
 )
 
 pasi_ref_fe <- metagen(
@@ -50,55 +63,14 @@ pasi_ref_fe <- metagen(
   seTE = sd, 
   data = as.data.frame(summary(pasi_fit_fe, pars = "mu"))
 )
-pasi_rd_fe <- predict(
-    pasi_fit_fe, type = "response",
-    baseline = distr(qnorm, pasi_ref_fe$TE.fixed, pasi_ref_fe$seTE.fixed)
-  )$sims |> 
-  posterior::as_draws_df() |>
-  mutate(across(contains("pasi50"), \(x) x - `pred[Placebo, pasi50]`)) |> 
-  mutate(across(contains("pasi75"), \(x) x - `pred[Placebo, pasi75]`)) |> 
-  mutate(across(contains("pasi90"), \(x) x - `pred[Placebo, pasi90]`)) |> 
-  mutate(across(contains("pasi100"), \(x) x - `pred[Placebo, pasi100]`)) |>
-  pivot_longer(everything(), names_to = "param", values_to = "trace") |>
-  summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |> 
-  filter(substr(param, 1, 1) != ".") |> 
-  mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
-         endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])")) |> 
-  filter(drug != "Placebo")
-pasi_rate_fe <- predict(
-  pasi_fit_fe, type = "response",
-  baseline = distr(qnorm, pasi_ref_fe$TE.fixed, pasi_ref_fe$seTE.fixed)
-)$sims |> 
-  posterior::as_draws_df() |> 
-  pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
-  summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |>  
-  filter(substr(param, 1, 1) != ".") |> 
-  mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
-         endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])"))
 
-results <- results |> bind_rows(data.frame(
-    endpoint = pasi_rd_fe$endpoint,
-    type = "network",
-    effects = "fixed",
-    ref_tx = "Placebo",
-    comp_tx = pasi_rd_fe$drug,
-    measure = "rd",
-    mean = pasi_rd_fe$mean,
-    lower = pasi_rd_fe$lower,
-    upper = pasi_rd_fe$upper
-  ), data.frame(
-    endpoint = pasi_rate_fe$endpoint,
-    type = "network",
-    effects = "fixed",
-    ref_tx = NA,
-    comp_tx = pasi_rate_fe$drug,
-    measure = "rate",
-    mean = pasi_rate_fe$mean,
-    lower = pasi_rate_fe$lower,
-    upper = pasi_rate_fe$upper
-  ))
+results$pasi_fe <- nma_results(
+  pasi_fit_fe, 
+  pasi_ref_fe$TE.fixed, 
+  pasi_ref_fe$seTE.fixed
+)
 
-
+# Random effects
 pasi_fit_re <- nma(
   pasi_net,
   trt_effects = "random",
@@ -106,60 +78,20 @@ pasi_fit_re <- nma(
   prior_intercept = normal(scale = 100),
   prior_trt = normal(scale = 10),
   prior_aux = flat(),
-  iter = 100
+  iter = niter
 )
+
 pasi_ref_re <- metagen(
   TE = mean, 
   seTE = sd, 
-  data = as.data.frame(summary(pasi_fit_fe, pars = "mu"))
+  data = as.data.frame(summary(pasi_fit_re, pars = "mu"))
 )
-pasi_rd_re <- predict(
-  pasi_fit_re, type = "response",
-  baseline = distr(qnorm, pasi_ref_re$TE.random, pasi_ref_re$seTE.random)
-)$sims |> 
-  posterior::as_draws_df() |>
-  mutate(across(contains("pasi50"), \(x) x - `pred[Placebo, pasi50]`)) |> 
-  mutate(across(contains("pasi75"), \(x) x - `pred[Placebo, pasi75]`)) |> 
-  mutate(across(contains("pasi90"), \(x) x - `pred[Placebo, pasi90]`)) |> 
-  mutate(across(contains("pasi100"), \(x) x - `pred[Placebo, pasi100]`)) |> 
-  pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
-  summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |> 
-  filter(substr(param, 1, 1) != ".") |> 
-  mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
-         endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])")) |> 
-  filter(drug != "Placebo")
-pasi_rate_re <- predict(
-  pasi_fit_re, type = "response",
-  baseline = distr(qnorm, pasi_ref_re$TE.random, pasi_ref_re$seTE.random)
-)$sims |> 
-  posterior::as_draws_df() |> 
-  pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
-  summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |> 
-  filter(substr(param, 1, 1) != ".") |> 
-  mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
-         endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])"))
 
-results <- results |> bind_rows(data.frame(
-  endpoint = pasi_rd_re$endpoint,
-  type = "network",
-  effects = "random",
-  ref_tx = "Placebo",
-  comp_tx = pasi_rd_re$drug,
-  measure = "rd",
-  mean = pasi_rd_re$mean,
-  lower = pasi_rd_re$lower,
-  upper = pasi_rd_re$upper
-), data.frame(
-  endpoint = pasi_rate_re$endpoint,
-  type = "network",
-  effects = "random",
-  ref_tx = NA,
-  comp_tx = pasi_rate_re$drug,
-  measure = "rate",
-  mean = pasi_rate_re$mean,
-  lower = pasi_rate_re$lower,
-  upper = pasi_rate_re$upper
-))
+results$pasi_re <- nma_results(
+  pasi_fit_re, 
+  pasi_ref_re$TE.random, 
+  pasi_ref_re$seTE.random
+)
 
 # DLQI response NMA ===========================================================
 dlqi_net <- set_agd_arm(
@@ -178,60 +110,20 @@ dlqi_fit_fe <- nma(
   prior_intercept = normal(scale = 100),
   prior_trt = normal(scale = 10),
   prior_aux = flat(),
-  iter = 100
+  iter = niter
 )
+
 dlqi_ref_fe <- metagen(
   TE = mean, 
   seTE = sd, 
   data = as.data.frame(summary(dlqi_fit_fe, pars = "mu"))
 )
-dlqi_rd_fe <- predict(
-  dlqi_fit_fe, type = "response",
-  baseline = distr(qnorm, dlqi_ref_fe$TE.fixed, dlqi_ref_fe$seTE.fixed)
-)$sims |> 
-  posterior::as_draws_df() |> 
-  mutate(across(contains("dlqi50"), \(x) x - `pred[Placebo, dlqi50]`)) |> 
-  mutate(across(contains("dlqi75"), \(x) x - `pred[Placebo, dlqi75]`)) |> 
-  mutate(across(contains("dlqi90"), \(x) x - `pred[Placebo, dlqi90]`)) |> 
-  mutate(across(contains("dlqi100"), \(x) x - `pred[Placebo, dlqi100]`)) |> 
-  pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
-  summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |> 
-  filter(substr(param, 1, 1) != ".") |> 
-  mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
-         endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])")) |> 
-  filter(drug != "Placebo")
-dlqi_rate_fe <- predict(
-  dlqi_fit_fe, type = "response",
-  baseline = distr(qnorm, dlqi_ref_fe$TE.fixed, dlqi_ref_fe$seTE.fixed)
-)$sims |> 
-  posterior::as_draws_df() |> 
-  pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
-  summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |> 
-  filter(substr(param, 1, 1) != ".") |> 
-  mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
-         endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])"))
 
-results <- results |> bind_rows(data.frame(
-  endpoint = dlqi_rd_fe$endpoint,
-  type = "network",
-  effects = "fixed",
-  ref_tx = "Placebo",
-  comp_tx = dlqi_rd_fe$drug,
-  measure = "rd",
-  mean = dlqi_rd_fe$mean,
-  lower = dlqi_rd_fe$lower,
-  upper = dlqi_rd_fe$upper
-), data.frame(
-  endpoint = dlqi_rate_fe$endpoint,
-  type = "network",
-  effects = "fixed",
-  ref_tx = NA,
-  comp_tx = dlqi_rate_fe$drug,
-  measure = "rate",
-  mean = dlqi_rate_fe$mean,
-  lower = dlqi_rate_fe$lower,
-  upper = dlqi_rate_fe$upper
-))
+results$dlqi_fe <- nma_results(
+  dlqi_fit_fe, 
+  dlqi_ref_fe$TE.fixed, 
+  dlqi_ref_fe$seTE.fixed
+)
 
 dlqi_fit_re <- nma(
   dlqi_net,
@@ -240,183 +132,334 @@ dlqi_fit_re <- nma(
   prior_intercept = normal(scale = 100),
   prior_trt = normal(scale = 10),
   prior_aux = flat(),
-  iter = 100
+  iter = niter
 )
+
 dlqi_ref_re <- metagen(
   TE = mean, 
   seTE = sd, 
-  data = as.data.frame(summary(dlqi_fit_fe, pars = "mu"))
+  data = as.data.frame(summary(dlqi_fit_re, pars = "mu"))# Is it correct to average mu?
 )
-dlqi_rd_re <- predict(
-  dlqi_fit_re, type = "response",
-  baseline = distr(qnorm, dlqi_ref_re$TE.random, dlqi_ref_re$seTE.random)
-)$sims |> 
-  posterior::as_draws_df() |> 
-  mutate(across(contains("dlqi50"), \(x) x - `pred[Placebo, dlqi50]`)) |> 
-  mutate(across(contains("dlqi75"), \(x) x - `pred[Placebo, dlqi75]`)) |> 
-  mutate(across(contains("dlqi90"), \(x) x - `pred[Placebo, dlqi90]`)) |> 
-  mutate(across(contains("dlqi100"), \(x) x - `pred[Placebo, dlqi100]`)) |> 
-  pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
-  summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |> 
-  filter(substr(param, 1, 1) != ".") |> 
-  mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
-         endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])")) |> 
-  filter(drug != "Placebo")
-dlqi_rate_re <- predict(
-  dlqi_fit_re, type = "response",
-  baseline = distr(qnorm, dlqi_ref_re$TE.random, dlqi_ref_re$seTE.random)
-)$sims |> 
-  posterior::as_draws_df() |> 
-  pivot_longer(everything(), names_to = "param", values_to = "trace") |> 
-  summarise(.by = param, mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)) |> 
-  filter(substr(param, 1, 1) != ".") |> 
-  mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
-         endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])"))
 
-results <- results |> bind_rows(data.frame(
-  endpoint = dlqi_rd_re$endpoint,
-  type = "network",
-  effects = "random",
-  ref_tx = "Placebo",
-  comp_tx = dlqi_rd_re$drug,
-  measure = "rd",
-  mean = dlqi_rd_re$mean,
-  lower = dlqi_rd_re$lower,
-  upper = dlqi_rd_re$upper
-), data.frame(
-  endpoint = dlqi_rate_re$endpoint,
-  type = "network",
-  effects = "random",
-  ref_tx = NA,
-  comp_tx = dlqi_rate_re$drug,
-  measure = "rate",
-  mean = dlqi_rate_re$mean,
-  lower = dlqi_rate_re$lower,
-  upper = dlqi_rate_re$upper
-))
+results$dlqi_re <- nma_results(
+  dlqi_fit_re, 
+  dlqi_ref_re$TE.random, 
+  dlqi_ref_re$seTE.random
+)
+
+# Absolute PASI NMA ===========================================================
+abs_pasi_data <- data |> 
+  filter(if_any(contains("abs_pasi"), \(x) !is.na(x))) |> 
+  select(ref_id, arm_no, n, drug, timepoint, contains("abs_pasi")) |> 
+  mutate(baseline = if_else(timepoint == 0, "baseline", "follow_up")) |> 
+  pivot_wider(names_from = baseline, 
+              values_from = c(timepoint, abs_pasi_mean, abs_pasi_sd)) |> 
+  mutate(
+    abs_pasi_change_mean = if_else(
+      is.na(abs_pasi_change_mean), 
+      abs_pasi_mean_follow_up - abs_pasi_mean_baseline, abs_pasi_change_mean
+    ),
+    abs_pasi_change_sd = if_else(
+      is.na(abs_pasi_change_sd), 
+      sqrt((abs_pasi_sd_follow_up)^2 + (abs_pasi_sd_baseline)^2 - 2 * 0.5 * abs_pasi_sd_follow_up * abs_pasi_sd_baseline), 
+      abs_pasi_change_sd
+    )
+  ) |> 
+  filter(!is.na(abs_pasi_change_mean) & !is.na(abs_pasi_change_sd))
+
+abs_pasi_net <- set_agd_arm(
+  abs_pasi_data, 
+  study = ref_id,
+  trt = drug,
+  y = abs_pasi_change_mean, 
+  se = abs_pasi_change_sd / sqrt(n),
+  sample_size = n,
+  trt_ref = "Placebo"
+)
+
+abs_pasi_fit_fe <- nma(
+  abs_pasi_net,
+  trt_effects = "fixed",
+  prior_intercept = normal(scale = 100),
+  prior_trt = normal(scale = 10),
+  iter = niter
+)
+
+abs_pasi_ref_fe <- metagen(
+  TE = mean, 
+  seTE = sd, 
+  data = as.data.frame(summary(abs_pasi_fit_fe, pars = "mu"))# Is it correct to average mu?
+)
+
+results$abs_pasi_fe <- nma_results(
+  abs_pasi_fit_fe, 
+  abs_pasi_ref_fe$TE.fixed, 
+  abs_pasi_ref_fe$seTE.fixed,
+  label = "abs_pasi_change"
+)
+
+abs_pasi_fit_re <- nma(
+  abs_pasi_net,
+  trt_effects = "random",
+  prior_intercept = normal(scale = 100),
+  prior_trt = normal(scale = 10),
+  iter = niter
+)
+
+abs_pasi_ref_re <- metagen(
+  TE = mean, 
+  seTE = sd, 
+  data = as.data.frame(summary(abs_pasi_fit_re, pars = "mu"))# Is it correct to average mu?
+)
+
+results$abs_pasi_re <- nma_results(
+  abs_pasi_fit_re, 
+  abs_pasi_ref_re$TE.random, 
+  abs_pasi_ref_re$seTE.random,
+  label = "abs_pasi_change"
+)
+
+# Absolute DLQI NMA ===========================================================
+abs_dlqi_data <- data |> 
+  filter(if_any(contains("abs_dlqi"), \(x) !is.na(x))) |> 
+  select(ref_id, arm_no, n, drug, timepoint, contains("abs_dlqi")) |> 
+  mutate(baseline = if_else(timepoint == 0, "baseline", "follow_up")) |> 
+  pivot_wider(names_from = baseline, 
+              values_from = c(timepoint, abs_dlqi_mean, abs_dlqi_sd)) |> 
+  mutate(
+    abs_dlqi_change_mean = if_else(
+      is.na(abs_dlqi_change_mean), 
+      abs_dlqi_mean_follow_up - abs_dlqi_mean_baseline, abs_dlqi_change_mean
+    ),
+    abs_dlqi_change_sd = if_else(
+      is.na(abs_dlqi_change_sd), 
+      sqrt((abs_dlqi_sd_follow_up)^2 + (abs_dlqi_sd_baseline)^2 - 0.5), abs_dlqi_change_sd # Assumed 0.5 covariance
+    )
+  ) |> 
+  filter(!is.na(abs_dlqi_change_mean) & !is.na(abs_dlqi_change_sd))
+
+abs_dlqi_net <- set_agd_arm(
+  abs_dlqi_data, 
+  study = ref_id,
+  trt = drug,
+  y = abs_dlqi_change_mean, 
+  se = abs_dlqi_change_sd / sqrt(n),
+  sample_size = n,
+  trt_ref = "Placebo"
+)
+
+abs_dlqi_fit_fe <- nma(
+  abs_dlqi_net,
+  trt_effects = "fixed",
+  prior_intercept = normal(scale = 100),
+  prior_trt = normal(scale = 10),
+  iter = niter
+)
+
+abs_dlqi_ref_fe <- metagen(
+  TE = mean, 
+  seTE = sd, 
+  data = as.data.frame(summary(abs_dlqi_fit_fe, pars = "mu"))# Is it correct to average mu?
+)
+
+results$abs_dlqi_fe <- nma_results(
+  abs_dlqi_fit_fe, 
+  abs_dlqi_ref_fe$TE.fixed, 
+  abs_dlqi_ref_fe$seTE.fixed,
+  label = "abs_dlqi_change"
+)
+
+abs_dlqi_fit_re <- nma(
+  abs_dlqi_net,
+  trt_effects = "random",
+  prior_intercept = normal(scale = 100),
+  prior_trt = normal(scale = 10),
+  iter = niter
+)
+
+abs_dlqi_ref_re <- metagen(
+  TE = mean, 
+  seTE = sd, 
+  data = as.data.frame(summary(abs_dlqi_fit_re, pars = "mu"))# Is it correct to average mu?
+)
+
+results$abs_dlqi_re <- nma_results(
+  abs_dlqi_fit_re, 
+  abs_dlqi_ref_re$TE.random, 
+  abs_dlqi_ref_re$seTE.random,
+  label = "abs_dlqi_change"
+)
 
 # Pairwise Meta-Analyses ======================================================
-outcomes <- cbind(
-  c("pasi50", "pasi75", "pasi90", "pasi100", "abs_pasi_change_mean",
-    "dlqi_0_1", "dlqi_0", "sae", "disc_any", "disc_ae", "serious_infection", 
-    "injection_site_rxn", "malignancy"),
-  c("binary", "binary", "binary", "binary", "continuous", "binary", "binary", 
-    "binary", "binary", "binary", "binary", "binary", "binary")
+
+outcomes <- c(
+  "pasi50", "pasi75", "pasi90", "pasi100",
+  "dlqi_0_1", "dlqi_0", 
+  "sae", "disc_any", "disc_ae", "serious_infection", "injection_site_rxn", 
+  "malignancy"
 )
 
-comparisons <- data |>
-  distinct(ref_id, drug) |> arrange(ref_id, drug) |> 
-  inner_join(select(data, ref_id, drug), by = "ref_id",
-             relationship = "many-to-many") |> 
-  filter(drug.x < drug.y) |> 
-  distinct(drug.x, drug.y)
-
-for (i in 1:nrow(outcomes)) {
+# Binary outcomes
+for (i in 1:length(outcomes)) {
   for (j in 1:nrow(comparisons)) {
+    tx <- comparisons[[j, 1]]
+    ref <- comparisons[[j, 2]]
+    outcome <- outcomes[i]
     comp_data <- data |> 
-      mutate(
-        k = .data[[outcomes[i, 1]]], 
-        lab = if_else(drug == comparisons[[j, 1]], 1, 2)
-      ) |> 
-      select(ref_id, lab, n, k) |> 
-      filter(!is.na(k)) |> 
       group_by(ref_id) |> 
-      filter(
-        !is.na(lab),
-        any(lab == 1) & any(lab == 2),
-      ) |> ungroup() |> 
-      summarise(.by = c(ref_id, lab), n = sum(n), k = sum(k)) |> 
-      tidyr::pivot_wider(names_from = lab, values_from = c(n, k))
+      filter(any(drug == tx) & any(drug == ref),
+             drug %in% c(tx, ref)) |> 
+      ungroup() |> 
+      mutate(drug = if_else(drug == tx, "tx", "ref")) |> 
+      select(ref_id, arm_no, drug, n, contains(outcome)) |> 
+      filter(!is.na(.data[[outcome]])) |> 
+      summarise(
+        .by = c(ref_id, drug),
+        k = sum(.data[[outcome]]),
+        n = sum(n),
+      ) |> 
+      pivot_wider(names_from = drug, values_from = c(n, k))
     
-    if(nrow(comp_data) == 0 || n_distinct(comp_data$ref_id) <= 1) next
+    if(nrow(comp_data) <= 1) next
       
-    if (outcomes[i, 2] == "binary") {
-      fit <- metabin(
-        event.e = comp_data$k_1, n.e = comp_data$n_1,event.c = comp_data$k_2, 
-        n.c = comp_data$n_2, sm = "RD"
-      )
-      abs_fit_1 <- metaprop(event = comp_data$k_1, n = comp_data$n_1)
-      abs_fit_2 <- metaprop(event = comp_data$k_2, n = comp_data$n_2)
-    }
-    results <- results |> bind_rows(data.frame(
-      endpoint = outcomes[i, 1],
-      type = "pairwise",
-      effects = "fixed",
-      ref_tx = comparisons[[j, 1]],
-      comp_tx = comparisons[[j, 2]],
-      outcome = "rd",
-      mean = fit$TE.common,
-      lower = fit$lower.common,
-      upper = fit$upper.common
-    ), data.frame(
-      endpoint = outcomes[i, 1],
-      type = "pairwise",
-      effects = "random",
-      ref_tx = comparisons[[j, 1]],
-      comp_tx = comparisons[[j, 2]],
-      outcome = "rd",
-      mean = fit$TE.random,
-      lower = fit$lower.random,
-      upper = fit$upper.random
-    ), data.frame(
-      endpoint = outcomes[i, 1],
-      type = "univariate",
-      effects = "fixed",
-      ref_tx = NA,
-      comp_tx = comparisons[[j, 1]],
-      outcome = "rate",
-      mean = plogis(abs_fit_1$TE.fixed),
-      lower = plogis(abs_fit_1$lower.fixed),
-      upper = plogis(abs_fit_1$upper.fixed)
-    ), data.frame(
-      endpoint = outcomes[i, 1],
-      type = "univariate",
-      effects = "random",
-      ref_tx = NA,
-      comp_tx = comparisons[[j, 1]],
-      outcome = "rate",
-      mean = plogis(abs_fit_1$TE.random),
-      lower = plogis(abs_fit_1$lower.random),
-      upper = plogis(abs_fit_1$upper.random)
-    ), data.frame(
-      endpoint = outcomes[i, 1],
-      type = "univariate",
-      effects = "fixed",
-      ref_tx = NA,
-      comp_tx = comparisons[[j, 2]],
-      outcome = "rate",
-      mean = plogis(abs_fit_2$TE.fixed),
-      lower = plogis(abs_fit_2$lower.fixed),
-      upper = plogis(abs_fit_2$upper.fixed)
-    ), data.frame(
-      endpoint = outcomes[i, 1],
-      type = "univariate",
-      effects = "random",
-      ref_tx = NA,
-      comp_tx = comparisons[[j, 2]],
-      outcome = "rate",
-      mean = plogis(abs_fit_2$TE.random),
-      lower = plogis(abs_fit_2$lower.random),
-      upper = plogis(abs_fit_2$upper.random)
-    ))
-    message(".", appendLF = FALSE)
+    fit <- metabin(
+      event.e = comp_data$k_tx, n.e = comp_data$n_tx,event.c = comp_data$k_ref,
+      n.c = comp_data$n_ref, sm = "RD"
+    )
+    results[[paste(outcome, tx, ref)]] <- nma_results(
+      fit, label = outcome, t = tx, reft = ref
+    )
   }
 }
 
+# Absolute change in PASI
+for (j in 1:nrow(comparisons)) {
+  tx <- comparisons[[j, 1]]
+  ref <- comparisons[[j, 2]]
+  pairwise <- abs_pasi_data |> 
+    group_by(ref_id) |> 
+    filter(any(drug == tx) & any(drug == ref),
+           drug %in% c(tx, ref)) |> 
+    ungroup() |> 
+    mutate(drug = if_else(drug == tx, "tx", "ref")) |> 
+    summarise(
+      .by = c(ref_id, drug),
+      n = sum(n),
+      mu = mean(abs_pasi_change_mean),
+      sd = mean(abs_pasi_change_sd)
+    ) |> 
+    pivot_wider(names_from = drug, values_from = c(mu, sd, n))
+  
+  if (nrow(pairwise) <= 1) next
+  
+  fit <- metacont(
+    n.e = pairwise$n_tx, mean.e = pairwise$mu_tx, sd.e = pairwise$sd_tx,
+    n.c = pairwise$n_ref, mean.c = pairwise$mu_ref, sd.c = pairwise$sd_ref,
+    studlab = pairwise$ref_id, sm = "MD"
+  )
+  
+  results[[paste("abs_pasi_change", tx, ref)]] <- nma_results(
+    fit, label = "abs_pasi_change", t = tx, reft = ref
+  )
+}
 
-# if (spec$kind == "binary")
-#   meta::metabin(event.e = pt$event_a, n.e = pt$n_a,
-#                 event.c = pt$event_b, n.c = pt$n_b,
-#                 studlab = pt$trial, sm = "RR", method = "Inverse",
-#                 method.tau = "REML", common = TRUE, random = TRUE,
-#                 warn = FALSE)
-# else
-#   meta::metacont(n.e = pt$n_a, mean.e = pt$mean_a, sd.e = pt$sd_a,
-#                  n.c = pt$n_b, mean.c = pt$mean_b, sd.c = pt$sd_b,
-#                  studlab = pt$trial, sm = "MD", method.tau = "REML",
-#                  common = TRUE, random = TRUE, warn = FALSE)
+# Absolute change in DLQI
+for (j in 1:nrow(comparisons)) {
+  tx <- comparisons[[j, 1]]
+  ref <- comparisons[[j, 2]]
+  pairwise <- abs_dlqi_data |> 
+    group_by(ref_id) |> 
+    filter(any(drug == tx) & any(drug == ref),
+           drug %in% c(tx, ref)) |> 
+    ungroup() |> 
+    mutate(drug = if_else(drug == tx, "tx", "ref")) |> 
+    summarise(
+      .by = c(ref_id, drug),
+      n = sum(n),
+      mu = mean(abs_dlqi_change_mean),
+      sd = mean(abs_dlqi_change_sd)
+    ) |> 
+    pivot_wider(names_from = drug, values_from = c(mu, sd, n))
+  
+  if (nrow(pairwise) <= 1) next
+  
+  fit <- metacont(
+    n.e = pairwise$n_tx, mean.e = pairwise$mu_tx, sd.e = pairwise$sd_tx,
+    n.c = pairwise$n_ref, mean.c = pairwise$mu_ref, sd.c = pairwise$sd_ref,
+    studlab = pairwise$ref_id, sm = "MD"
+  )
+  
+  results[[paste("abs_dlqi_change", tx, ref)]] <- nma_results(
+    fit, label = "abs_dlqi_change", t = tx, reft = ref
+  )
+}
 
+# Univariate meta-analysis =====================================================
+drugs <- unique(data$drug)
 
-dbWriteTable(con, name = "meta_analysis", value = results, overwrite = TRUE)
+# Binary outcomes
+for (i in 1:length(outcomes)) {
+  for (k in 1:length(drugs)) {
+    univar <- data |> 
+      filter(
+        drug == drugs[k],
+        !is.na(.data[[outcomes[i]]])
+      )
+    
+    if(nrow(univar) <= 1) next
+    
+    fit <- metaprop(univar[[outcomes[i]]], univar$n, studylab = univar$ref_id)
+    results[[paste(outcomes[i], drugs[k])]] <- nma_results(
+      fit, label = outcomes[i], t = drugs[k]
+    )
+  }
+}
 
-dbDisconnect()
+# Absolute change in PASI
+for (k in 1:length(drugs)) {
+  univar <- abs_pasi_data |> 
+    filter(drug == drugs[k])
+  
+  if(nrow(univar) <= 1) next
+  
+  fit <- metagen(
+    TE = univar$abs_pasi_change_mean, 
+    seTE = univar$abs_pasi_change_sd / sqrt(univar$n),
+    studylab = univar$ref_id
+  )
+  
+  results[[paste("abs_change_pasi", drugs[k])]] <- nma_results(
+    fit, label = "abs_change_pasi", t = drugs[k]
+  )
+}
+
+# Absolute change in DLQI
+for (k in 1:length(drugs)) {
+  univar <- abs_dlqi_data |> 
+    filter(drug == drugs[k])
+  
+  if(nrow(univar) <= 1) next
+  
+  fit <- metagen(
+    TE = univar$abs_dlqi_change_mean, 
+    seTE = univar$abs_dlqi_change_sd / sqrt(univar$n),
+    studylab = univar$ref_id
+  )
+  
+  results[[paste("abs_change_dlqi", drugs[k])]] <- nma_results(
+    fit, label = "abs_change_dlqi", t = drugs[k]
+  )
+}
+
+results_table <- bind_rows(results)
+
+dbWriteTable(con, name = "meta_analysis", value = results_table, overwrite = TRUE)
+
+create_view_sql <- "
+  CREATE VIEW v_meta_analysis AS
+  SELECT *
+  FROM meta_analysis
+"
+dbExecute(con, create_view_sql)
+
+dbDisconnect(con)
