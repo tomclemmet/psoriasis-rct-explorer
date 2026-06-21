@@ -1055,24 +1055,36 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
             else (X_MIN_PX + X_MAX_PX) / 2
       kind  <- pooled$kind[i]
       klass <- switch(kind,
-        "FE"     = "ma-pooled-fe",
-        "RE"     = "ma-pooled-re",
-        "NMA-FE" = "ma-pooled-fe",
-        "NMA-RE" = "ma-pooled-re",
+        "FE"       = "ma-pooled-fe",
+        "RE"       = "ma-pooled-re",
+        "NMA-FE"   = "ma-pooled-fe",
+        "NMA-RE"   = "ma-pooled-re",
+        "Pool-FE"  = "ma-pooled-fe",
+        "Pool-RE"  = "ma-pooled-re",
+        "NMA-R-FE" = "ma-pooled-fe",
+        "NMA-R-RE" = "ma-pooled-re",
         "ma-pooled-fe")
       kind_lbl <- switch(kind,
-        "FE"     = "Pairwise estimate (FE)",
-        "RE"     = "Pairwise estimate (RE)",
-        "NMA-FE" = "Network estimate (FE)",
-        "NMA-RE" = "Network estimate (RE)",
+        "FE"       = "Pairwise estimate (FE)",
+        "RE"       = "Pairwise estimate (RE)",
+        "NMA-FE"   = "Network estimate (FE)",
+        "NMA-RE"   = "Network estimate (RE)",
+        "Pool-FE"  = "Pooled estimate (FE)",
+        "Pool-RE"  = "Pooled estimate (RE)",
+        "NMA-R-FE" = "Network estimate (FE)",
+        "NMA-R-RE" = "Network estimate (RE)",
         kind)
       pts    <- forest_diamond_points(xL, xE, xR, yc, 7)
       ci_str <- fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i], ci_digits)
       tt_hdr <- switch(kind,
-        "FE"     = "Common-effect (FE) pairwise estimate",
-        "RE"     = "Random-effects (RE) pairwise estimate",
-        "NMA-FE" = "Network MA common-effect (FE) estimate",
-        "NMA-RE" = "Network MA random-effects (RE) estimate",
+        "FE"       = "Common-effect (FE) pairwise estimate",
+        "RE"       = "Random-effects (RE) pairwise estimate",
+        "NMA-FE"   = "Network MA common-effect (FE) estimate",
+        "NMA-RE"   = "Network MA random-effects (RE) estimate",
+        "Pool-FE"  = "Common-effect (FE) pooled estimate",
+        "Pool-RE"  = "Random-effects (RE) pooled estimate",
+        "NMA-R-FE" = "Network MA common-effect (FE) estimate",
+        "NMA-R-RE" = "Network MA random-effects (RE) estimate",
         kind)
       tt <- sprintf("%s\n%s", tt_hdr, ci_str)
       parts[length(parts) + 1L] <- paste0(
@@ -1399,8 +1411,15 @@ build_forest_inputs <- function(state, tab_id, outcome) {
     }, character(1))
 
     pooled_list <- list()
-    for (kind_pair in list(c("FE", "fixed"), c("RE", "random"))) {
+    for (kind_pair in list(c("Pool-FE", "fixed"), c("Pool-RE", "random"))) {
       r <- fetch_ma(outcome$code, type = "univariate", effects = kind_pair[2],
+                    comp_tx = state$drug, measure = measure_val)
+      if (nrow(r))
+        pooled_list[[kind_pair[1]]] <- data.frame(
+          kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1])
+    }
+    for (kind_pair in list(c("NMA-R-FE", "fixed"), c("NMA-R-RE", "random"))) {
+      r <- fetch_ma(outcome$code, type = "network", effects = kind_pair[2],
                     comp_tx = state$drug, measure = measure_val)
       if (nrow(r))
         pooled_list[[kind_pair[1]]] <- data.frame(
@@ -2099,8 +2118,9 @@ server <- function(input, output, session) {
     }
     eff_scale <- inputs$effective_scale %||% "md"
     stats <- if (!is.null(inputs$pooled) && nrow(inputs$pooled) > 0) {
-      fe <- inputs$pooled[inputs$pooled$kind == "FE", ]
-      re <- inputs$pooled[inputs$pooled$kind == "RE", ]
+      # FE/RE = edge pairwise; Pool-FE/Pool-RE = node univariate
+      fe <- inputs$pooled[inputs$pooled$kind %in% c("FE", "Pool-FE"), ]
+      re <- inputs$pooled[inputs$pooled$kind %in% c("RE", "Pool-RE"), ]
       sm_lbl <- switch(eff_scale, md = "MD", prop = "Proportion", "Effect")
       digits <- if (eff_scale == "prop") 3 else 2
       sprintf("Pooled %s — FE: %s • RE: %s • %d studies",
