@@ -71,11 +71,11 @@ for (i in 1:length(bin_outcomes)) {
       p_tx = k_tx / n_tx,
       p_ref = k_ref / n_ref,
       p_tx_se = sqrt(p_tx * (1 - p_tx) / n_tx),
-      p_ref_se = sqrt(p_ref * (1 - p_ref) / n_tx),
+      p_ref_se = sqrt(p_ref * (1 - p_ref) / n_ref),
       measure = "rd",
       mean = p_tx - p_ref,
-      lower = max(-1, mean - 1.96 * sqrt(p_tx_se^2 + p_ref_se^2)),
-      upper = min(1, mean + 1.96 * sqrt(p_tx_se^2 + p_ref_se^2))
+      lower = pmax(-1, mean - 1.96 * sqrt(p_tx_se^2 + p_ref_se^2)),
+      upper = pmin(1, mean + 1.96 * sqrt(p_tx_se^2 + p_ref_se^2))
     ) |> 
       select(-starts_with("p_"))
   }
@@ -92,8 +92,8 @@ for (i in 1:length(bin_outcomes)) {
       summarise(.by = c(ref_id, drug), n = sum(n), k = sum(.data[[bin_outcomes[i]]])) |> 
       mutate(
         mean = k / n,
-        lower = max(0, mean - 1.96 * sqrt(mean * (1 - mean) / n)),
-        upper = min(1, mean + 1.96 * sqrt(mean * (1 - mean) / n))
+        lower = pmax(0, mean - 1.96 * sqrt(mean * (1 - mean) / n)),
+        upper = pmin(1, mean + 1.96 * sqrt(mean * (1 - mean) / n))
       ) |> 
       rename(n_tx = n, k_tx = k, comp_tx = drug)
       
