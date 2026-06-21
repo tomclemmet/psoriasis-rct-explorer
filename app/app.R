@@ -124,6 +124,9 @@ build_network_data <- function(td, ref_max_n = NA_real_) {
 )
 pubs_by_study <- split(.pub_rows, .pub_rows$study_id)
 
+.study_names <- read_db("SELECT study_id, trial FROM studies")
+trial_name <- setNames(.study_names$trial, as.character(.study_names$study_id))
+
 # Pre-render one citations-HTML string per study_id at startup, then
 # attribute-escape it for embedding in data-citations="...". A trial
 # typically appears in dozens of rows (one per arm × timepoint), so doing
@@ -221,6 +224,17 @@ cites_html_by_study <- vapply(
   pubs_by_study, fmt_citations, character(1)
 )
 cites_html_by_study <- cites_html_by_study[nzchar(cites_html_by_study)]
+
+# Prepend trial name + ref_id header to each popover.
+esc <- htmltools::htmlEscape
+for (sid in names(cites_html_by_study)) {
+  name   <- trial_name[sid] %||% sid
+  header <- sprintf(
+    '<div class="trial-pop-title">%s<span class="trial-pop-refid"> · ref %s</span></div>',
+    esc(name), esc(sid))
+  cites_html_by_study[[sid]] <- paste0(header, cites_html_by_study[[sid]])
+}
+
 studies_with_cites <- names(cites_html_by_study)
 cites_json <- jsonlite::toJSON(as.list(cites_html_by_study), auto_unbox = TRUE)
 
@@ -676,75 +690,58 @@ edges_df <- master_network$edges
 ma_catalog <- list(
   pasi = list(
     response = list(
-      list(code = "pasi50",  label = "PASI 50", scale = "rr"),
-      list(code = "pasi75",  label = "PASI 75", scale = "rr"),
-      list(code = "pasi90",  label = "PASI 90", scale = "rr"),
-      list(code = "pasi100", label = "PASI 100", scale = "rr")
+      list(code = "pasi50",  label = "PASI 50"),
+      list(code = "pasi75",  label = "PASI 75"),
+      list(code = "pasi90",  label = "PASI 90"),
+      list(code = "pasi100", label = "PASI 100")
     ),
     absolute = list(
-      list(code = "abs_pasi_change", label = "Δ from baseline (absolute PASI)",
-           scale = "md", endpoint_group = "pasi_abs")
+      list(code = "abs_pasi_change", label = "Δ from baseline (absolute PASI)")
     )
   ),
   dlqi = list(
     zero = list(
-      list(code = "dlqi_0_1", label = "DLQI 0/1", scale = "rr"),
-      list(code = "dlqi_0",   label = "DLQI 0",   scale = "rr")
+      list(code = "dlqi_0_1", label = "DLQI 0/1"),
+      list(code = "dlqi_0",   label = "DLQI 0")
     ),
     threshold = list(
-      list(code = "dlqi_le5", label = "DLQI ≤ 5", scale = "rr")
+      list(code = "dlqi_le5", label = "DLQI ≤ 5")
     ),
     change = list(
-      list(code = "dlqi_5pt_dec", label = "5+ point decrease", scale = "rr"),
-      list(code = "dlqi_4pt_dec", label = "4+ point decrease", scale = "rr")
+      list(code = "dlqi_5pt_dec", label = "5+ point decrease"),
+      list(code = "dlqi_4pt_dec", label = "4+ point decrease")
     ),
     absolute = list(
-      list(code = "abs_dlqi_change", label = "Δ from baseline (absolute DLQI)",
-           scale = "md", endpoint_group = "dlqi_abs")
+      list(code = "abs_dlqi_change", label = "Δ from baseline (absolute DLQI)")
     )
   ),
   safety = list(
-    sae                = list(list(code = "sae", label = "Any SAE", scale = "rr")),
+    sae                = list(list(code = "sae", label = "Any SAE")),
     disc               = list(
-      list(code = "disc_any", label = "Discontinuation (any)", scale = "rr"),
-      list(code = "disc_ae",  label = "Discontinuation (AE)", scale = "rr")
+      list(code = "disc_any", label = "Discontinuation (any)"),
+      list(code = "disc_ae",  label = "Discontinuation (AE)")
     ),
     serious_infection  = list(
-      list(code = "serious_infection", label = "Serious infection", scale = "rr")
+      list(code = "serious_infection", label = "Serious infection")
     ),
     injection_site_rxn = list(
-      list(code = "injection_site_rxn", label = "Injection-site reaction",
-           scale = "rr")
+      list(code = "injection_site_rxn", label = "Injection-site reaction")
     ),
     malignancy = list(
-      list(code = "malignancy",          label = "Malignancy", scale = "rr"),
-      list(code = "nmsc",                label = "NMSC", scale = "rr"),
-      list(code = "malignancy_non_nmsc", label = "Malignancy (non-NMSC)",
-           scale = "rr")
+      list(code = "malignancy",          label = "Malignancy"),
+      list(code = "nmsc",                label = "NMSC"),
+      list(code = "malignancy_non_nmsc", label = "Malignancy (non-NMSC)")
     )
   )
 )
-
-# Endpoint-group key used inside the MA tables. Defaults to the tab id,
-# overridden by `endpoint_group` on outcomes that live in a different bucket
-# (the absolute-value endpoints).
-ma_endpoint_group <- function(tab_id, outcome) {
-  outcome$endpoint_group %||% tab_id
-}
 
 # Single source of truth for whether the MA build step has been run.
 ma_tables_present <- function() {
   con <- dbConnect(SQLite(), DB_PATH, flags = SQLITE_RO)
   on.exit(dbDisconnect(con), add = TRUE)
-  tabs <- dbListTables(con)
-  all(c("ma_pairwise", "ma_pairwise_trials",
-        "ma_proportion", "ma_proportion_trials") %in% tabs)
+  all(c("meta_analysis", "trial_estimates") %in% dbListTables(con))
 }
 HAS_MA <- ma_tables_present()
-MA_BUILT_AT <- if (HAS_MA) {
-  tryCatch(read_db("SELECT MAX(built_at) AS b FROM ma_pairwise")$b,
-           error = function(e) NA_character_)
-} else NA_character_
 
 # ---------------------------------------------------------------------------
 # Forest-plot helpers. One renderer (`forest_ggiraph`) is reused for all
@@ -908,7 +905,12 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   n_trials  <- nrow(rows)
   n_pooled  <- if (!is.null(pooled)) nrow(pooled) else 0L
 
-  body_h    <- n_trials * ROW_H +
+  # Per-row geometry: optional columns allow paired FE/RE rows (no-filter view).
+  row_heights <- if (!is.null(rows$row_h))     rows$row_h     else rep(ROW_H, n_trials)
+  gaps_above  <- if (!is.null(rows$gap_above)) rows$gap_above else rep(0L,    n_trials)
+
+  trials_body_h <- sum(row_heights) + sum(gaps_above)
+  body_h    <- trials_body_h +
     (if (n_pooled) POOLED_GAP + n_pooled * POOLED_H else 0)
   height    <- HEADER_PAD + body_h + AXIS_PAD + AXIS_LABEL_H + BOTTOM_PAD
 
@@ -921,6 +923,15 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   ref_line <- switch(scale, rr = 1, md = 0, prop = NA_real_)
   plot_bottom <- HEADER_PAD + body_h
   plot_top    <- HEADER_PAD - 4
+
+  # Precompute yc (vertical centre) for each data row.
+  yc_vals <- numeric(n_trials)
+  y_run <- HEADER_PAD
+  for (.i in seq_len(n_trials)) {
+    y_run       <- y_run + gaps_above[.i]
+    yc_vals[.i] <- y_run + row_heights[.i] / 2
+    y_run       <- y_run + row_heights[.i]
+  }
 
   # CI digits: tighter for proportions because they tend to cluster.
   ci_digits <- if (identical(scale, "prop")) 3 else 2
@@ -964,7 +975,8 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   # CI lines that exceed bounds are drawn up to the edge and capped
   # with a triangular "off-scale" arrowhead.
   emit_data_row <- function(yc, est, lo, hi, sz, label_left, ci_text,
-                            tooltip, klass = "ma-square-default") {
+                            tooltip, klass = "ma-square-default",
+                            row_h = ROW_H, badge = "") {
     xL_raw <- xfn(lo); xR_raw <- xfn(hi); xE_raw <- xfn(est)
     # NA-safe helpers: NA/NaN positions mean "no data", treated as in-range.
     finite_or <- function(x, fallback) if (is.finite(x)) x else fallback
@@ -976,13 +988,19 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
     off_left  <- is.finite(xL_raw) && xL_raw < X_MIN_PX
     off_right <- is.finite(xR_raw) && xR_raw > X_MAX_PX
     has_data  <- is.finite(xE_raw)   # hide CI bar + square if estimate is NA
+    # When a badge (FE/RE) is present, shift main label left to make room.
+    label_x <- if (nzchar(badge)) LEFT_MARGIN - 30 else LEFT_MARGIN - 10
     paste0(
       '<g class="ma-row" data-tt="', esc_attr(tooltip), '">',
       sprintf('<text class="ma-rowlabel" x="%g" y="%g">%s</text>',
-              LEFT_MARGIN - 10, yc + 4, esc(label_left)),
+              label_x, yc + 4, esc(label_left)),
+      if (nzchar(badge))
+        sprintf('<text class="ma-rowlabel-sub" x="%g" y="%g">%s</text>',
+                LEFT_MARGIN - 10, yc + 4, esc(badge))
+      else "",
       # Hover catcher: full row, makes it easy to trigger the tooltip.
       sprintf('<rect class="ma-rowhit" x="%g" y="%g" width="%g" height="%g"/>',
-              PLOT_LEFT, yc - ROW_H / 2 + 1, PLOT_W, ROW_H - 2),
+              PLOT_LEFT, yc - row_h / 2 + 1, PLOT_W, row_h - 2),
       if (has_data && xL < xR)
         sprintf('<line class="ma-ci" x1="%g" y1="%g" x2="%g" y2="%g"/>',
                 xL, yc, xR, yc) else "",
@@ -1008,15 +1026,17 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   row_klass <- if (!is.null(rows$klass)) rows$klass
                else rep("ma-square-default", n_trials)
 
+  row_badge <- if (!is.null(rows$badge)) rows$badge else rep("", n_trials)
   for (i in seq_len(n_trials)) {
-    yc <- HEADER_PAD + (i - 0.5) * ROW_H
     parts[length(parts) + 1L] <- emit_data_row(
-      yc, rows$est[i], rows$lo[i], rows$hi[i],
-      sz = square_size[i],
-      label_left = rows$label[i],
-      ci_text    = fmt_ci(rows$est[i], rows$lo[i], rows$hi[i], ci_digits),
-      tooltip    = rows$tooltip[i] %||% rows$label[i],
-      klass      = row_klass[i]
+      yc_vals[i], rows$est[i], rows$lo[i], rows$hi[i],
+      sz          = square_size[i],
+      label_left  = rows$label[i],
+      ci_text     = fmt_ci(rows$est[i], rows$lo[i], rows$hi[i], ci_digits),
+      tooltip     = rows$tooltip[i] %||% rows$label[i],
+      klass       = row_klass[i],
+      row_h       = row_heights[i],
+      badge       = row_badge[i]
     )
   }
 
@@ -1025,7 +1045,7 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   # on the left so pairwise vs network estimates are distinguished by text.
   if (n_pooled) {
     for (i in seq_len(n_pooled)) {
-      yc <- HEADER_PAD + n_trials * ROW_H + POOLED_GAP + (i - 0.5) * POOLED_H
+      yc <- HEADER_PAD + trials_body_h + POOLED_GAP + (i - 0.5) * POOLED_H
 
       xL_raw <- xfn(pooled$lo[i]); xR_raw <- xfn(pooled$hi[i])
       xE_raw <- xfn(pooled$est[i])
@@ -1041,24 +1061,20 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
         "NMA-RE" = "ma-pooled-re",
         "ma-pooled-fe")
       kind_lbl <- switch(kind,
-        "FE"     = "Pooled estimate (FE)",
-        "RE"     = "Pooled estimate (RE)",
+        "FE"     = "Pairwise estimate (FE)",
+        "RE"     = "Pairwise estimate (RE)",
         "NMA-FE" = "Network estimate (FE)",
         "NMA-RE" = "Network estimate (RE)",
         kind)
       pts    <- forest_diamond_points(xL, xE, xR, yc, 7)
       ci_str <- fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i], ci_digits)
       tt_hdr <- switch(kind,
-        "FE"     = "Common-effect (FE) pooled estimate",
-        "RE"     = "Random-effects (RE, REML) pooled estimate",
+        "FE"     = "Common-effect (FE) pairwise estimate",
+        "RE"     = "Random-effects (RE) pairwise estimate",
         "NMA-FE" = "Network MA common-effect (FE) estimate",
-        "NMA-RE" = "Network MA random-effects (RE, REML) estimate",
+        "NMA-RE" = "Network MA random-effects (RE) estimate",
         kind)
-      tt_extra <- if (!is.null(pooled$n_direct) && !is.na(pooled$n_direct[i]))
-        sprintf("%s\nDirect studies: %d", ci_str, pooled$n_direct[i])
-      else
-        ci_str
-      tt <- sprintf("%s\n%s", tt_hdr, tt_extra)
+      tt <- sprintf("%s\n%s", tt_hdr, ci_str)
       parts[length(parts) + 1L] <- paste0(
         sprintf('<g class="ma-pooled %s" data-tt="%s">', klass, esc_attr(tt)),
         sprintf('<text class="ma-rowlabel ma-pooled-label" x="%g" y="%g">%s</text>',
@@ -1114,281 +1130,294 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
 
 # --- Data fetchers used by the modal ---------------------------------------
 
-# Pull a single pairwise MA row + its trial rows. Returns NULL if absent.
-fetch_pairwise <- function(drug_a, drug_b, endpoint_group, outcome_code) {
-  r <- read_db(
-    "SELECT * FROM ma_pairwise
-     WHERE drug_a = ? AND drug_b = ?
-       AND endpoint_group = ? AND outcome_code = ?",
-    params = list(drug_a, drug_b, endpoint_group, outcome_code))
-  if (!nrow(r)) return(NULL)
-  trials <- read_db(
-    "SELECT * FROM ma_pairwise_trials WHERE comparison_id = ?",
-    params = list(r$comparison_id[1]))
-  list(summary = r[1, , drop = FALSE], trials = trials)
+fetch_ma <- function(endpoint, type = NULL, effects = NULL,
+                     comp_tx = NULL, ref_tx = NULL, measure = NULL) {
+  conds  <- "WHERE endpoint = ?"
+  params <- list(endpoint)
+  if (!is.null(type))    { conds <- paste(conds, "AND type = ?");    params <- c(params, list(type)) }
+  if (!is.null(effects)) { conds <- paste(conds, "AND effects = ?"); params <- c(params, list(effects)) }
+  if (!is.null(comp_tx)) { conds <- paste(conds, "AND comp_tx = ?"); params <- c(params, list(comp_tx)) }
+  if (!is.null(ref_tx))  { conds <- paste(conds, "AND ref_tx = ?");  params <- c(params, list(ref_tx)) }
+  if (!is.null(measure)) { conds <- paste(conds, "AND measure = ?"); params <- c(params, list(measure)) }
+  read_db(sprintf("SELECT * FROM v_meta_analysis %s", conds), params = params)
 }
 
-# All drug-vs-placebo MA rows for one outcome (no per-trial detail).
-fetch_drugs_vs_placebo <- function(endpoint_group, outcome_code) {
-  read_db(
-    "SELECT * FROM ma_pairwise
-     WHERE drug_b = 'Placebo' AND endpoint_group = ? AND outcome_code = ?
-     ORDER BY drug_a",
-    params = list(endpoint_group, outcome_code))
+fetch_trials <- function(endpoint, comp_tx = NULL, ref_tx = NULL, measure = NULL) {
+  conds  <- "WHERE endpoint = ?"
+  params <- list(endpoint)
+  if (!is.null(comp_tx)) { conds <- paste(conds, "AND comp_tx = ?"); params <- c(params, list(comp_tx)) }
+  if (!is.null(ref_tx))  { conds <- paste(conds, "AND ref_tx = ?");  params <- c(params, list(ref_tx)) }
+  if (!is.null(measure)) { conds <- paste(conds, "AND measure = ?"); params <- c(params, list(measure)) }
+  read_db(sprintf("SELECT * FROM v_trial_estimates %s", conds), params = params)
 }
 
-# Network meta-analysis: one row per drug-vs-placebo NMA estimate plus
-# network-level heterogeneity / inconsistency stats. Returns a list with
-#   $status   "ok" | "sparse" | "missing"  (missing = network row not found)
-#   $estimates  data frame of drug-vs-placebo rows (empty when sparse/missing)
-#   $summary    one-row data frame of network-level stats
-fetch_nma_vs_placebo <- function(endpoint_group, outcome_code) {
-  n <- read_db(
-    "SELECT * FROM ma_nma WHERE endpoint_group = ? AND outcome_code = ?",
-    params = list(endpoint_group, outcome_code))
-  if (!nrow(n)) return(list(status = "missing"))
-  if (!identical(n$status[1], "ok"))
-    return(list(status = n$status[1], summary = n[1, , drop = FALSE]))
-  est <- read_db(
-    "SELECT e.* FROM ma_nma_estimates e
-      WHERE e.network_id = ? AND e.drug_b = 'Placebo' AND e.drug_a <> 'Placebo'
-      ORDER BY e.drug_a",
-    params = list(n$network_id[1]))
-  list(status = "ok", summary = n[1, , drop = FALSE], estimates = est)
-}
-
-# NMA estimate for a specific drug pair from one network. Returns NULL when
-# the pair isn't in the network or the network is absent/sparse. `flipped`
-# is TRUE when the stored row is drug_b vs drug_a; callers must negate log
-# estimates and swap lo/hi before use.
-fetch_nma_for_pair <- function(drug_a, drug_b, endpoint_group, outcome_code) {
-  n <- read_db(
-    "SELECT * FROM ma_nma WHERE endpoint_group = ? AND outcome_code = ?",
-    params = list(endpoint_group, outcome_code))
-  if (!nrow(n) || !identical(n$status[1], "ok")) return(NULL)
-  nid <- n$network_id[1]
-  for (orient in list(c(drug_a, drug_b), c(drug_b, drug_a))) {
-    e <- read_db(
-      "SELECT * FROM ma_nma_estimates WHERE network_id = ? AND drug_a = ? AND drug_b = ?",
-      params = list(nid, orient[1], orient[2]))
-    if (nrow(e)) {
-      return(list(est     = e[1, , drop = FALSE],
-                  flipped = !identical(orient[1], drug_a),
-                  summary = n[1, , drop = FALSE]))
-    }
-  }
+# Fetch a pairwise MA estimate for (comp, ref), trying both orientations.
+# Returns list(mean, lower, upper) expressed in the (comp→ref) direction,
+# or NULL if not found.
+fetch_ma_directed <- function(endpoint, type, effects, comp, ref, measure) {
+  r <- fetch_ma(endpoint, type = type, effects = effects,
+                comp_tx = comp, ref_tx = ref, measure = measure)
+  if (nrow(r)) return(list(mean = r$mean[1], lower = r$lower[1], upper = r$upper[1]))
+  r <- fetch_ma(endpoint, type = type, effects = effects,
+                comp_tx = ref, ref_tx = comp, measure = measure)
+  if (nrow(r)) return(list(mean = -r$mean[1], lower = -r$upper[1], upper = -r$lower[1]))
   NULL
 }
 
-# Single-arm proportion + per-trial rows for one (drug, outcome).
-fetch_proportion <- function(drug, endpoint_group, outcome_code) {
-  r <- read_db(
-    "SELECT * FROM ma_proportion
-     WHERE drug = ? AND endpoint_group = ? AND outcome_code = ?",
-    params = list(drug, endpoint_group, outcome_code))
-  if (!nrow(r)) return(NULL)
-  trials <- read_db(
-    "SELECT * FROM ma_proportion_trials WHERE proportion_id = ?",
-    params = list(r$proportion_id[1]))
-  list(summary = r[1, , drop = FALSE], trials = trials)
-}
+coalesce0 <- function(x) ifelse(is.na(x), 0L, as.integer(x))
 
 # Translate one MA "outcome spec" + the current filter into a rows/pooled
-# bundle for `forest_ggiraph`. Returns NULL when no data is available.
-build_forest_inputs <- function(state, tab_id, outcome, ma_kind = "RE") {
-  endpoint_group <- ma_endpoint_group(tab_id, outcome)
-  digits <- if (identical(outcome$scale, "md")) 2 else 2
-
-  # Direction semantics. For benefit endpoints (PASI/DLQI responders),
-  # higher = better, so RR > 1 favours drug_a. For harm endpoints (safety),
-  # lower = better, so RR < 1 favours drug_a — directions flip.
-  is_harm <- identical(tab_id, "safety")
-
-  # Axis text presets per scale, refined below for specific filter contexts.
-  axis_label <- switch(outcome$scale,
-                       rr   = "Risk ratio (95% CI, log scale)",
-                       md   = "Mean difference (95% CI)",
-                       prop = "Proportion (95% CI)",
-                       "Effect (95% CI)")
+# bundle for forest_svg. Returns NULL when no data is available.
+build_forest_inputs <- function(state, tab_id, outcome) {
+  is_continuous <- grepl("^abs_", outcome$code)
+  is_harm       <- identical(tab_id, "safety")
 
   if (is.null(state)) {
-    # No filter -> network meta-analysis vs Placebo. One row per drug, single
-    # estimate (FE or RE, controlled by `ma_kind`).
-    nma <- fetch_nma_vs_placebo(endpoint_group, outcome$code)
-    if (identical(nma$status, "missing")) return(NULL)
-    if (identical(nma$status, "sparse")) {
-      return(list(empty_reason = paste0(
-        "Network too sparse for meta-analysis on this outcome ",
-        "(no connected network with Placebo)."),
-        nma_summary = nma$summary))
+    # No filter: one row per drug from the network model.
+    # Comparisons vs Placebo may be stored in either orientation; collect both
+    # and flip signs where Placebo is comp_tx. Falls back to the other effects
+    # model when the preferred one has no data (e.g. rare-event endpoints with
+    # only a fixed-effects network).
+    measure_val <- if (is_continuous) "diff_cfb" else "rd"
+    fetch_network_vs_placebo <- function(eff) {
+      r_direct  <- fetch_ma(outcome$code, type = "network", effects = eff,
+                            measure = measure_val, ref_tx = "Placebo")
+      r_direct  <- r_direct[r_direct$comp_tx != "Placebo", , drop = FALSE]
+      r_flipped <- fetch_ma(outcome$code, type = "network", effects = eff,
+                            measure = measure_val, comp_tx = "Placebo")
+      r_flipped <- r_flipped[r_flipped$ref_tx != "Placebo" &
+                              !is.na(r_flipped$ref_tx) & r_flipped$ref_tx != "",
+                             , drop = FALSE]
+      if (nrow(r_flipped)) {
+        tmp               <- r_flipped$lower
+        r_flipped$lower   <- -r_flipped$upper
+        r_flipped$upper   <- -tmp
+        r_flipped$mean    <- -r_flipped$mean
+        r_flipped$comp_tx <- r_flipped$ref_tx
+        r_flipped$ref_tx  <- "Placebo"
+      }
+      rbind(r_direct, r_flipped)
     }
-    df <- nma$estimates
-    if (!nrow(df)) return(NULL)
-    bt <- function(x) if (identical(outcome$scale, "rr")) exp(x) else x
-    use_re <- identical(ma_kind, "RE")
-    est <- bt(if (use_re) df$te_re else df$te_fe)
-    lo  <- bt(if (use_re) df$lo_re else df$lo_fe)
-    hi  <- bt(if (use_re) df$hi_re else df$hi_fe)
+    df_re <- fetch_network_vs_placebo("random")
+    if (!nrow(df_re)) {
+      return(list(empty_reason =
+        "No random effects network model available for this endpoint."))
+    }
+    df_fe <- fetch_network_vs_placebo("fixed")
+
+    # Keep only drugs present in both models, sort by RE estimate best-first.
+    common <- intersect(df_re$comp_tx, df_fe$comp_tx)
+    df_re  <- df_re[match(common, df_re$comp_tx), , drop = FALSE]
+    df_fe  <- df_fe[match(common, df_fe$comp_tx), , drop = FALSE]
+    ord    <- order(df_re$mean, decreasing = !(is_continuous || is_harm))
+    df_re  <- df_re[ord, , drop = FALSE]
+    df_fe  <- df_fe[ord, , drop = FALSE]
+    n_drugs <- nrow(df_re)
+
+    # Interleave FE (grey) then RE (blue) per drug; add gap between drug pairs.
+    PAIR_H   <- 14L
+    DRUG_GAP <- 8L
+    fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
+    fe_tt <- mapply(function(drug, est, lo, hi)
+      ma_tooltip(sprintf("%s — network estimate (FE)", drug), est, lo, hi, digits = 2),
+      df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper)
+    re_tt <- mapply(function(drug, est, lo, hi)
+      ma_tooltip(sprintf("%s — network estimate (RE)", drug), est, lo, hi, digits = 2),
+      df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper)
     rows <- data.frame(
-      label     = df$drug_a,
-      est       = est, lo = lo, hi = hi,
+      label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
+      badge     = c(rbind(rep("FE", n_drugs), rep("RE", n_drugs))),
+      est       = c(rbind(df_fe$mean,  df_re$mean)),
+      lo        = c(rbind(df_fe$lower, df_re$lower)),
+      hi        = c(rbind(df_fe$upper, df_re$upper)),
       square_n  = NA_real_,
-      klass     = if (use_re) "ma-square-re" else "ma-square-fe",
+      klass     = c(rbind(rep("ma-square-fe", n_drugs),
+                          rep("ma-square-re", n_drugs))),
+      row_h     = PAIR_H,
+      gap_above = c(rbind(fe_gaps, rep(0L, n_drugs))),
+      tooltip   = c(rbind(fe_tt, re_tt)),
       stringsAsFactors = FALSE
     )
-    kind_lbl <- if (use_re) "Random effects" else "Common effect"
-    ns       <- nma$summary
-    i2_str   <- if (!is.na(ns$i2)) sprintf("%.1f%%", 100 * ns$i2) else "n/a"
-    rows$tooltip <- vapply(seq_len(nrow(rows)), function(i) {
-      ma_tooltip(
-        sprintf("%s vs Placebo — NMA pooled (%s)",
-                df$drug_a[i], if (use_re) "RE" else "FE"),
-        rows$est[i], rows$lo[i], rows$hi[i],
-        extra = c(
-          "Direct studies"  = as.character(df$n_direct[i]),
-          "Network studies" = as.character(ns$n_studies),
-          "Network I-squared" = i2_str))
-    }, character(1))
-    if (identical(outcome$scale, "rr")) {
-      if (is_harm) {
-        dir_left  <- "← favours drug"
-        dir_right <- "favours placebo →"
-      } else {
-        dir_left  <- "← favours placebo"
-        dir_right <- "favours drug →"
-      }
-    } else if (identical(outcome$scale, "md")) {
-      # MD: PASI/DLQI lower is better, so MD < 0 favours drug.
+
+    axis_label <- if (is_continuous)
+      "Difference in change from baseline vs Placebo (95% CI)"
+    else
+      "Risk difference vs Placebo (95% CI)"
+
+    if (is_continuous || is_harm) {
       dir_left  <- "← favours drug"
       dir_right <- "favours placebo →"
     } else {
-      dir_left <- dir_right <- NULL
+      dir_left  <- "← favours placebo"
+      dir_right <- "favours drug →"
     }
+
     return(list(rows = rows, pooled = NULL,
+                effective_scale = "md",
                 axis_label = axis_label,
                 dir_left = dir_left, dir_right = dir_right,
-                nma_summary = ns, ma_kind = ma_kind))
+                n_drugs = n_drugs))
   }
+
   if (identical(state$kind, "edge")) {
-    # Edge filter -> per-trial pairwise forest, with FE + RE diamonds.
-    # Order (a, b) so the stored direction is hit: drug_a vs drug_b. We
-    # check both orientations to be tolerant.
-    for (orient in list(c(state$from, state$to), c(state$to, state$from))) {
-      res <- fetch_pairwise(orient[1], orient[2], endpoint_group, outcome$code)
-      if (!is.null(res)) break
+    # Edge filter: per-trial pairwise forest with FE/RE + network diamonds.
+    measure_val <- if (is_continuous) "diff_cfb" else "rd"
+
+    # Determine canonical orientation: pairwise MA preferred (it may not exist
+    # for single-trial drugs), trial estimates as fallback. Both (A,B) and
+    # (B,A) are tried in each case.
+    find_orient <- function(a, b) {
+      r <- fetch_ma(outcome$code, type = "pairwise", effects = "fixed",
+                    comp_tx = a, ref_tx = b, measure = measure_val)
+      if (nrow(r)) return(c(a, b))
+      r <- fetch_trials(outcome$code, comp_tx = a, ref_tx = b,
+                        measure = measure_val)
+      if (nrow(r)) return(c(a, b))
+      NULL
     }
-    if (is.null(res)) return(NULL)
-    s  <- res$summary; t <- res$trials
+    orient <- find_orient(state$from, state$to)
+    if (is.null(orient)) orient <- find_orient(state$to, state$from)
+    if (is.null(orient)) return(NULL)
+    comp <- orient[1]; ref <- orient[2]
+
+    trials <- fetch_trials(outcome$code, comp_tx = comp, ref_tx = ref,
+                           measure = measure_val)
+    if (!nrow(trials)) return(NULL)
+
+    # When one side is Placebo, normalise to drug-vs-Placebo (positive = favours drug).
+    if (identical(comp, "Placebo") && !identical(ref, "Placebo")) {
+      trials$mean  <- -trials$mean
+      tmp          <- trials$lower
+      trials$lower <- -trials$upper
+      trials$upper <- -tmp
+      for (pair in list(c("comp_tx", "ref_tx"), c("n_tx", "n_ref"), c("k_tx", "k_ref"),
+                        c("mean_tx", "mean_ref"), c("sd_tx", "sd_ref"))) {
+        tmp               <- trials[[pair[1]]]
+        trials[[pair[1]]] <- trials[[pair[2]]]
+        trials[[pair[2]]] <- tmp
+      }
+      comp <- trials$comp_tx[1]
+      ref  <- trials$ref_tx[1]
+    }
+
     rows <- data.frame(
-      label = t$trial,
-      est   = t$te, lo = t$lo, hi = t$hi,
-      square_n = t$n_a + t$n_b,
+      label    = trial_name[as.character(trials$ref_id)],
+      est      = trials$mean, lo = trials$lower, hi = trials$upper,
+      square_n = trials$n_tx + coalesce0(trials$n_ref),
       stringsAsFactors = FALSE
     )
-    pooled <- data.frame(
-      kind    = c("FE", "RE"),
-      est     = c(s$te_fe, s$te_re),
-      lo      = c(s$lo_fe, s$lo_re),
-      hi      = c(s$hi_fe, s$hi_re),
-      n_direct = NA_integer_,
-      stringsAsFactors = FALSE
-    )
-    # Append NMA estimate for this pair (both FE and RE) when available.
-    # Orient the lookup against the pairwise display direction (drug_a vs
-    # drug_b) so the NMA estimate matches the per-trial rows, not state$from/to.
-    nma_pair <- tryCatch(
-      fetch_nma_for_pair(s$drug_a, s$drug_b, endpoint_group, outcome$code),
-      error = function(e) NULL)
-    if (!is.null(nma_pair)) {
-      e <- nma_pair$est
-      if (nma_pair$flipped) {
-        # Negate log estimate and swap lo/hi to restore the drug_a→drug_b
-        # direction used by the pairwise rows.
-        nma_pooled <- data.frame(
-          kind    = c("NMA-FE", "NMA-RE"),
-          est     = c(-e$te_fe, -e$te_re),
-          lo      = c(-e$hi_fe, -e$hi_re),
-          hi      = c(-e$lo_fe, -e$lo_re),
-          n_direct = as.integer(e$n_direct),
-          stringsAsFactors = FALSE
-        )
-      } else {
-        nma_pooled <- data.frame(
-          kind    = c("NMA-FE", "NMA-RE"),
-          est     = c(e$te_fe, e$te_re),
-          lo      = c(e$lo_fe, e$lo_re),
-          hi      = c(e$hi_fe, e$hi_re),
-          n_direct = as.integer(e$n_direct),
-          stringsAsFactors = FALSE
-        )
-      }
-      pooled <- rbind(pooled, nma_pooled)
-    }
-    if (identical(outcome$scale, "rr")) {
-      rows$est <- exp(rows$est); rows$lo <- exp(rows$lo); rows$hi <- exp(rows$hi)
-      pooled$est <- exp(pooled$est); pooled$lo <- exp(pooled$lo); pooled$hi <- exp(pooled$hi)
-    }
     rows$tooltip <- vapply(seq_len(nrow(rows)), function(i) {
-      extra <- if (identical(outcome$scale, "rr"))
-        c("Arm A" = sprintf("%d / %d", t$event_a[i], t$n_a[i]),
-          "Arm B" = sprintf("%d / %d", t$event_b[i], t$n_b[i]))
+      t <- trials[i, ]
+      lbl_tx  <- sprintf("%s (events/n)", t$comp_tx)
+      lbl_ref <- sprintf("%s (events/n)", t$ref_tx)
+      if (!is_continuous)
+        ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
+                   extra = setNames(
+                     c(sprintf("%d / %d", t$k_tx, t$n_tx),
+                       sprintf("%d / %d", t$k_ref, t$n_ref)),
+                     c(lbl_tx, lbl_ref)))
       else
-        c("A: mean (SD), n" = sprintf("%.2f (%.2f), %d", t$mean_a[i], t$sd_a[i], t$n_a[i]),
-          "B: mean (SD), n" = sprintf("%.2f (%.2f), %d", t$mean_b[i], t$sd_b[i], t$n_b[i]))
-      ma_tooltip(rows$label[i], rows$est[i], rows$lo[i], rows$hi[i],
-                 extra = extra)
+        ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
+                   extra = setNames(
+                     c(sprintf("%.2f (%.2f), %d", t$mean_tx, t$sd_tx, t$n_tx),
+                       sprintf("%.2f (%.2f), %d", t$mean_ref, t$sd_ref, t$n_ref)),
+                     c(sprintf("%s: mean (SD), n", t$comp_tx),
+                       sprintf("%s: mean (SD), n", t$ref_tx))))
     }, character(1))
-    dir_left  <- dir_right <- NULL
-    if (identical(outcome$scale, "rr")) {
-      if (is_harm) {
-        dir_left  <- sprintf("← favours %s", s$drug_a)
-        dir_right <- sprintf("favours %s →", s$drug_b)
-      } else {
-        dir_left  <- sprintf("← favours %s", s$drug_b)
-        dir_right <- sprintf("favours %s →", s$drug_a)
-      }
-    } else if (identical(outcome$scale, "md")) {
-      # PASI / DLQI absolute scores: lower is better, so a negative MD
-      # (drug_a − drug_b < 0) favours drug_a.
-      dir_left  <- sprintf("← favours %s", s$drug_a)
-      dir_right <- sprintf("favours %s →", s$drug_b)
+
+    # Pooled diamonds: pairwise FE/RE + network FE/RE (all in comp→ref direction).
+    pooled_list <- list()
+    for (kind_pair in list(c("FE", "fixed"), c("RE", "random"))) {
+      r <- fetch_ma_directed(outcome$code, "pairwise", kind_pair[2],
+                             comp, ref, measure_val)
+      if (!is.null(r))
+        pooled_list[[kind_pair[1]]] <- data.frame(
+          kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper)
     }
+    for (kind_pair in list(c("NMA-FE", "fixed"), c("NMA-RE", "random"))) {
+      r <- fetch_ma_directed(outcome$code, "network", kind_pair[2],
+                             comp, ref, measure_val)
+      if (!is.null(r))
+        pooled_list[[kind_pair[1]]] <- data.frame(
+          kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper)
+    }
+    pooled <- if (length(pooled_list)) do.call(rbind, pooled_list) else NULL
+
+    dir_left <- dir_right <- NULL
+    if (!is_continuous && is_harm) {
+      dir_left  <- sprintf("← favours %s", comp)
+      dir_right <- sprintf("favours %s →", ref)
+    } else if (!is_continuous) {
+      dir_left  <- sprintf("← favours %s", ref)
+      dir_right <- sprintf("favours %s →", comp)
+    } else {
+      # Continuous: lower CFB difference favours comp (less change = better?
+      # Actually lower PASI/DLQI is better so more negative diff_cfb favours comp).
+      dir_left  <- sprintf("← favours %s", comp)
+      dir_right <- sprintf("favours %s →", ref)
+    }
+
     return(list(rows = rows, pooled = pooled,
-                comparison = sprintf("%s vs %s", s$drug_a, s$drug_b),
-                axis_label = axis_label,
+                effective_scale = "md",
+                comparison = sprintf("%s vs %s", comp, ref),
+                axis_label = if (!is_continuous)
+                  "Risk difference (95% CI)"
+                else
+                  "Mean difference in change from baseline (95% CI)",
                 dir_left = dir_left, dir_right = dir_right))
   }
+
   if (identical(state$kind, "node")) {
-    # Node filter -> single-arm proportion (binary outcomes only).
-    if (!identical(outcome$scale, "rr")) return(NULL)
-    res <- fetch_proportion(state$drug, endpoint_group, outcome$code)
-    if (is.null(res)) return(NULL)
-    s <- res$summary; t <- res$trials
+    # Node filter: per-trial single-arm estimates with univariate pooled.
+    measure_val <- if (is_continuous) "cfb" else "rate"
+    eff_scale   <- if (is_continuous) "md" else "prop"
+
+    trials <- fetch_trials(outcome$code, comp_tx = state$drug,
+                           measure = measure_val)
+    if (!nrow(trials)) return(NULL)
+
+    digits <- if (eff_scale == "prop") 3 else 2
     rows <- data.frame(
-      label = t$trial,
-      est   = t$p, lo = t$lo, hi = t$hi,
-      square_n = t$n,
+      label    = trial_name[as.character(trials$ref_id)],
+      est      = trials$mean, lo = trials$lower, hi = trials$upper,
+      square_n = trials$n_tx,
       stringsAsFactors = FALSE
     )
     event_lbl <- if (is_harm) "Events" else "Responders"
-    rows$tooltip <- vapply(seq_len(nrow(rows)), function(i)
-      ma_tooltip(rows$label[i], rows$est[i], rows$lo[i], rows$hi[i],
-                 extra = c(setNames(sprintf("%d / %d", t$k[i], t$n[i]),
-                                    event_lbl)),
-                 digits = 3),
-      character(1))
-    pooled <- data.frame(
-      kind = c("FE", "RE"),
-      est  = c(s$te_fe, s$te_re),
-      lo   = c(s$lo_fe, s$lo_re),
-      hi   = c(s$hi_fe, s$hi_re),
-      stringsAsFactors = FALSE
-    )
-    # Proportions are already back-transformed in storage; force linear scale.
+    rows$tooltip <- vapply(seq_len(nrow(rows)), function(i) {
+      t <- trials[i, ]
+      if (!is_continuous)
+        ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
+                   extra = c(setNames(sprintf("%d / %d", t$k_tx, t$n_tx),
+                                      event_lbl)),
+                   digits = digits)
+      else
+        ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
+                   extra = c("Mean (SD), n" = sprintf("%.2f (%.2f), %d",
+                                                       t$mean_tx, t$sd_tx, t$n_tx)),
+                   digits = digits)
+    }, character(1))
+
+    pooled_list <- list()
+    for (kind_pair in list(c("FE", "fixed"), c("RE", "random"))) {
+      r <- fetch_ma(outcome$code, type = "univariate", effects = kind_pair[2],
+                    comp_tx = state$drug, measure = measure_val)
+      if (nrow(r))
+        pooled_list[[kind_pair[1]]] <- data.frame(
+          kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1])
+    }
+    pooled <- if (length(pooled_list)) do.call(rbind, pooled_list) else NULL
+
     prop_lbl <- if (is_harm) "Event rate" else "Response rate"
-    return(list(rows = rows, pooled = pooled, drug = state$drug,
-                effective_scale = "prop",
-                axis_label = sprintf("%s, %s (95%% CI)", prop_lbl, state$drug),
+    axis_label <- if (is_continuous)
+      sprintf("Change from baseline (95%% CI), %s", state$drug)
+    else
+      sprintf("%s, %s (95%% CI)", prop_lbl, state$drug)
+
+    return(list(rows = rows, pooled = pooled,
+                effective_scale = eff_scale,
+                drug = state$drug,
+                axis_label = axis_label,
                 dir_left = NULL, dir_right = NULL))
   }
   NULL
@@ -1638,6 +1667,11 @@ ui <- fluidPage(
       box-shadow: 0 4px 16px rgba(0,0,0,0.12);
       padding: 10px 14px; font-size: 13px; line-height: 1.45; color: #222;
     }
+    #trial-popover .trial-pop-title {
+      font-weight: 600; font-size: 13px; margin-bottom: 8px;
+      padding-bottom: 6px; border-bottom: 1px solid #e0e4ea;
+    }
+    #trial-popover .trial-pop-refid { font-weight: 400; color: #7f8fa6; }
     #trial-popover .trial-cite { margin-bottom: 8px; }
     #trial-popover .trial-cite:last-child { margin-bottom: 0; }
     #trial-popover a { color: #1F4E8C; word-break: break-all; }
@@ -1666,34 +1700,6 @@ ui <- fluidPage(
                                margin-bottom: 6px; }
     .ma-modal .ma-empty { color: #5a6478; font-style: italic;
                           padding: 12px 0; }
-    /* FE/RE toggle row (no-filter NMA view only). */
-    .ma-modal .ma-toggle-row {
-      display: flex; align-items: center; gap: 12px;
-      margin: 4px 0 16px 0; padding: 7px 12px;
-      background: #f6f7f9; border: 1px solid #e3e6ea; border-radius: 6px;
-    }
-    .ma-modal .ma-toggle-label {
-      font-size: 12px; font-weight: 600; color: #5a6478;
-      white-space: nowrap; flex: 0 0 auto; line-height: 1;
-    }
-    /* Strip Bootstrap's default form-group bottom margin so flex alignment works */
-    .ma-modal .ma-toggle-row .shiny-input-container {
-      margin-bottom: 0; flex: 0 0 auto;
-    }
-    .ma-modal .ma-toggle-row .shiny-options-group {
-      display: flex; flex-direction: row; align-items: center;
-      gap: 0 16px; margin: 0;
-    }
-    .ma-modal .ma-toggle-row .radio-inline {
-      font-size: 13px; color: #1a1f2c;
-      margin: 0; padding-left: 0; line-height: 1;
-    }
-    .ma-modal .ma-toggle-row .radio-inline input[type=radio] {
-      margin: 0 5px 0 0; vertical-align: middle;
-      position: relative; top: -1px;
-    }
-    .ma-modal .ma-footer-meta { font-size: 12px; color: #888;
-                                margin-right: auto; }
     /* Inline-SVG forest plot styling. All forest plots share these rules;
        the SVG content itself is produced by forest_svg() (no ggplot). */
     .ma-forest { display: block; max-width: 100%; height: auto;
@@ -1707,6 +1713,8 @@ ui <- fluidPage(
                                 text-anchor: middle; }
     .ma-forest .ma-rowlabel  { fill: #1a1f2c; font-size: 12px;
                                 text-anchor: end; }
+    .ma-forest .ma-rowlabel-sub { fill: #7f8fa6; font-size: 10px;
+                                   text-anchor: end; font-style: italic; }
     .ma-forest .ma-ci        { stroke: #5a6478; stroke-width: 1.2; }
     .ma-forest .ma-ci-arrow  { fill: #5a6478; stroke: none; }
     .ma-forest .ma-square    { stroke: none; }
@@ -2072,11 +2080,10 @@ server <- function(input, output, session) {
   ma_ctx <- reactiveValues(active = FALSE, tab_id = NULL, state = NULL,
                            gid = NULL, outcomes = NULL, state_lbl = NULL,
                            group_lbl = NULL)
-  ma_kind_state <- reactiveValues()  # per-tab last-selected ("RE"/"FE")
 
   # Build a single plot block for one outcome under the active state.
-  build_plot_block <- function(state, tab_id, outc, ma_kind) {
-    inputs <- tryCatch(build_forest_inputs(state, tab_id, outc, ma_kind),
+  build_plot_block <- function(state, tab_id, outc) {
+    inputs <- tryCatch(build_forest_inputs(state, tab_id, outc),
                        error = function(e) NULL)
     if (is.null(inputs)) {
       return(div(class = "ma-plot-block",
@@ -2090,29 +2097,22 @@ server <- function(input, output, session) {
                  div(class = "ma-plot-title", outc$label),
                  div(class = "ma-empty", inputs$empty_reason)))
     }
-    eff_scale <- inputs$effective_scale %||% outc$scale
-    stats <- if (!is.null(inputs$pooled)) {
+    eff_scale <- inputs$effective_scale %||% "md"
+    stats <- if (!is.null(inputs$pooled) && nrow(inputs$pooled) > 0) {
       fe <- inputs$pooled[inputs$pooled$kind == "FE", ]
       re <- inputs$pooled[inputs$pooled$kind == "RE", ]
-      sm_lbl <- switch(eff_scale, rr = "RR", md = "MD", prop = "Proportion")
+      sm_lbl <- switch(eff_scale, md = "MD", prop = "Proportion", "Effect")
       digits <- if (eff_scale == "prop") 3 else 2
       sprintf("Pooled %s — FE: %s • RE: %s • %d studies",
               sm_lbl,
-              fmt_ci(fe$est, fe$lo, fe$hi, digits),
-              fmt_ci(re$est, re$lo, re$hi, digits),
+              if (nrow(fe)) fmt_ci(fe$est, fe$lo, fe$hi, digits) else "n/a",
+              if (nrow(re)) fmt_ci(re$est, re$lo, re$hi, digits) else "n/a",
               nrow(inputs$rows))
-    } else if (!is.null(inputs$nma_summary)) {
-      ns <- inputs$nma_summary
-      kind_lbl <- if (identical(ma_kind, "FE")) "fixed effects"
-                  else "random effects (REML)"
-      i2_str <- if (!is.na(ns$i2)) sprintf("%.1f%%", 100 * ns$i2) else "n/a"
-      pinc <- if (!is.na(ns$p_inc)) sprintf("%.2f", ns$p_inc) else "n/a"
-      sprintf("Network MA, %s — %d studies, %d treatments • I² = %s • inconsistency p = %s",
-              kind_lbl, ns$n_studies, ns$n_treatments, i2_str, pinc)
+    } else if (!is.null(inputs$n_drugs)) {
+      sprintf("Network MA, FE + RE — %d drugs", inputs$n_drugs)
     } else {
-      sprintf("%d %s",
-              nrow(inputs$rows),
-              if (is.null(state)) "drugs" else "rows")
+      sprintf("%d %s", nrow(inputs$rows),
+              if (is.null(state)) "drugs" else "studies")
     }
     svg_html <- forest_svg(inputs$rows, inputs$pooled, scale = eff_scale,
                            axis_label = inputs$axis_label,
@@ -2124,21 +2124,13 @@ server <- function(input, output, session) {
         HTML(svg_html))
   }
 
-  # Reactively rendered plot area. Driven by ma_ctx (set on modal open) and
-  # input$ma_kind (toggle). Edge/node views ignore ma_kind.
+  # Reactively rendered plot area. Driven by ma_ctx (set on modal open).
   output$ma_plot_area <- renderUI({
     req(ma_ctx$active, ma_ctx$tab_id, ma_ctx$gid, ma_ctx$outcomes)
     tab_id   <- ma_ctx$tab_id
     state    <- ma_ctx$state
     outcomes <- ma_ctx$outcomes
-    ma_kind  <- input$ma_kind %||% (ma_kind_state[[tab_id]] %||% "RE")
-    lapply(outcomes, function(outc) build_plot_block(state, tab_id, outc, ma_kind))
-  })
-
-  # Persist toggle selection per tab across modal opens.
-  observeEvent(input$ma_kind, {
-    if (!is.null(ma_ctx$tab_id) && nzchar(input$ma_kind))
-      ma_kind_state[[ma_ctx$tab_id]] <- input$ma_kind
+    lapply(outcomes, function(outc) build_plot_block(state, tab_id, outc))
   })
 
   open_ma_modal <- function(tab_id) {
@@ -2185,35 +2177,14 @@ server <- function(input, output, session) {
     ma_ctx$group_lbl <- group_lbl
     ma_ctx$active    <- TRUE
 
-    summary_text <- if (is.null(state))
-      sprintf("%s | endpoint group: %s | toggle FE/RE below",
-              state_lbl, group_lbl)
-    else
-      sprintf("%s | endpoint group: %s | both common (FE) and random (RE, REML) pooled estimates shown",
-              state_lbl, group_lbl)
-
-    toggle_ui <- if (is.null(state)) {
-      cur_kind <- ma_kind_state[[tab_id]] %||% "RE"
-      div(class = "ma-toggle-row",
-          tags$span(class = "ma-toggle-label", "Network model:"),
-          radioButtons("ma_kind", label = NULL,
-                       choices = c("Random effects" = "RE",
-                                   "Fixed effects"  = "FE"),
-                       selected = cur_kind, inline = TRUE))
-    } else NULL
+    summary_text <- sprintf("%s | endpoint group: %s", state_lbl, group_lbl)
 
     showModal(modalDialog(
       title = tagList(icon("chart-column"), " Meta-analysis"),
       easyClose = TRUE, size = "l", class = "ma-modal",
-      footer = tagList(
-        span(class = "ma-footer-meta",
-             if (!is.na(MA_BUILT_AT)) sprintf("Built: %s UTC", MA_BUILT_AT)
-             else "Built: unknown"),
-        modalButton("Close")
-      ),
+      footer = modalButton("Close"),
       div(
         div(class = "ma-summary", summary_text),
-        toggle_ui,
         uiOutput("ma_plot_area")
       )
     ))
