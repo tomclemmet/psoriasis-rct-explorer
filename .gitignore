@@ -5,6 +5,7 @@
 *.sqlite
 *.sqlite3
 *.db
+*.RDS
 
 # R
 .Rhistory

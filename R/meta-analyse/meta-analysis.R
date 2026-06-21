@@ -6,8 +6,9 @@ library(stringr)
 library(multinma)
 library(meta)
 options(mc.cores = parallel::detectCores())
-
 source("R/meta-analyse/ma-utils.R")
+
+# Extract data =================================================================
 
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 dbListTables(con)
@@ -36,9 +37,13 @@ data <- dbGetQuery(con, query) |>
 drugs <- unique(data$drug)
 comparisons <- as.data.frame(t(combn(drugs, 2)))
 results <- list()
+loadRDS
 niter <- 2000
 
-# pasi Response NMA ===========================================================
+# Network meta-analyses ========================================================
+
+## PASI Response ---------------------------------------------------------------
+
 pasi_net <- set_agd_arm(
   filter(data, !if_all(pasi50:pasi100, \(x) is.na(x))),
   study = ref_id,
@@ -93,7 +98,8 @@ results$pasi_re <- nma_results(
   pasi_ref_re$seTE.random
 )
 
-# DLQI response NMA ===========================================================
+## DLQI response ---------------------------------------------------------------
+
 dlqi_net <- set_agd_arm(
   filter(data, !if_all(dlqi_0_1:dlqi_0, \(x) is.na(x))),
   study = ref_id,
@@ -147,7 +153,8 @@ results$dlqi_re <- nma_results(
   dlqi_ref_re$seTE.random
 )
 
-# Absolute PASI NMA ===========================================================
+## Absolute change in PASI -----------------------------------------------------
+
 abs_pasi_data <- data |> 
   filter(if_any(contains("abs_pasi"), \(x) !is.na(x))) |> 
   select(ref_id, arm_no, n, drug, timepoint, contains("abs_pasi")) |> 
@@ -219,7 +226,8 @@ results$abs_pasi_re <- nma_results(
   label = "abs_pasi_change"
 )
 
-# Absolute DLQI NMA ===========================================================
+## Absolute change in DLQI -----------------------------------------------------
+
 abs_dlqi_data <- data |> 
   filter(if_any(contains("abs_dlqi"), \(x) !is.na(x))) |> 
   select(ref_id, arm_no, n, drug, timepoint, contains("abs_dlqi")) |> 
@@ -233,7 +241,7 @@ abs_dlqi_data <- data |>
     ),
     abs_dlqi_change_sd = if_else(
       is.na(abs_dlqi_change_sd), 
-      sqrt((abs_dlqi_sd_follow_up)^2 + (abs_dlqi_sd_baseline)^2 - 0.5), abs_dlqi_change_sd # Assumed 0.5 covariance
+      sqrt((abs_dlqi_sd_follow_up)^2 + (abs_dlqi_sd_baseline)^2 - 2 * 0.5 * abs_dlqi_sd_follow_up * abs_dlqi_sd_baseline), abs_dlqi_change_sd # Assumed 0.5 covariance
     )
   ) |> 
   filter(!is.na(abs_dlqi_change_mean) & !is.na(abs_dlqi_change_sd))
@@ -290,7 +298,69 @@ results$abs_dlqi_re <- nma_results(
   label = "abs_dlqi_change"
 )
 
-# Pairwise Meta-Analyses ======================================================
+## Binary outcomes -------------------------------------------------------------
+
+bin_outcomes <- c(
+  "sae", "disc_any", "disc_ae", "serious_infection", "injection_site_rxn", 
+  "malignancy"
+)
+
+for (i in 1:length(bin_outcomes)) {
+  bin_net <- set_agd_arm(
+    filter(data, !is.na(.data[[bin_outcomes[i]]])),
+    study = ref_id,
+    trt = drug,
+    r = .data[[bin_outcomes[i]]],
+    n = n,
+    trt_ref = "Placebo"
+  )
+  
+  bin_fit_fe <- nma(
+    bin_net,
+    trt_effects = "fixed",
+    prior_intercept = normal(scale = 100),
+    prior_trt = normal(scale = 10),
+    iter = niter
+  )
+  
+  bin_ref_fe <- metagen(
+    TE = mean, 
+    seTE = sd, 
+    data = as.data.frame(summary(bin_fit_fe, pars = "mu"))
+  )
+  
+  results[[paste(bin_outcomes[i], "fe")]] <- nma_results(
+    bin_fit_fe, 
+    bin_ref_fe$TE.fixed, 
+    bin_ref_fe$seTE.fixed,
+    label = bin_outcomes[i]
+  )
+  
+  # Random effects
+  bin_fit_re <- nma(
+    bin_net,
+    trt_effects = "random",
+    prior_intercept = normal(scale = 100),
+    prior_trt = normal(scale = 10),
+    prior_het = half_normal(scale = 5),
+    iter = niter
+  )
+  
+  bin_ref_re <- metagen(
+    TE = mean, 
+    seTE = sd, 
+    data = as.data.frame(summary(bin_fit_re, pars = "mu"))
+  )
+  
+  results$bin_re <- nma_results(
+    bin_fit_re, 
+    bin_ref_re$TE.random, 
+    bin_ref_re$seTE.random,
+    label = bin_outcomes[i]
+  )
+}
+
+# Pairwise Meta-Analyses =======================================================
 
 outcomes <- c(
   "pasi50", "pasi75", "pasi90", "pasi100",
@@ -299,7 +369,8 @@ outcomes <- c(
   "malignancy"
 )
 
-# Binary outcomes
+## Binary outcomes -------------------------------------------------------------
+
 for (i in 1:length(outcomes)) {
   for (j in 1:nrow(comparisons)) {
     tx <- comparisons[[j, 1]]
@@ -332,7 +403,8 @@ for (i in 1:length(outcomes)) {
   }
 }
 
-# Absolute change in PASI
+## Absolute change in PASI -----------------------------------------------------
+
 for (j in 1:nrow(comparisons)) {
   tx <- comparisons[[j, 1]]
   ref <- comparisons[[j, 2]]
@@ -363,7 +435,7 @@ for (j in 1:nrow(comparisons)) {
   )
 }
 
-# Absolute change in DLQI
+## Absolute change in DLQI -----------------------------------------------------
 for (j in 1:nrow(comparisons)) {
   tx <- comparisons[[j, 1]]
   ref <- comparisons[[j, 2]]
@@ -395,9 +467,10 @@ for (j in 1:nrow(comparisons)) {
 }
 
 # Univariate meta-analysis =====================================================
+
 drugs <- unique(data$drug)
 
-# Binary outcomes
+## Binary outcomes -------------------------------------------------------------
 for (i in 1:length(outcomes)) {
   for (k in 1:length(drugs)) {
     univar <- data |> 
@@ -415,7 +488,7 @@ for (i in 1:length(outcomes)) {
   }
 }
 
-# Absolute change in PASI
+## Absolute change in PASI -----------------------------------------------------
 for (k in 1:length(drugs)) {
   univar <- abs_pasi_data |> 
     filter(drug == drugs[k])
@@ -433,7 +506,7 @@ for (k in 1:length(drugs)) {
   )
 }
 
-# Absolute change in DLQI
+## Absolute change in DLQI -----------------------------------------------------
 for (k in 1:length(drugs)) {
   univar <- abs_dlqi_data |> 
     filter(drug == drugs[k])
@@ -451,6 +524,8 @@ for (k in 1:length(drugs)) {
   )
 }
 
+# Write results ================================================================
+
 results_table <- bind_rows(results)
 
 dbWriteTable(con, name = "meta_analysis", value = results_table, overwrite = TRUE)
@@ -463,3 +538,4 @@ create_view_sql <- "
 dbExecute(con, create_view_sql)
 
 dbDisconnect(con)
+saveRDS(results, "R/meta-analyse/ma-results.rds")
