@@ -37,7 +37,7 @@ data <- dbGetQuery(con, query) |>
 drugs <- unique(data$drug)
 comparisons <- as.data.frame(t(combn(drugs, 2)))
 results <- list()
-loadRDS
+results <- readRDS("R/meta-analyse/ma-results.rds")
 niter <- 2000
 
 # Network meta-analyses ========================================================
@@ -352,12 +352,13 @@ for (i in 1:length(bin_outcomes)) {
     data = as.data.frame(summary(bin_fit_re, pars = "mu"))
   )
   
-  results$bin_re <- nma_results(
+  results[[paste(bin_outcomes[i], "re")]] <- nma_results(
     bin_fit_re, 
     bin_ref_re$TE.random, 
     bin_ref_re$seTE.random,
     label = bin_outcomes[i]
   )
+  message(bin_outcomes[i])
 }
 
 # Pairwise Meta-Analyses =======================================================
