@@ -83,7 +83,7 @@ for (i in 1:length(bin_outcomes)) {
 
 for (i in 1:length(bin_outcomes)) {
   for (k in 1:length(drugs)) {
-    drug_data <- data |> 
+    results[[paste(bin_outcomes[i], drugs[k])]] <- data |> 
       filter(
         !is.na(.data[[bin_outcomes[i]]]),
         drug == drugs[k]
@@ -95,7 +95,8 @@ for (i in 1:length(bin_outcomes)) {
         lower = pmax(0, mean - 1.96 * sqrt(mean * (1 - mean) / n)),
         upper = pmin(1, mean + 1.96 * sqrt(mean * (1 - mean) / n))
       ) |> 
-      rename(n_tx = n, k_tx = k, comp_tx = drug)
+      rename(n_tx = n, k_tx = k, comp_tx = drug) |> 
+      mutate(endpoint = bin_outcomes[i], measure = "rate")
       
   }
 }
