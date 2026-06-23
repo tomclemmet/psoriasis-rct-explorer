@@ -92,8 +92,14 @@ for (i in 1:length(bin_outcomes)) {
       summarise(.by = c(ref_id, drug), n = sum(n), k = sum(.data[[bin_outcomes[i]]])) |> 
       mutate(
         mean = k / n,
-        lower = pmax(0, mean - 1.96 * sqrt(mean * (1 - mean) / n)),
-        upper = pmin(1, mean + 1.96 * sqrt(mean * (1 - mean) / n))
+        lower = pmax(0, if_else(
+          mean == 0,
+          0,
+          mean - 1.96 * sqrt(mean * (1 - mean) / n))),
+        upper = pmin(1, if_else(
+          mean == 0,
+          1 - 0.025^(1/n),
+          mean + 1.96 * sqrt(mean * (1 - mean) / n)))
       ) |> 
       rename(n_tx = n, k_tx = k, comp_tx = drug) |> 
       mutate(endpoint = bin_outcomes[i], measure = "rate")
@@ -154,7 +160,7 @@ for (j in 1:nrow(comparisons)) {
   
   results[[paste("abs_pasi_change", tx, ref)]] <- comp_data |> 
     mutate(measure = "diff_cfb", endpoint = "abs_pasi_change",
-           mean = mean_tx - mean_ref, se = sqrt((sd_ref^2 + sd_tx^2) / (n_ref + n_tx)),
+           mean = mean_tx - mean_ref, se = sqrt(sd_ref^2/n_ref + sd_tx^2/n_tx),
            lower = mean - 1.96 * se, upper = mean + 1.96 * se) |> 
     rename(comp_tx = comp_tx_tx, ref_tx = comp_tx_ref) |> select(-se)
 }
@@ -208,9 +214,9 @@ for (j in 1:nrow(comparisons)) {
   if(nrow(comp_data) == 0) next
   
   results[[paste("abs_dlqi_change", tx, ref)]] <- comp_data |> 
-    mutate(measure = "diff_cfb", endpoint = "abs_pasi_change",
-           mean = mean_tx - mean_ref, se = sqrt((sd_ref^2 + sd_tx^2) / (n_ref + n_tx)),
-           lower = mean - 1.96 * se, upper = mean + 1.96 * se) |> 
+    mutate(measure = "diff_cfb", endpoint = "abs_dlqi_change",
+           mean = mean_tx - mean_ref, se = sqrt(sd_ref^2/n_ref + sd_tx^2/n_tx),
+           lower = mean - 1.96 * se, upper = mean + 1.96 * se) |>
     rename(comp_tx = comp_tx_tx, ref_tx = comp_tx_ref) |> select(-se)
 }
 
@@ -223,6 +229,7 @@ create_view_sql <- "
   SELECT *
   FROM trial_estimates
 "
+dbExecute(con, "DROP VIEW IF EXISTS v_trial_estimates")
 dbExecute(con, create_view_sql)
 
 dbDisconnect(con)

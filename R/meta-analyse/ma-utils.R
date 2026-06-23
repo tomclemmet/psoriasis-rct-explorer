@@ -1,4 +1,4 @@
-nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
+nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
   
   results <- list()
   
@@ -8,7 +8,8 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
       # Generate MCMC trace for response rates
       rates <- predict(
           m, type = "response",
-          baseline = distr(qnorm, base_mean, base_se),
+          baseline = base_dist,
+          baseline_type = "response",
           summary = FALSE
         )$sims |> 
         posterior::as_draws_df() |>
@@ -25,6 +26,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
       ) |> 
         mutate(
           type = "network",
+          method = "multinomial",
           effects = m$trt_effects,
           comp_tx = drug,
           ref_tx = NA,
@@ -45,6 +47,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
           mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
         ) |> mutate(
           type = "network",
+          method = "multinomial",
           effects = m$trt_effects,
           ref_tx = comparisons[i,2],
           comp_tx = comparisons[i,1],
@@ -54,8 +57,9 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
     } else if(m$likelihood == "normal") {
       rates <- predict(
         m, type = "response",
-        baseline = distr(qnorm, base_mean, base_se),
-        summary = FALSE
+        baseline = base_dist,
+        summary = FALSE,
+        baseline_type = "response"
       )$sims |> 
         posterior::as_draws_df() |>
         # Convert to long format
@@ -70,6 +74,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
       ) |> 
         mutate(
           type = "network",
+          method = "normal",
           endpoint = label,
           effects = m$trt_effects,
           ref_tx = NA,
@@ -90,6 +95,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
           mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
         ) |> mutate(
           type = "network",
+          method = "normal",
           endpoint = label,
           effects = m$trt_effects,
           ref_tx = comparisons[i,2],
@@ -102,8 +108,9 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
       # Generate MCMC trace for response rates
       rates <- predict(
         m, type = "response",
-        baseline = distr(qnorm, base_mean, base_se),
-        summary = FALSE
+        baseline = base_dist,
+        summary = FALSE,
+        baseline_type = "response"
       )$sims |> 
         posterior::as_draws_df() |>
         # Convert to long format
@@ -118,6 +125,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
       ) |> 
         mutate(
           type = "network",
+          method = "binomial",
           endpoint = label,
           effects = m$trt_effects,
           comp_tx = drug,
@@ -138,6 +146,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
           mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
         ) |> mutate(
           type = "network",
+          method = "binomial",
           endpoint = label,
           effects = m$trt_effects,
           ref_tx = comparisons[i,2],
@@ -150,6 +159,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
     results[[1]] <- data.frame(
       endpoint = label,
       type = "univariate",
+      method = "logit",
       effects = "fixed",
       ref_tx = NA,
       comp_tx = t,
@@ -161,6 +171,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
     results[[2]] <- data.frame(
       endpoint = label,
       type = "univariate",
+      method = "logit",
       effects = "random",
       ref_tx = NA,
       comp_tx = t,
@@ -173,6 +184,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
     results[[1]] <- data.frame(
       endpoint = label,
       type = "pairwise",
+      method = "binomial",
       effects = "fixed",
       ref_tx = reft,
       comp_tx = t,
@@ -184,6 +196,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
     results[[2]] <- data.frame(
       endpoint = label,
       type = "pairwise",
+      method = "binomial",
       effects = "random",
       ref_tx = reft,
       comp_tx = t,
@@ -196,6 +209,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
     results[[1]] <- data.frame(
       endpoint = label,
       type = "pairwise",
+      method = "normal",
       effects = "fixed",
       ref_tx = reft,
       comp_tx = t,
@@ -207,6 +221,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
     results[[2]] <- data.frame(
       endpoint = label,
       type = "pairwise",
+      method = "normal",
       effects = "random",
       ref_tx = reft,
       comp_tx = t,
@@ -219,6 +234,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
     results[[1]] <- data.frame(
       endpoint = label,
       type = "univariate",
+      method = "normal",
       effects = "fixed",
       ref_tx = NA,
       comp_tx = t,
@@ -230,6 +246,7 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
     results[[2]] <- data.frame(
       endpoint = label,
       type = "univariate",
+      method = "normal",
       effects = "random",
       ref_tx = NA,
       comp_tx = t,
@@ -242,3 +259,34 @@ nma_results <- function(m, base_mean=NA, base_se=NA, label=NA, t=NA, reft=NA) {
   
   bind_rows(results)
 }
+
+beta_dist_metaprop <- function(mod, effects) {
+  
+  if (effects == "fixed") {
+    mu = plogis(mod$TE.fixed)
+    lower = plogis(mod$lower.fixed)
+    upper = plogis(mod$upper.fixed)
+    se = (upper - lower) / (2 * 1.96)
+  } else if (effects == "random") {
+    mu = plogis(mod$TE.random)
+    lower = plogis(mod$lower.random)
+    upper = plogis(mod$upper.random)
+    se = (upper - lower) / (2 * 1.96)
+  }
+  
+  var <- se^2
+  
+  # Constraint check
+  if (var >= mu * (1 - mu)) {
+    stop("Variance (SE^2) is too high for a valid Beta distribution.")
+  }
+  
+  # Calculate the common factor
+  factor <- (mu * (1 - mu) / var) - 1
+  
+  alpha <- mu * factor
+  beta <- (1 - mu) * factor
+  
+  return(distr(qbeta, alpha, beta))
+}
+
