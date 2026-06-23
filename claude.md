@@ -6,6 +6,8 @@ Always assume scripts are run from the project root directory, no need for compl
 
 When editing a file in the 'R/' directory, don't be overly defensive. These scripts will only ever be run by me, the priority is readability
 
+Never edit files in R/meta-analyse without asking first
+
 Don't include Claude as a co-author on commits
 
-Don't waste tokens on checks I could do myself
+Don't conduct visual checks, let me do that

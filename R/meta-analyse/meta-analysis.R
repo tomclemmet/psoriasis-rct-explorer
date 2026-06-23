@@ -37,12 +37,22 @@ data <- dbGetQuery(con, query) |>
 drugs <- unique(data$drug)
 comparisons <- as.data.frame(t(combn(drugs, 2)))
 results <- list()
-results <- readRDS("R/meta-analyse/ma-results.rds")
+# load("R/meta-analyse/meta-analysis.RData")
 niter <- 2000
 
 # Network meta-analyses ========================================================
 
 ## PASI Response ---------------------------------------------------------------
+
+pasi_ref <- metaprop(
+  event = pasi50,
+  n = n,
+  data = filter(data, drug == "Placebo", !is.na(pasi50)),
+  sm = "PLOGIT",
+  method = "Inverse",
+  method.incr = "all",
+  incr = 0.5
+)
 
 pasi_net <- set_agd_arm(
   filter(data, !if_all(pasi50:pasi100, \(x) is.na(x))),
@@ -50,9 +60,10 @@ pasi_net <- set_agd_arm(
   trt = drug,
   r =  multi(r0 = n,
              pasi50, pasi75, pasi90, pasi100,
-             inclusive = FALSE,
+             inclusive = TRUE,
              type = "ordered")
 )
+
 pasi_fit_fe <- nma(
   pasi_net,
   trt_effects = "fixed",
@@ -63,16 +74,9 @@ pasi_fit_fe <- nma(
   iter = niter
 )
 
-pasi_ref_fe <- metagen(
-  TE = mean, 
-  seTE = sd, 
-  data = as.data.frame(summary(pasi_fit_fe, pars = "mu"))
-)
-
 results$pasi_fe <- nma_results(
   pasi_fit_fe, 
-  pasi_ref_fe$TE.fixed, 
-  pasi_ref_fe$seTE.fixed
+  base_dist = beta_dist_metaprop(pasi_ref, "fixed")
 )
 
 # Random effects
@@ -86,19 +90,22 @@ pasi_fit_re <- nma(
   iter = niter
 )
 
-pasi_ref_re <- metagen(
-  TE = mean, 
-  seTE = sd, 
-  data = as.data.frame(summary(pasi_fit_re, pars = "mu"))
-)
-
 results$pasi_re <- nma_results(
   pasi_fit_re, 
-  pasi_ref_re$TE.random, 
-  pasi_ref_re$seTE.random
+  beta_dist_metaprop(pasi_ref, "random")
 )
 
 ## DLQI response ---------------------------------------------------------------
+
+dlqi_ref <- metaprop(
+  event = dlqi_0_1,
+  n = n,
+  data = filter(data, drug == "Placebo", !is.na(dlqi_0_1)),
+  sm = "PLOGIT",
+  method = "Inverse",
+  method.incr = "all",
+  incr = 0.5
+)
 
 dlqi_net <- set_agd_arm(
   filter(data, !if_all(dlqi_0_1:dlqi_0, \(x) is.na(x))),
@@ -106,9 +113,10 @@ dlqi_net <- set_agd_arm(
   trt = drug,
   r =  multi(r0 = n,
              dlqi_0_1, dlqi_0,
-             inclusive = FALSE,
+             inclusive = TRUE,
              type = "ordered")
 )
+
 dlqi_fit_fe <- nma(
   dlqi_net,
   trt_effects = "fixed",
@@ -119,16 +127,9 @@ dlqi_fit_fe <- nma(
   iter = niter
 )
 
-dlqi_ref_fe <- metagen(
-  TE = mean, 
-  seTE = sd, 
-  data = as.data.frame(summary(dlqi_fit_fe, pars = "mu"))
-)
-
 results$dlqi_fe <- nma_results(
   dlqi_fit_fe, 
-  dlqi_ref_fe$TE.fixed, 
-  dlqi_ref_fe$seTE.fixed
+  beta_dist_metaprop(dlqi_ref, "fixed")
 )
 
 dlqi_fit_re <- nma(
@@ -141,16 +142,9 @@ dlqi_fit_re <- nma(
   iter = niter
 )
 
-dlqi_ref_re <- metagen(
-  TE = mean, 
-  seTE = sd, 
-  data = as.data.frame(summary(dlqi_fit_re, pars = "mu"))# Is it correct to average mu?
-)
-
 results$dlqi_re <- nma_results(
   dlqi_fit_re, 
-  dlqi_ref_re$TE.random, 
-  dlqi_ref_re$seTE.random
+  beta_dist_metaprop(dlqi_ref, "random")
 )
 
 ## Absolute change in PASI -----------------------------------------------------
@@ -174,6 +168,12 @@ abs_pasi_data <- data |>
   ) |> 
   filter(!is.na(abs_pasi_change_mean) & !is.na(abs_pasi_change_sd))
 
+abs_pasi_ref <- metagen(
+  TE = abs_pasi_change_mean, 
+  seTE = abs_pasi_change_sd / sqrt(n), 
+  data = filter(abs_pasi_data, drug == "Placebo")
+)
+
 abs_pasi_net <- set_agd_arm(
   abs_pasi_data, 
   study = ref_id,
@@ -192,16 +192,9 @@ abs_pasi_fit_fe <- nma(
   iter = niter
 )
 
-abs_pasi_ref_fe <- metagen(
-  TE = mean, 
-  seTE = sd, 
-  data = as.data.frame(summary(abs_pasi_fit_fe, pars = "mu"))# Is it correct to average mu?
-)
-
 results$abs_pasi_fe <- nma_results(
   abs_pasi_fit_fe, 
-  abs_pasi_ref_fe$TE.fixed, 
-  abs_pasi_ref_fe$seTE.fixed,
+  distr(qnorm, abs_pasi_ref$TE.fixed, abs_pasi_ref$seTE.fixed),
   label = "abs_pasi_change"
 )
 
@@ -213,16 +206,9 @@ abs_pasi_fit_re <- nma(
   iter = niter
 )
 
-abs_pasi_ref_re <- metagen(
-  TE = mean, 
-  seTE = sd, 
-  data = as.data.frame(summary(abs_pasi_fit_re, pars = "mu"))# Is it correct to average mu?
-)
-
 results$abs_pasi_re <- nma_results(
   abs_pasi_fit_re, 
-  abs_pasi_ref_re$TE.random, 
-  abs_pasi_ref_re$seTE.random,
+  distr(qnorm, abs_pasi_ref$TE.random, abs_pasi_ref$seTE.random),
   label = "abs_pasi_change"
 )
 
@@ -246,6 +232,12 @@ abs_dlqi_data <- data |>
   ) |> 
   filter(!is.na(abs_dlqi_change_mean) & !is.na(abs_dlqi_change_sd))
 
+abs_dlqi_ref <- metagen(
+  TE = abs_dlqi_change_mean, 
+  seTE = abs_dlqi_change_sd / sqrt(n), 
+  data = filter(abs_dlqi_data, drug == "Placebo")
+)
+
 abs_dlqi_net <- set_agd_arm(
   abs_dlqi_data, 
   study = ref_id,
@@ -264,16 +256,9 @@ abs_dlqi_fit_fe <- nma(
   iter = niter
 )
 
-abs_dlqi_ref_fe <- metagen(
-  TE = mean, 
-  seTE = sd, 
-  data = as.data.frame(summary(abs_dlqi_fit_fe, pars = "mu"))# Is it correct to average mu?
-)
-
 results$abs_dlqi_fe <- nma_results(
   abs_dlqi_fit_fe, 
-  abs_dlqi_ref_fe$TE.fixed, 
-  abs_dlqi_ref_fe$seTE.fixed,
+  distr(qnorm, abs_dlqi_ref$TE.fixed, abs_dlqi_ref$seTE.fixed),
   label = "abs_dlqi_change"
 )
 
@@ -285,27 +270,31 @@ abs_dlqi_fit_re <- nma(
   iter = niter
 )
 
-abs_dlqi_ref_re <- metagen(
-  TE = mean, 
-  seTE = sd, 
-  data = as.data.frame(summary(abs_dlqi_fit_re, pars = "mu"))# Is it correct to average mu?
-)
-
 results$abs_dlqi_re <- nma_results(
   abs_dlqi_fit_re, 
-  abs_dlqi_ref_re$TE.random, 
-  abs_dlqi_ref_re$seTE.random,
+  distr(qnorm, abs_dlqi_ref$TE.random, abs_dlqi_ref$seTE.random),
   label = "abs_dlqi_change"
 )
 
 ## Binary outcomes -------------------------------------------------------------
 
 bin_outcomes <- c(
-  "sae", "disc_any", "disc_ae", "serious_infection", "injection_site_rxn", 
-  "malignancy"
+  "pasi50", "pasi75", "pasi90", "pasi100", "sae", "disc_any", "disc_ae", 
+  "serious_infection", "injection_site_rxn", "malignancy"
 )
 
 for (i in 1:length(bin_outcomes)) {
+  placebo_data <- filter(data, drug == "Placebo", !is.na(.data[[bin_outcomes[i]]]))
+  bin_ref <- metaprop(
+    event = placebo_data[[bin_outcomes[i]]],
+    n = n,
+    sm = "PLOGIT",
+    method = "Inverse",
+    method.incr = "all",
+    incr = 0.5,
+    data = placebo_data
+  )
+  
   bin_net <- set_agd_arm(
     filter(data, !is.na(.data[[bin_outcomes[i]]])),
     study = ref_id,
@@ -323,16 +312,9 @@ for (i in 1:length(bin_outcomes)) {
     iter = niter
   )
   
-  bin_ref_fe <- metagen(
-    TE = mean, 
-    seTE = sd, 
-    data = as.data.frame(summary(bin_fit_fe, pars = "mu"))
-  )
-  
   results[[paste(bin_outcomes[i], "fe")]] <- nma_results(
     bin_fit_fe, 
-    bin_ref_fe$TE.fixed, 
-    bin_ref_fe$seTE.fixed,
+    beta_dist_metaprop(bin_ref, "fixed"),
     label = bin_outcomes[i]
   )
   
@@ -346,16 +328,9 @@ for (i in 1:length(bin_outcomes)) {
     iter = niter
   )
   
-  bin_ref_re <- metagen(
-    TE = mean, 
-    seTE = sd, 
-    data = as.data.frame(summary(bin_fit_re, pars = "mu"))
-  )
-  
   results[[paste(bin_outcomes[i], "re")]] <- nma_results(
     bin_fit_re, 
-    bin_ref_re$TE.random, 
-    bin_ref_re$seTE.random,
+    beta_dist_metaprop(bin_ref, "random"),
     label = bin_outcomes[i]
   )
   message(bin_outcomes[i])
@@ -402,6 +377,7 @@ for (i in 1:length(outcomes)) {
       fit, label = outcome, t = tx, reft = ref
     )
   }
+  message(outcome)
 }
 
 ## Absolute change in PASI -----------------------------------------------------
@@ -482,7 +458,15 @@ for (i in 1:length(outcomes)) {
     
     if(nrow(univar) <= 1) next
     
-    fit <- metaprop(univar[[outcomes[i]]], univar$n, studylab = univar$ref_id)
+    fit <- metaprop(
+      univar[[outcomes[i]]], 
+      univar$n, 
+      studylab = univar$ref_id,
+      sm = "PLOGIT",
+      method = "Inverse",
+      method.incr = "all",
+      incr = 0.5
+    )
     results[[paste(outcomes[i], drugs[k])]] <- nma_results(
       fit, label = outcomes[i], t = drugs[k]
     )
@@ -502,8 +486,8 @@ for (k in 1:length(drugs)) {
     studylab = univar$ref_id
   )
   
-  results[[paste("abs_change_pasi", drugs[k])]] <- nma_results(
-    fit, label = "abs_change_pasi", t = drugs[k]
+  results[[paste("abs_pasi_change", drugs[k])]] <- nma_results(
+    fit, label = "abs_pasi_change", t = drugs[k]
   )
 }
 
@@ -520,8 +504,8 @@ for (k in 1:length(drugs)) {
     studylab = univar$ref_id
   )
   
-  results[[paste("abs_change_dlqi", drugs[k])]] <- nma_results(
-    fit, label = "abs_change_dlqi", t = drugs[k]
+  results[[paste("abs_dlqi_change", drugs[k])]] <- nma_results(
+    fit, label = "abs_dlqi_change", t = drugs[k]
   )
 }
 
@@ -536,7 +520,8 @@ create_view_sql <- "
   SELECT *
   FROM meta_analysis
 "
+dbExecute(con, "DROP VIEW IF EXISTS v_meta_analysis")
 dbExecute(con, create_view_sql)
 
 dbDisconnect(con)
-saveRDS(results, "R/meta-analyse/ma-results.rds")
+save.image("R/meta-analyse/meta-analysis.RData")

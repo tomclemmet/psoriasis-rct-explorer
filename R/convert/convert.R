@@ -451,6 +451,18 @@ if (anyDuplicated(key4)) {
   measurements_df <- measurements_df[ord, ]
   measurements_df <- measurements_df[!duplicated(key4[ord]), ]
 }
+
+# For each (arm_id, outcome_id, subgroup_id), keep only the largest follow-up
+# timepoint. Baseline rows (timepoint == 0 or NA) are always preserved.
+is_followup <- !is.na(measurements_df$timepoint) & measurements_df$timepoint > 0
+fu_df  <- measurements_df[is_followup, ]
+key3   <- with(fu_df, paste(arm_id, outcome_id, subgroup_id, sep = "|"))
+if (anyDuplicated(key3)) {
+  max_tp <- tapply(fu_df$timepoint, key3, max)
+  fu_df  <- fu_df[fu_df$timepoint == max_tp[key3], ]
+}
+measurements_df <- rbind(measurements_df[!is_followup, ], fu_df)
+
 dbWriteTable(dst, "measurements", measurements_df, append = TRUE)
 
 # --- 9. Views (the contract the app reads) --------------------------------
