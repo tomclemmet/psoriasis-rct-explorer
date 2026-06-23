@@ -1,0 +1,217 @@
+/* --- base typography ------------------------------------------------ */
+body, .container-fluid, .container, button, input, select, textarea {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+               Roboto, Helvetica, Arial, sans-serif;
+  color: #1a1f2c;
+  -webkit-font-smoothing: antialiased;
+}
+body { background: #ffffff; color: #1a1f2c; }
+h1, h2, h3, h4, h5 { font-weight: 600; letter-spacing: -0.01em; }
+/* App header: title left, action buttons right, sits as a unified bar
+   across the top of the page with a subtle separator below. Negative
+   horizontal margins bleed it past the container's 15px gutters so
+   the bottom border runs edge-to-edge. */
+.title-bar {
+  background: #ffffff;
+  border-bottom: 1px solid #e3e6ea;
+  padding: 10px 24px;
+  margin: 0 -15px 12px -15px;
+  flex: 0 0 auto;
+}
+/* Trim the default Bootstrap titlePanel — it's huge and bold. */
+.title-bar h2 { font-size: 22px; font-weight: 600; margin: 0;
+                letter-spacing: -0.015em; color: #0f1726;
+                line-height: 1.2; }
+.title-bar .title-actions .btn { padding: 5px 12px; }
+
+/* --- buttons -------------------------------------------------------- */
+.btn-default {
+  background: #ffffff; border: 1px solid #d4d8df; color: #2a3142;
+  border-radius: 5px; font-weight: 500; transition: all 0.15s ease;
+  box-shadow: none;
+}
+.btn-default:hover, .btn-default:focus {
+  background: #f5f7fa; border-color: #b8bec8; color: #0f1726;
+}
+.btn-default:active { background: #eceff3; }
+
+/* --- tabs: flat underline style ------------------------------------- */
+.nav-tabs {
+  border-bottom: 1px solid #e3e6ea; margin-bottom: 0; padding-left: 2px;
+}
+.nav-tabs > li { margin-bottom: -1px; }
+.nav-tabs > li > a {
+  border: none; border-bottom: 2px solid transparent;
+  background: transparent; color: #5a6478; font-weight: 500;
+  padding: 10px 16px; margin-right: 4px; border-radius: 0;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.nav-tabs > li > a:hover {
+  background: transparent; border-bottom-color: #c8ced6; color: #1F4E8C;
+}
+.nav-tabs > li.active > a,
+.nav-tabs > li.active > a:hover,
+.nav-tabs > li.active > a:focus {
+  background: transparent; border: none;
+  border-bottom: 2px solid #1F4E8C; color: #1F4E8C; font-weight: 600;
+}
+
+.title-actions { display: flex; align-items: center; gap: 8px; }
+.title-actions .btn { padding: 4px 12px; font-size: 13px; }
+.view-summary-filter { font-weight: 600; color: #1F4E8C; }
+.view-summary-sep    { color: #5a6478; }
+#nma { background: #fafbfc; border: 1px solid #e3e6ea; border-radius: 6px; }
+.endpoint-picker { margin: 0; padding: 6px 0; background: #ffffff;
+                   height: 46px; box-sizing: border-box; }
+.endpoint-picker .form-group { margin-bottom: 0; }
+.endpoint-picker select { width: 100%; height: 34px; padding: 4px 8px;
+                          border: 1px solid #ccc; border-radius: 4px;
+                          background: #ffffff; font-size: 14px; }
+.endpoint-picker select option:disabled { color: #b0b0b0; }
+/* Use flexbox so left/right columns share the row's full height; sticky
+   then has room to stick as the user scrolls the table. */
+/* Lock the page so only the table column scrolls; the diagram never moves. */
+html, body { height: 100%; overflow: hidden; }
+.container-fluid, .container { height: 100%; display: flex; flex-direction: column; }
+.row.split { display: flex; align-items: stretch; flex: 1 1 auto;
+             min-height: 0; }
+.row.split > [class*='col-'] { float: none; }
+/* Only the table body scrolls; tabs stay pinned at the top of the column. */
+.row.split .col-table { display: flex; flex-direction: column;
+                        max-height: 100%; min-height: 0; }
+.row.split .col-table .tabbable { display: flex; flex-direction: column;
+                                   flex: 1 1 auto; min-height: 0; }
+.row.split .col-table .tab-content { flex: 1 1 auto; overflow: auto;
+                                      min-height: 0; }
+/* Pin the endpoint dropdown at the top of the scrolling tab-content,
+   and pin the summary line + table header directly underneath it. */
+.row.split .col-table .tab-content .endpoint-picker {
+  position: sticky; top: 0; z-index: 3;
+}
+/* Let the sticky .view-summary's containing block be the scrolling
+   .tab-content rather than this Shiny wrapper (which has no extra
+   height of its own and would pin sticky in place). */
+.view-summary-wrap { display: contents; }
+.row.split .col-table .tab-content .view-summary {
+  position: sticky; top: 46px; z-index: 3;
+  background: #ffffff; padding: 9px 4px;
+  min-height: 52px; box-sizing: border-box;
+  font-size: 16px; font-weight: 500; color: #1a1f2c;
+  border-bottom: 1px solid #e3e6ea;
+  display: flex; align-items: center; gap: 12px;
+}
+.view-summary-text { flex: 1 1 auto; min-width: 0; }
+.view-summary .ma-btn {
+  flex: 0 0 auto; align-self: center;
+  padding: 6px 14px; font-size: 13px; font-weight: 600;
+  background: #1F4E8C; border-color: #1F4E8C; color: #ffffff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+}
+.view-summary .ma-btn:hover,
+.view-summary .ma-btn:focus {
+  background: #163a6b; border-color: #163a6b; color: #ffffff;
+}
+.view-summary .ma-btn .fa { margin-right: 4px; }
+.row.split .col-table .tab-content table.dataTable thead th {
+  position: sticky; top: 98px; background: #ffffff; z-index: 2;
+  box-shadow: inset 0 -1px 0 #ddd;
+}
+.app-footer { margin-top: 12px; font-size: 12px; color: #888; }
+.app-footer a { color: #1F4E8C; text-decoration: none; }
+.app-footer a:hover { text-decoration: underline; }
+/* Trial-name popover. Anchored absolutely; positioning is set inline by
+   the click handler in <script> above. */
+a.trial-pop { color: #1F4E8C; cursor: pointer; }
+a.trial-pop:hover { text-decoration: underline; }
+#trial-popover {
+  position: absolute; z-index: 1000; max-width: 520px;
+  background: #ffffff; border: 1px solid #c8ced6; border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  padding: 10px 14px; font-size: 13px; line-height: 1.45; color: #222;
+}
+#trial-popover .trial-pop-title {
+  font-weight: 600; font-size: 13px; margin-bottom: 8px;
+  padding-bottom: 6px; border-bottom: 1px solid #e0e4ea;
+}
+#trial-popover .trial-pop-refid { font-weight: 400; color: #7f8fa6; }
+#trial-popover .trial-cite { margin-bottom: 8px; }
+#trial-popover .trial-cite:last-child { margin-bottom: 0; }
+#trial-popover a { color: #1F4E8C; word-break: break-all; }
+/* Per-trial banding applied by drawCallback above. */
+table.dataTable tr.trial-band > td { background-color: #f3f5f8; }
+.title-bar { display: flex; align-items: center; justify-content: space-between;
+             gap: 12px; }
+.title-bar .about-btn { margin-right: 4px; }
+/* Roomy About modal. */
+.about-modal .modal-dialog { width: 80%; max-width: 900px; }
+.about-modal .modal-body { font-size: 14px; line-height: 1.55;
+                           max-height: 70vh; overflow-y: auto; }
+.about-modal .modal-body h4 { margin-top: 18px; color: #1F4E8C; }
+.about-modal .modal-body h4:first-child { margin-top: 0; }
+/* Meta-analysis modal: a touch wider than About for forest plots. */
+.ma-modal .modal-dialog { width: 92%; max-width: 1100px; }
+.ma-modal .modal-body { max-height: 75vh; overflow-y: auto;
+                        padding: 14px 18px; }
+.ma-modal h4 { margin-top: 4px; color: #1F4E8C; font-size: 15px; }
+.ma-modal .ma-summary { font-size: 13px; color: #5a6478;
+                        margin-bottom: 8px; }
+.ma-method-toggle { margin-bottom: 12px; }
+.ma-method-toggle .shiny-input-container { margin: 0; }
+.ma-method-toggle label.radio-inline { margin-right: 16px; font-size: 13px; }
+.ma-modal .ma-plot-block { margin-bottom: 22px; }
+.ma-modal .ma-plot-title { font-weight: 600; color: #1a1f2c;
+                           font-size: 14px; margin: 8px 0 2px 0; }
+.ma-modal .ma-plot-stats { font-size: 12px; color: #5a6478;
+                           margin-bottom: 6px; }
+.ma-modal .ma-empty { color: #5a6478; font-style: italic;
+                      padding: 12px 0; }
+/* Inline-SVG forest plot styling. All forest plots share these rules;
+   the SVG content itself is produced by forest_svg() (no ggplot). */
+.ma-forest { display: block; max-width: 100%; height: auto;
+             font-family: inherit; }
+.ma-forest .ma-plot-bg   { fill: #fafbfc; stroke: none; }
+.ma-forest .ma-refline   { stroke: #aab1bd; stroke-width: 1;
+                            stroke-dasharray: 4 4; }
+.ma-forest .ma-axis      { stroke: #5a6478; stroke-width: 1; }
+.ma-forest .ma-tick      { stroke: #5a6478; stroke-width: 1; }
+.ma-forest .ma-ticklabel { fill: #5a6478; font-size: 11px;
+                            text-anchor: middle; }
+.ma-forest .ma-rowlabel  { fill: #1a1f2c; font-size: 12px;
+                            text-anchor: end; }
+.ma-forest .ma-rowlabel-sub { fill: #7f8fa6; font-size: 10px;
+                               text-anchor: end; font-style: italic; }
+.ma-forest .ma-ci        { stroke: #5a6478; stroke-width: 1.2; }
+.ma-forest .ma-ci-arrow  { fill: #5a6478; stroke: none; }
+.ma-forest .ma-square    { stroke: none; }
+.ma-forest .ma-square-default { fill: #1a1f2c; }
+.ma-forest .ma-square-fe { fill: #7f8fa6; }
+.ma-forest .ma-square-re { fill: #1F4E8C; }
+.ma-forest .ma-citext    { fill: #1a1f2c; font-size: 11px;
+                            text-anchor: start; }
+.ma-forest .ma-pooled-fe .ma-diamond { fill: #7f8fa6; stroke: #5a6478;
+                                        stroke-width: 1; }
+.ma-forest .ma-pooled-re .ma-diamond { fill: #1F4E8C; stroke: #14376a;
+                                        stroke-width: 1; }
+.ma-forest .ma-pooled-label { font-weight: 600; }
+.ma-forest .ma-axislabel { fill: #1a1f2c; font-size: 12px;
+                            text-anchor: middle; font-weight: 500; }
+.ma-forest .ma-dir       { fill: #5a6478; font-size: 11px;
+                            font-style: italic; }
+.ma-forest .ma-dir-left  { text-anchor: start; }
+.ma-forest .ma-dir-right { text-anchor: end; }
+/* Invisible row hit-area: gives the cursor a wide target so the tooltip
+   fires almost anywhere on the row, not just over the 8 px square. */
+.ma-forest .ma-rowhit { fill: transparent; pointer-events: all;
+                        cursor: default; }
+.ma-forest .ma-row:hover .ma-square,
+.ma-forest .ma-row:hover .ma-ci   { stroke: #c0392b; }
+.ma-forest .ma-row:hover .ma-square-default { fill: #c0392b; }
+.ma-forest .ma-pooled:hover .ma-diamond { stroke: #c0392b; stroke-width: 1.5; }
+/* Fast-popup tooltip (JS-driven; replaces native <title>). */
+.ma-tt-popover {
+  position: absolute; z-index: 1100; pointer-events: none;
+  background: #1a1f2c; color: #f6f7f9; font-size: 12px;
+  line-height: 1.4; padding: 6px 9px; border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.18); white-space: pre-line;
+  max-width: 320px;
+}
