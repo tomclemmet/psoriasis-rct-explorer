@@ -1,9 +1,12 @@
 # Data — too large / sensitive to commit
 *.accdb
+*.laccdb
 *.mdb
 *.sqlite
 *.sqlite3
 *.db
+*.RDS
+*.RData
 
 # R
 .Rhistory
@@ -14,6 +17,8 @@
 
 # Scratch / reference material kept locally
 diagram example/
+*/@boneyard/*
+todo.md
 
 # OS / editor
 .DS_Store

@@ -135,11 +135,30 @@ project root and run `convert.R` (see below) to regenerate the SQLite file.
 ## One-time setup
 
 R 4.5 already has `shiny`, `DBI`, `RSQLite`, `odbc`, `dplyr` installed. The app
-also needs `DT` and `visNetwork`:
+also needs `DT`, `visNetwork`, `meta`, and `netmeta`:
 
 ```r
-install.packages(c("DT", "visNetwork"))
+install.packages(c("DT", "visNetwork", "meta", "netmeta"))
 ```
+
+(`meta` and `netmeta` are only needed by `meta_analyse.R` at build time —
+`meta` for the pairwise and single-arm meta-analyses, `netmeta` for the
+no-filter network meta-analysis. Forest plots in the Meta-analysis modal
+are rendered as plain inline SVG by `app.R` itself — no plotting library
+is required at runtime.)
+
+The **Meta-analysis** modal shows pooled effect estimates based on the
+active filter:
+
+- **No filter**: a **network meta-analysis** vs Placebo for each outcome
+  in the active endpoint group, with a Random/Common-effects toggle at
+  the top of the modal. Outcomes whose network can't be fit (e.g. very
+  sparse safety endpoints) show a "Network too sparse" note instead of a
+  plot.
+- **Edge filter**: per-trial pairwise meta-analysis with both FE and RE
+  pooled diamonds.
+- **Node filter**: pooled response rate (single-arm meta-analysis of the
+  selected drug) with both FE and RE diamonds.
 
 The 64-bit "Microsoft Access Driver (*.mdb, *.accdb)" must be installed (it
 already is on this machine — it ships with the 64-bit Access Database Engine).
@@ -152,9 +171,27 @@ From the project root:
 # 1. Build / rebuild the SQLite copy (only needed once, or after RevPal.accdb changes)
 & "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" app\convert.R
 
-# 2. Launch the Shiny app (opens in your browser)
+# 2. Build / rebuild the meta-analysis tables (only needed once, or after
+#    convert.R is re-run). Populates ma_pairwise, ma_pairwise_trials,
+#    ma_proportion, ma_proportion_trials, ma_nma, ma_nma_estimates inside the
+#    same SQLite file. The "Meta-analyse" button in the app reads these directly.
+& "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" app\meta_analyse.R
+
+#    Rebuild only one family of tables (faster when iterating on a slow model):
+& "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" app\meta_analyse.R --only nma
+#    (families: pairwise | proportion | nma, comma-separated; the other tables
+#    are left untouched.)
+
+# 3. Launch the Shiny app (opens in your browser)
 & "C:\Program Files\R\R-4.5.3\bin\Rscript.exe" -e "shiny::runApp('app', launch.browser = TRUE)"
 ```
+
+`app\meta_analyse.R` is the **driver** (data prep + SQLite write); the actual
+statistical models live in `app\ma_models.R`, which is the file to edit when you
+want to change how an estimate is computed or drop in a custom (e.g. Bayesian)
+model. Its header documents the result contract and the conventions the app
+relies on. Both the driver and the app read/write the same six `ma_*` tables, so
+changing a model needs no app changes as long as the contract is honoured.
 
 ## Known data quirks
 
