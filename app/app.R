@@ -415,14 +415,6 @@ format_dlqi_zero <- function(df) {
   format_binary_subset(df, c("dlqi_0_1", "dlqi_0"))
 }
 
-format_dlqi_threshold <- function(df) {
-  format_binary_subset(df, c("dlqi_le5"))
-}
-
-format_dlqi_change <- function(df) {
-  format_binary_subset(df, c("dlqi_5pt_dec", "dlqi_4pt_dec"))
-}
-
 format_dlqi_absolute <- function(df) {
   b <- baseline_lookup(df, "abs_dlqi_mean", "abs_dlqi_sd")
   d <- derive_change(b$mean, df$abs_dlqi_mean, df$abs_dlqi_change_mean)
@@ -473,19 +465,6 @@ endpoint_groups <- list(
         table    = "v_dlqi",
         fmt      = format_dlqi_zero,
         colnames = c("Trial", "Drug", "N", "DLQI 0/1", "DLQI 0")
-      ),
-      threshold = list(
-        label    = "DLQI ≤ 5",
-        table    = "v_dlqi",
-        fmt      = format_dlqi_threshold,
-        colnames = c("Trial", "Drug", "N", "DLQI ≤ 5")
-      ),
-      change = list(
-        label    = "5+ / 4+ point decrease",
-        table    = "v_dlqi",
-        fmt      = format_dlqi_change,
-        colnames = c("Trial", "Drug", "N",
-                     "5+ pt decrease", "4+ pt decrease")
       ),
       absolute = list(
         label    = "Absolute DLQI",
@@ -593,11 +572,8 @@ group_survivors <- list(
                               "abs_pasi_mean", "abs_pasi_change_mean")
   ),
   dlqi = list(
-    zero      = function(df) survivors_binary(df,  c("dlqi_0_1", "dlqi_0")),
-    threshold = function(df) survivors_binary(df,  c("dlqi_le5")),
-    change    = function(df) survivors_binary(df,
-                               c("dlqi_5pt_dec", "dlqi_4pt_dec")),
-    absolute  = function(df) survivors_absolute(df,
+    zero     = function(df) survivors_binary(df,  c("dlqi_0_1", "dlqi_0")),
+    absolute = function(df) survivors_absolute(df,
                                "abs_dlqi_mean", "abs_dlqi_change_mean")
   ),
   safety = list(
@@ -704,13 +680,6 @@ ma_catalog <- list(
       list(code = "dlqi_0_1", label = "DLQI 0/1"),
       list(code = "dlqi_0",   label = "DLQI 0")
     ),
-    threshold = list(
-      list(code = "dlqi_le5", label = "DLQI ≤ 5")
-    ),
-    change = list(
-      list(code = "dlqi_5pt_dec", label = "5+ point decrease"),
-      list(code = "dlqi_4pt_dec", label = "4+ point decrease")
-    ),
     absolute = list(
       list(code = "abs_dlqi_change", label = "Δ from baseline (absolute DLQI)")
     )
@@ -728,9 +697,7 @@ ma_catalog <- list(
       list(code = "injection_site_rxn", label = "Injection-site reaction")
     ),
     malignancy = list(
-      list(code = "malignancy",          label = "Malignancy"),
-      list(code = "nmsc",                label = "NMSC"),
-      list(code = "malignancy_non_nmsc", label = "Malignancy (non-NMSC)")
+      list(code = "malignancy", label = "Malignancy")
     )
   )
 )
@@ -895,7 +862,7 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   POOLED_GAP   <- 14
   POOLED_H     <- 22
   AXIS_PAD     <- 28
-  AXIS_LABEL_H <- if (length(axis_label) || length(dir_left) || length(dir_right)) 22 else 0
+  AXIS_LABEL_H <- if (length(axis_label) || length(dir_left) || length(dir_right)) 50 else 0
   BOTTOM_PAD   <- 6
   LEFT_MARGIN  <- 220       # row labels (a touch wider for "Pooled estimate" rows)
   RIGHT_MARGIN <- 175       # CI text only -- weight column dropped
@@ -1055,36 +1022,60 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
             else (X_MIN_PX + X_MAX_PX) / 2
       kind  <- pooled$kind[i]
       klass <- switch(kind,
-        "FE"       = "ma-pooled-fe",
-        "RE"       = "ma-pooled-re",
-        "NMA-FE"   = "ma-pooled-fe",
-        "NMA-RE"   = "ma-pooled-re",
-        "Pool-FE"  = "ma-pooled-fe",
-        "Pool-RE"  = "ma-pooled-re",
-        "NMA-R-FE" = "ma-pooled-fe",
-        "NMA-R-RE" = "ma-pooled-re",
+        "FE"           = "ma-pooled-fe",
+        "RE"           = "ma-pooled-re",
+        "NMA-FE"       = "ma-pooled-fe",
+        "NMA-RE"       = "ma-pooled-re",
+        "Pool-FE"      = "ma-pooled-fe",
+        "Pool-RE"      = "ma-pooled-re",
+        "NMA-R-FE"     = "ma-pooled-fe",
+        "NMA-R-RE"     = "ma-pooled-re",
+        "Bin-NMA-FE"   = "ma-pooled-fe",
+        "Bin-NMA-RE"   = "ma-pooled-re",
+        "Mult-NMA-FE"  = "ma-pooled-fe",
+        "Mult-NMA-RE"  = "ma-pooled-re",
+        "Bin-NMA-R-FE"  = "ma-pooled-fe",
+        "Bin-NMA-R-RE"  = "ma-pooled-re",
+        "Mult-NMA-R-FE" = "ma-pooled-fe",
+        "Mult-NMA-R-RE" = "ma-pooled-re",
         "ma-pooled-fe")
       kind_lbl <- switch(kind,
-        "FE"       = "Pairwise estimate (FE)",
-        "RE"       = "Pairwise estimate (RE)",
-        "NMA-FE"   = "Network estimate (FE)",
-        "NMA-RE"   = "Network estimate (RE)",
-        "Pool-FE"  = "Pooled estimate (FE)",
-        "Pool-RE"  = "Pooled estimate (RE)",
-        "NMA-R-FE" = "Network estimate (FE)",
-        "NMA-R-RE" = "Network estimate (RE)",
+        "FE"            = "Pairwise estimate (FE)",
+        "RE"            = "Pairwise estimate (RE)",
+        "NMA-FE"        = "Network estimate (FE)",
+        "NMA-RE"        = "Network estimate (RE)",
+        "Pool-FE"       = "Pooled estimate (FE)",
+        "Pool-RE"       = "Pooled estimate (RE)",
+        "NMA-R-FE"      = "Network estimate (FE)",
+        "NMA-R-RE"      = "Network estimate (RE)",
+        "Bin-NMA-FE"    = "Binomial network estimate (FE)",
+        "Bin-NMA-RE"    = "Binomial network estimate (RE)",
+        "Mult-NMA-FE"   = "Multinomial network estimate (FE)",
+        "Mult-NMA-RE"   = "Multinomial network estimate (RE)",
+        "Bin-NMA-R-FE"  = "Binomial network estimate (FE)",
+        "Bin-NMA-R-RE"  = "Binomial network estimate (RE)",
+        "Mult-NMA-R-FE" = "Multinomial network estimate (FE)",
+        "Mult-NMA-R-RE" = "Multinomial network estimate (RE)",
         kind)
       pts    <- forest_diamond_points(xL, xE, xR, yc, 7)
       ci_str <- fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i], ci_digits)
       tt_hdr <- switch(kind,
-        "FE"       = "Common-effect (FE) pairwise estimate",
-        "RE"       = "Random-effects (RE) pairwise estimate",
-        "NMA-FE"   = "Network MA common-effect (FE) estimate",
-        "NMA-RE"   = "Network MA random-effects (RE) estimate",
-        "Pool-FE"  = "Common-effect (FE) pooled estimate",
-        "Pool-RE"  = "Random-effects (RE) pooled estimate",
-        "NMA-R-FE" = "Network MA common-effect (FE) estimate",
-        "NMA-R-RE" = "Network MA random-effects (RE) estimate",
+        "FE"            = "Common-effect (FE) pairwise estimate",
+        "RE"            = "Random-effects (RE) pairwise estimate",
+        "NMA-FE"        = "Network MA common-effect (FE) estimate",
+        "NMA-RE"        = "Network MA random-effects (RE) estimate",
+        "Pool-FE"       = "Common-effect (FE) pooled estimate",
+        "Pool-RE"       = "Random-effects (RE) pooled estimate",
+        "NMA-R-FE"      = "Network MA common-effect (FE) estimate",
+        "NMA-R-RE"      = "Network MA random-effects (RE) estimate",
+        "Bin-NMA-FE"    = "Binomial network MA common-effect (FE) estimate",
+        "Bin-NMA-RE"    = "Binomial network MA random-effects (RE) estimate",
+        "Mult-NMA-FE"   = "Multinomial network MA common-effect (FE) estimate",
+        "Mult-NMA-RE"   = "Multinomial network MA random-effects (RE) estimate",
+        "Bin-NMA-R-FE"  = "Binomial network MA common-effect (FE) estimate",
+        "Bin-NMA-R-RE"  = "Binomial network MA random-effects (RE) estimate",
+        "Mult-NMA-R-FE" = "Multinomial network MA common-effect (FE) estimate",
+        "Mult-NMA-R-RE" = "Multinomial network MA random-effects (RE) estimate",
         kind)
       tt <- sprintf("%s\n%s", tt_hdr, ci_str)
       parts[length(parts) + 1L] <- paste0(
@@ -1118,21 +1109,21 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
 
   # Axis label / directional cues, drawn below the tick labels.
   if (AXIS_LABEL_H > 0) {
-    label_y <- axis_y + 30
+    if (length(axis_label) && nzchar(axis_label)) {
+      parts[length(parts) + 1L] <- sprintf(
+        '<text class="ma-axislabel" x="%g" y="%g">%s</text>',
+        PLOT_LEFT + PLOT_W / 2, axis_y + 30, esc(axis_label))
+    }
+    dir_y <- axis_y + 46
     if (length(dir_left) && nzchar(dir_left)) {
       parts[length(parts) + 1L] <- sprintf(
         '<text class="ma-dir ma-dir-left" x="%g" y="%g">%s</text>',
-        PLOT_LEFT, label_y, esc(dir_left))
+        PLOT_LEFT, dir_y, esc(dir_left))
     }
     if (length(dir_right) && nzchar(dir_right)) {
       parts[length(parts) + 1L] <- sprintf(
         '<text class="ma-dir ma-dir-right" x="%g" y="%g">%s</text>',
-        PLOT_LEFT + PLOT_W, label_y, esc(dir_right))
-    }
-    if (length(axis_label) && nzchar(axis_label)) {
-      parts[length(parts) + 1L] <- sprintf(
-        '<text class="ma-axislabel" x="%g" y="%g">%s</text>',
-        PLOT_LEFT + PLOT_W / 2, label_y, esc(axis_label))
+        PLOT_LEFT + PLOT_W, dir_y, esc(dir_right))
     }
   }
 
@@ -1143,7 +1134,7 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
 # --- Data fetchers used by the modal ---------------------------------------
 
 fetch_ma <- function(endpoint, type = NULL, effects = NULL,
-                     comp_tx = NULL, ref_tx = NULL, measure = NULL) {
+                     comp_tx = NULL, ref_tx = NULL, measure = NULL, method = NULL) {
   conds  <- "WHERE endpoint = ?"
   params <- list(endpoint)
   if (!is.null(type))    { conds <- paste(conds, "AND type = ?");    params <- c(params, list(type)) }
@@ -1151,6 +1142,7 @@ fetch_ma <- function(endpoint, type = NULL, effects = NULL,
   if (!is.null(comp_tx)) { conds <- paste(conds, "AND comp_tx = ?"); params <- c(params, list(comp_tx)) }
   if (!is.null(ref_tx))  { conds <- paste(conds, "AND ref_tx = ?");  params <- c(params, list(ref_tx)) }
   if (!is.null(measure)) { conds <- paste(conds, "AND measure = ?"); params <- c(params, list(measure)) }
+  if (!is.null(method))  { conds <- paste(conds, "AND method = ?");  params <- c(params, list(method)) }
   read_db(sprintf("SELECT * FROM v_meta_analysis %s", conds), params = params)
 }
 
@@ -1166,12 +1158,12 @@ fetch_trials <- function(endpoint, comp_tx = NULL, ref_tx = NULL, measure = NULL
 # Fetch a pairwise MA estimate for (comp, ref), trying both orientations.
 # Returns list(mean, lower, upper) expressed in the (comp→ref) direction,
 # or NULL if not found.
-fetch_ma_directed <- function(endpoint, type, effects, comp, ref, measure) {
+fetch_ma_directed <- function(endpoint, type, effects, comp, ref, measure, method = NULL) {
   r <- fetch_ma(endpoint, type = type, effects = effects,
-                comp_tx = comp, ref_tx = ref, measure = measure)
+                comp_tx = comp, ref_tx = ref, measure = measure, method = method)
   if (nrow(r)) return(list(mean = r$mean[1], lower = r$lower[1], upper = r$upper[1]))
   r <- fetch_ma(endpoint, type = type, effects = effects,
-                comp_tx = ref, ref_tx = comp, measure = measure)
+                comp_tx = ref, ref_tx = comp, measure = measure, method = method)
   if (nrow(r)) return(list(mean = -r$mean[1], lower = -r$upper[1], upper = -r$lower[1]))
   NULL
 }
@@ -1180,9 +1172,10 @@ coalesce0 <- function(x) ifelse(is.na(x), 0L, as.integer(x))
 
 # Translate one MA "outcome spec" + the current filter into a rows/pooled
 # bundle for forest_svg. Returns NULL when no data is available.
-build_forest_inputs <- function(state, tab_id, outcome) {
+build_forest_inputs <- function(state, tab_id, outcome, response_method = "binomial") {
   is_continuous <- grepl("^abs_", outcome$code)
   is_harm       <- identical(tab_id, "safety")
+  is_response   <- !is_continuous && !is_harm && tab_id %in% c("pasi", "dlqi")
 
   if (is.null(state)) {
     # No filter: one row per drug from the network model.
@@ -1191,12 +1184,12 @@ build_forest_inputs <- function(state, tab_id, outcome) {
     # model when the preferred one has no data (e.g. rare-event endpoints with
     # only a fixed-effects network).
     measure_val <- if (is_continuous) "diff_cfb" else "rd"
-    fetch_network_vs_placebo <- function(eff) {
+    fetch_network_vs_placebo <- function(eff, method = NULL) {
       r_direct  <- fetch_ma(outcome$code, type = "network", effects = eff,
-                            measure = measure_val, ref_tx = "Placebo")
+                            measure = measure_val, ref_tx = "Placebo", method = method)
       r_direct  <- r_direct[r_direct$comp_tx != "Placebo", , drop = FALSE]
       r_flipped <- fetch_ma(outcome$code, type = "network", effects = eff,
-                            measure = measure_val, comp_tx = "Placebo")
+                            measure = measure_val, comp_tx = "Placebo", method = method)
       r_flipped <- r_flipped[r_flipped$ref_tx != "Placebo" &
                               !is.na(r_flipped$ref_tx) & r_flipped$ref_tx != "",
                              , drop = FALSE]
@@ -1210,46 +1203,90 @@ build_forest_inputs <- function(state, tab_id, outcome) {
       }
       rbind(r_direct, r_flipped)
     }
-    df_re <- fetch_network_vs_placebo("random")
-    if (!nrow(df_re)) {
-      return(list(empty_reason =
-        "No random effects network model available for this endpoint."))
+
+    if (is_response) {
+      # Response endpoints: show FE + RE for the selected method (toggled in UI).
+      method_lbl <- if (identical(response_method, "multinomial")) "multinomial" else "binomial"
+      df_re <- fetch_network_vs_placebo("random", method_lbl)
+      df_fe <- fetch_network_vs_placebo("fixed",  method_lbl)
+
+      if (!nrow(df_re)) {
+        return(list(empty_reason =
+          sprintf("No %s random effects network model available for this endpoint.", method_lbl)))
+      }
+
+      common <- intersect(df_re$comp_tx, df_fe$comp_tx)
+      df_re  <- df_re[match(common, df_re$comp_tx), , drop = FALSE]
+      df_fe  <- df_fe[match(common, df_fe$comp_tx), , drop = FALSE]
+      ord    <- order(df_re$mean, decreasing = TRUE)
+      df_re  <- df_re[ord, , drop = FALSE]
+      df_fe  <- df_fe[ord, , drop = FALSE]
+      n_drugs <- nrow(df_re)
+
+      PAIR_H   <- 14L
+      DRUG_GAP <- 8L
+      fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
+      fe_tt <- mapply(function(drug, est, lo, hi)
+        ma_tooltip(sprintf("%s — %s network estimate (FE)", drug, method_lbl), est, lo, hi, digits = 2),
+        df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper)
+      re_tt <- mapply(function(drug, est, lo, hi)
+        ma_tooltip(sprintf("%s — %s network estimate (RE)", drug, method_lbl), est, lo, hi, digits = 2),
+        df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper)
+      rows <- data.frame(
+        label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
+        badge     = c(rbind(rep("FE", n_drugs), rep("RE", n_drugs))),
+        est       = c(rbind(df_fe$mean,  df_re$mean)),
+        lo        = c(rbind(df_fe$lower, df_re$lower)),
+        hi        = c(rbind(df_fe$upper, df_re$upper)),
+        square_n  = NA_real_,
+        klass     = c(rbind(rep("ma-square-fe", n_drugs), rep("ma-square-re", n_drugs))),
+        row_h     = PAIR_H,
+        gap_above = c(rbind(fe_gaps, rep(0L, n_drugs))),
+        tooltip   = c(rbind(fe_tt, re_tt)),
+        stringsAsFactors = FALSE
+      )
+    } else {
+      df_re <- fetch_network_vs_placebo("random")
+      if (!nrow(df_re)) {
+        return(list(empty_reason =
+          "No random effects network model available for this endpoint."))
+      }
+      df_fe <- fetch_network_vs_placebo("fixed")
+
+      # Keep only drugs present in both models, sort by RE estimate best-first.
+      common <- intersect(df_re$comp_tx, df_fe$comp_tx)
+      df_re  <- df_re[match(common, df_re$comp_tx), , drop = FALSE]
+      df_fe  <- df_fe[match(common, df_fe$comp_tx), , drop = FALSE]
+      ord    <- order(df_re$mean, decreasing = !(is_continuous || is_harm))
+      df_re  <- df_re[ord, , drop = FALSE]
+      df_fe  <- df_fe[ord, , drop = FALSE]
+      n_drugs <- nrow(df_re)
+
+      # Interleave FE (grey) then RE (blue) per drug; add gap between drug pairs.
+      PAIR_H   <- 14L
+      DRUG_GAP <- 8L
+      fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
+      fe_tt <- mapply(function(drug, est, lo, hi)
+        ma_tooltip(sprintf("%s — network estimate (FE)", drug), est, lo, hi, digits = 2),
+        df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper)
+      re_tt <- mapply(function(drug, est, lo, hi)
+        ma_tooltip(sprintf("%s — network estimate (RE)", drug), est, lo, hi, digits = 2),
+        df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper)
+      rows <- data.frame(
+        label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
+        badge     = c(rbind(rep("FE", n_drugs), rep("RE", n_drugs))),
+        est       = c(rbind(df_fe$mean,  df_re$mean)),
+        lo        = c(rbind(df_fe$lower, df_re$lower)),
+        hi        = c(rbind(df_fe$upper, df_re$upper)),
+        square_n  = NA_real_,
+        klass     = c(rbind(rep("ma-square-fe", n_drugs),
+                            rep("ma-square-re", n_drugs))),
+        row_h     = PAIR_H,
+        gap_above = c(rbind(fe_gaps, rep(0L, n_drugs))),
+        tooltip   = c(rbind(fe_tt, re_tt)),
+        stringsAsFactors = FALSE
+      )
     }
-    df_fe <- fetch_network_vs_placebo("fixed")
-
-    # Keep only drugs present in both models, sort by RE estimate best-first.
-    common <- intersect(df_re$comp_tx, df_fe$comp_tx)
-    df_re  <- df_re[match(common, df_re$comp_tx), , drop = FALSE]
-    df_fe  <- df_fe[match(common, df_fe$comp_tx), , drop = FALSE]
-    ord    <- order(df_re$mean, decreasing = !(is_continuous || is_harm))
-    df_re  <- df_re[ord, , drop = FALSE]
-    df_fe  <- df_fe[ord, , drop = FALSE]
-    n_drugs <- nrow(df_re)
-
-    # Interleave FE (grey) then RE (blue) per drug; add gap between drug pairs.
-    PAIR_H   <- 14L
-    DRUG_GAP <- 8L
-    fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
-    fe_tt <- mapply(function(drug, est, lo, hi)
-      ma_tooltip(sprintf("%s — network estimate (FE)", drug), est, lo, hi, digits = 2),
-      df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper)
-    re_tt <- mapply(function(drug, est, lo, hi)
-      ma_tooltip(sprintf("%s — network estimate (RE)", drug), est, lo, hi, digits = 2),
-      df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper)
-    rows <- data.frame(
-      label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
-      badge     = c(rbind(rep("FE", n_drugs), rep("RE", n_drugs))),
-      est       = c(rbind(df_fe$mean,  df_re$mean)),
-      lo        = c(rbind(df_fe$lower, df_re$lower)),
-      hi        = c(rbind(df_fe$upper, df_re$upper)),
-      square_n  = NA_real_,
-      klass     = c(rbind(rep("ma-square-fe", n_drugs),
-                          rep("ma-square-re", n_drugs))),
-      row_h     = PAIR_H,
-      gap_above = c(rbind(fe_gaps, rep(0L, n_drugs))),
-      tooltip   = c(rbind(fe_tt, re_tt)),
-      stringsAsFactors = FALSE
-    )
 
     axis_label <- if (is_continuous)
       "Difference in change from baseline vs Placebo (95% CI)"
@@ -1268,7 +1305,8 @@ build_forest_inputs <- function(state, tab_id, outcome) {
                 effective_scale = "md",
                 axis_label = axis_label,
                 dir_left = dir_left, dir_right = dir_right,
-                n_drugs = n_drugs))
+                n_drugs = n_drugs,
+                response_method = if (is_response) method_lbl else NULL))
   }
 
   if (identical(state$kind, "edge")) {
@@ -1346,12 +1384,25 @@ build_forest_inputs <- function(state, tab_id, outcome) {
         pooled_list[[kind_pair[1]]] <- data.frame(
           kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper)
     }
-    for (kind_pair in list(c("NMA-FE", "fixed"), c("NMA-RE", "random"))) {
-      r <- fetch_ma_directed(outcome$code, "network", kind_pair[2],
-                             comp, ref, measure_val)
-      if (!is.null(r))
-        pooled_list[[kind_pair[1]]] <- data.frame(
-          kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper)
+    if (is_response) {
+      for (kind_pair in list(c("Bin-NMA-FE",  "fixed",  "binomial"),
+                             c("Bin-NMA-RE",  "random", "binomial"),
+                             c("Mult-NMA-FE", "fixed",  "multinomial"),
+                             c("Mult-NMA-RE", "random", "multinomial"))) {
+        r <- fetch_ma_directed(outcome$code, "network", kind_pair[2],
+                               comp, ref, measure_val, method = kind_pair[3])
+        if (!is.null(r))
+          pooled_list[[kind_pair[1]]] <- data.frame(
+            kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper)
+      }
+    } else {
+      for (kind_pair in list(c("NMA-FE", "fixed"), c("NMA-RE", "random"))) {
+        r <- fetch_ma_directed(outcome$code, "network", kind_pair[2],
+                               comp, ref, measure_val)
+        if (!is.null(r))
+          pooled_list[[kind_pair[1]]] <- data.frame(
+            kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper)
+      }
     }
     pooled <- if (length(pooled_list)) do.call(rbind, pooled_list) else NULL
 
@@ -1418,12 +1469,25 @@ build_forest_inputs <- function(state, tab_id, outcome) {
         pooled_list[[kind_pair[1]]] <- data.frame(
           kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1])
     }
-    for (kind_pair in list(c("NMA-R-FE", "fixed"), c("NMA-R-RE", "random"))) {
-      r <- fetch_ma(outcome$code, type = "network", effects = kind_pair[2],
-                    comp_tx = state$drug, measure = measure_val)
-      if (nrow(r))
-        pooled_list[[kind_pair[1]]] <- data.frame(
-          kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1])
+    if (is_response) {
+      for (kind_pair in list(c("Bin-NMA-R-FE",  "fixed",  "binomial"),
+                             c("Bin-NMA-R-RE",  "random", "binomial"),
+                             c("Mult-NMA-R-FE", "fixed",  "multinomial"),
+                             c("Mult-NMA-R-RE", "random", "multinomial"))) {
+        r <- fetch_ma(outcome$code, type = "network", effects = kind_pair[2],
+                      comp_tx = state$drug, measure = measure_val, method = kind_pair[3])
+        if (nrow(r))
+          pooled_list[[kind_pair[1]]] <- data.frame(
+            kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1])
+      }
+    } else {
+      for (kind_pair in list(c("NMA-R-FE", "fixed"), c("NMA-R-RE", "random"))) {
+        r <- fetch_ma(outcome$code, type = "network", effects = kind_pair[2],
+                      comp_tx = state$drug, measure = measure_val)
+        if (nrow(r))
+          pooled_list[[kind_pair[1]]] <- data.frame(
+            kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1])
+      }
     }
     pooled <- if (length(pooled_list)) do.call(rbind, pooled_list) else NULL
 
@@ -1711,7 +1775,10 @@ ui <- fluidPage(
                             padding: 14px 18px; }
     .ma-modal h4 { margin-top: 4px; color: #1F4E8C; font-size: 15px; }
     .ma-modal .ma-summary { font-size: 13px; color: #5a6478;
-                            margin-bottom: 14px; }
+                            margin-bottom: 8px; }
+    .ma-method-toggle { margin-bottom: 12px; }
+    .ma-method-toggle .shiny-input-container { margin: 0; }
+    .ma-method-toggle label.radio-inline { margin-right: 16px; font-size: 13px; }
     .ma-modal .ma-plot-block { margin-bottom: 22px; }
     .ma-modal .ma-plot-title { font-weight: 600; color: #1a1f2c;
                                font-size: 14px; margin: 8px 0 2px 0; }
@@ -2030,11 +2097,11 @@ server <- function(input, output, session) {
                      tooltipDelay = 150, hover = TRUE,
                      zoomView = TRUE, dragView = TRUE) |>
       visEvents(
-        selectNode   = "function(p){ Shiny.setInputValue('nma_node', p.nodes[0], {priority:'event'}); }",
-        selectEdge   = "function(p){ if(p.nodes && p.nodes.length) return;
-                                     Shiny.setInputValue('nma_edge', p.edges[0], {priority:'event'}); }",
-        deselectNode = "function(p){ Shiny.setInputValue('nma_clear', Math.random(), {priority:'event'}); }",
-        deselectEdge = "function(p){ Shiny.setInputValue('nma_clear', Math.random(), {priority:'event'}); }"
+        click = "function(p){
+          if(p.nodes && p.nodes.length)      Shiny.setInputValue('nma_node',  p.nodes[0],      {priority:'event'});
+          else if(p.edges && p.edges.length) Shiny.setInputValue('nma_edge',  p.edges[0],      {priority:'event'});
+          else                               Shiny.setInputValue('nma_clear', Math.random(),   {priority:'event'});
+        }"
       )
   })
 
@@ -2098,11 +2165,12 @@ server <- function(input, output, session) {
   # diamonds together (no switch).
   ma_ctx <- reactiveValues(active = FALSE, tab_id = NULL, state = NULL,
                            gid = NULL, outcomes = NULL, state_lbl = NULL,
-                           group_lbl = NULL)
+                           group_lbl = NULL, is_response_nofilter = FALSE,
+                           response_method = "multinomial")
 
   # Build a single plot block for one outcome under the active state.
-  build_plot_block <- function(state, tab_id, outc) {
-    inputs <- tryCatch(build_forest_inputs(state, tab_id, outc),
+  build_plot_block <- function(state, tab_id, outc, response_method = "binomial") {
+    inputs <- tryCatch(build_forest_inputs(state, tab_id, outc, response_method),
                        error = function(e) NULL)
     if (is.null(inputs)) {
       return(div(class = "ma-plot-block",
@@ -2118,18 +2186,13 @@ server <- function(input, output, session) {
     }
     eff_scale <- inputs$effective_scale %||% "md"
     stats <- if (!is.null(inputs$pooled) && nrow(inputs$pooled) > 0) {
-      # FE/RE = edge pairwise; Pool-FE/Pool-RE = node univariate
-      fe <- inputs$pooled[inputs$pooled$kind %in% c("FE", "Pool-FE"), ]
-      re <- inputs$pooled[inputs$pooled$kind %in% c("RE", "Pool-RE"), ]
-      sm_lbl <- switch(eff_scale, md = "MD", prop = "Proportion", "Effect")
-      digits <- if (eff_scale == "prop") 3 else 2
-      sprintf("Pooled %s — FE: %s • RE: %s • %d studies",
-              sm_lbl,
-              if (nrow(fe)) fmt_ci(fe$est, fe$lo, fe$hi, digits) else "n/a",
-              if (nrow(re)) fmt_ci(re$est, re$lo, re$hi, digits) else "n/a",
-              nrow(inputs$rows))
+      ax_lbl <- inputs$axis_label %||% switch(eff_scale, md = "MD", prop = "Proportion", "Effect")
+      sprintf("%s • %d studies", ax_lbl, nrow(inputs$rows))
     } else if (!is.null(inputs$n_drugs)) {
-      sprintf("Network MA, FE + RE — %d drugs", inputs$n_drugs)
+      if (!is.null(inputs$response_method))
+        sprintf("Network MA, FE + RE — %d drugs (%s)", inputs$n_drugs, inputs$response_method)
+      else
+        sprintf("Network MA, FE + RE — %d drugs", inputs$n_drugs)
     } else {
       sprintf("%d %s", nrow(inputs$rows),
               if (is.null(state)) "drugs" else "studies")
@@ -2147,10 +2210,24 @@ server <- function(input, output, session) {
   # Reactively rendered plot area. Driven by ma_ctx (set on modal open).
   output$ma_plot_area <- renderUI({
     req(ma_ctx$active, ma_ctx$tab_id, ma_ctx$gid, ma_ctx$outcomes)
-    tab_id   <- ma_ctx$tab_id
-    state    <- ma_ctx$state
-    outcomes <- ma_ctx$outcomes
-    lapply(outcomes, function(outc) build_plot_block(state, tab_id, outc))
+    tab_id          <- ma_ctx$tab_id
+    state           <- ma_ctx$state
+    outcomes        <- ma_ctx$outcomes
+    response_method <- ma_ctx$response_method
+    lapply(outcomes, function(outc) build_plot_block(state, tab_id, outc, response_method))
+  })
+
+  observeEvent(input$ma_method, {
+    ma_ctx$response_method <- input$ma_method
+  })
+
+  output$ma_method_toggle <- renderUI({
+    req(ma_ctx$is_response_nofilter)
+    div(class = "ma-method-toggle",
+        radioButtons("ma_method", label = NULL,
+                     choices = c("Binomial" = "binomial", "Multinomial" = "multinomial"),
+                     selected = "multinomial",
+                     inline = TRUE))
   })
 
   open_ma_modal <- function(tab_id) {
@@ -2189,13 +2266,16 @@ server <- function(input, output, session) {
     group_lbl <- endpoint_groups[[tab_id]]$groups[[gid]]$label %||% gid
 
     # Stash context for the reactive plot area to consume.
-    ma_ctx$tab_id    <- tab_id
-    ma_ctx$state     <- state
-    ma_ctx$gid       <- gid
-    ma_ctx$outcomes  <- outcomes
-    ma_ctx$state_lbl <- state_lbl
-    ma_ctx$group_lbl <- group_lbl
-    ma_ctx$active    <- TRUE
+    ma_ctx$tab_id               <- tab_id
+    ma_ctx$state                <- state
+    ma_ctx$gid                  <- gid
+    ma_ctx$outcomes             <- outcomes
+    ma_ctx$state_lbl            <- state_lbl
+    ma_ctx$group_lbl            <- group_lbl
+    ma_ctx$is_response_nofilter <- is.null(state) && tab_id %in% c("pasi", "dlqi") &&
+                                   gid %in% c("response", "zero")
+    ma_ctx$response_method      <- "multinomial"
+    ma_ctx$active               <- TRUE
 
     summary_text <- sprintf("%s | endpoint group: %s", state_lbl, group_lbl)
 
@@ -2205,6 +2285,7 @@ server <- function(input, output, session) {
       footer = modalButton("Close"),
       div(
         div(class = "ma-summary", summary_text),
+        uiOutput("ma_method_toggle"),
         uiOutput("ma_plot_area")
       )
     ))
