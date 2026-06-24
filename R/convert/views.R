@@ -109,12 +109,15 @@ build_views <- function(dst) {
                    .case_hi  ("abs_pasi",        "abs_pasi_hi_iqr"),
                    .case_mean("abs_pasi_change", "abs_pasi_change_mean"),
                    .case_sd  ("abs_pasi_change", "abs_pasi_change_sd"),
-                   .case_med ("abs_pasi_change", "abs_pasi_change_median")),
+                   .case_med ("abs_pasi_change", "abs_pasi_change_median"),
+                   .case_lo  ("abs_pasi_change", "abs_pasi_change_lo_iqr"),
+                   .case_hi  ("abs_pasi_change", "abs_pasi_change_hi_iqr")),
     select_cols = c("pivot.pasi50", "pivot.pasi75", "pivot.pasi90", "pivot.pasi100",
                     "pivot.abs_pasi_mean","pivot.abs_pasi_sd","pivot.abs_pasi_median",
                     "pivot.abs_pasi_lo_iqr","pivot.abs_pasi_hi_iqr",
                     "pivot.abs_pasi_change_mean","pivot.abs_pasi_change_sd",
-                    "pivot.abs_pasi_change_median"),
+                    "pivot.abs_pasi_change_median",
+                    "pivot.abs_pasi_change_lo_iqr","pivot.abs_pasi_change_hi_iqr"),
     extra_join = "
     LEFT JOIN (
       SELECT arm_id,
@@ -140,14 +143,20 @@ build_views <- function(dst) {
                    .case_mean("abs_dlqi",        "abs_dlqi_mean"),
                    .case_sd  ("abs_dlqi",        "abs_dlqi_sd"),
                    .case_med ("abs_dlqi",        "abs_dlqi_median"),
+                   .case_lo  ("abs_dlqi",        "abs_dlqi_lo_iqr"),
+                   .case_hi  ("abs_dlqi",        "abs_dlqi_hi_iqr"),
                    .case_mean("abs_dlqi_change", "abs_dlqi_change_mean"),
                    .case_sd  ("abs_dlqi_change", "abs_dlqi_change_sd"),
-                   .case_med ("abs_dlqi_change", "abs_dlqi_change_median")),
+                   .case_med ("abs_dlqi_change", "abs_dlqi_change_median"),
+                   .case_lo  ("abs_dlqi_change", "abs_dlqi_change_lo_iqr"),
+                   .case_hi  ("abs_dlqi_change", "abs_dlqi_change_hi_iqr")),
     select_cols = c("pivot.dlqi_0_1","pivot.dlqi_0","pivot.dlqi_5pt_dec",
                     "pivot.dlqi_4pt_dec","pivot.dlqi_le5",
                     "pivot.abs_dlqi_mean","pivot.abs_dlqi_sd","pivot.abs_dlqi_median",
+                    "pivot.abs_dlqi_lo_iqr","pivot.abs_dlqi_hi_iqr",
                     "pivot.abs_dlqi_change_mean","pivot.abs_dlqi_change_sd",
-                    "pivot.abs_dlqi_change_median")
+                    "pivot.abs_dlqi_change_median",
+                    "pivot.abs_dlqi_change_lo_iqr","pivot.abs_dlqi_change_hi_iqr")
   )
 
   # v_safety - binary safety outcomes.

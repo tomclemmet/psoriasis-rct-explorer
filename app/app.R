@@ -9,6 +9,8 @@ suppressPackageStartupMessages({
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
+DERIVE_CHANGE_CORR <- 0.5  # assumed r(baseline, follow-up) for SD derivation
+
 DB_PATH <- file.path(dirname(sys.frame(1)$ofile %||% "."), "psoriasis-rcts.sqlite")
 if (!file.exists(DB_PATH)) DB_PATH <- "app/psoriasis-rcts.sqlite"
 if (!file.exists(DB_PATH)) stop("psoriasis-rcts.sqlite not found - run convert.R first.")
@@ -249,7 +251,7 @@ fmt_trial <- function(trial, ref_id) {
   labels <- htmltools::htmlEscape(trial)
   ids    <- as.character(ref_id)
   has    <- ids %in% studies_with_cites
-  out    <- paste0("<span>", labels, "</span>")
+  out    <- sprintf("<span>%s</span>", labels)
   out[has] <- sprintf(
     '<a href="javascript:void(0)" class="trial-pop" data-ref-id="%s">%s</a>',
     ids[has], labels[has]
@@ -281,21 +283,33 @@ fmt_mean_sd <- function(mean, sd, digits = 1) {
 # Only the mean is derived: the SD of the difference depends on the
 # within-arm baseline/follow-up correlation, which is rarely reported, so
 # SDs of derived cells are left blank rather than guessed.
-derive_change <- function(baseline, follow, change) {
-  cd <- rep(FALSE, length(change))
-  m <- is.na(change) & !is.na(baseline) & !is.na(follow)
+derive_change <- function(baseline, follow, change,
+                          baseline_sd = NULL, follow_sd = NULL) {
+  cd  <- rep(FALSE, length(change))
+  csd <- rep(NA_real_, length(change))
+  m   <- is.na(change) & !is.na(baseline) & !is.na(follow)
   change[m] <- follow[m] - baseline[m]
-  cd[m] <- TRUE
-  list(change = change, change_derived = cd)
+  cd[m]     <- TRUE
+  if (!is.null(baseline_sd) && !is.null(follow_sd)) {
+    can      <- m & !is.na(baseline_sd) & !is.na(follow_sd)
+    csd[can] <- sqrt(
+      follow_sd[can]^2 + baseline_sd[can]^2 -
+        2 * DERIVE_CHANGE_CORR * follow_sd[can] * baseline_sd[can]
+    )
+  }
+  list(change = change, change_derived = cd, change_sd_derived = csd)
 }
 
 # fmt_mean_sd, but derived cells are rendered without an SD (we don't have
 # one) and tagged with a trailing asterisk so the table caption can explain
 # them. Non-derived cells render exactly as fmt_mean_sd would.
-fmt_mean_sd_marked <- function(mean, sd, derived, digits = 1) {
+fmt_mean_sd_marked <- function(mean, sd, derived, derived_sd = NULL, digits = 1) {
   sd_eff <- sd
-  sd_eff[derived] <- NA_real_
-  out <- fmt_mean_sd(mean, sd_eff, digits = digits)
+  if (!is.null(derived_sd)) {
+    fill <- derived & is.na(sd_eff) & !is.na(derived_sd)
+    sd_eff[fill] <- derived_sd[fill]
+  }
+  out  <- fmt_mean_sd(mean, sd_eff, digits = digits)
   mark <- derived & nzchar(out)
   out[mark] <- paste0(out[mark], "*")
   out
@@ -360,16 +374,18 @@ format_pasi_absolute <- function(df) {
   )
   b <- baseline_lookup(df, "abs_pasi_mean", "abs_pasi_sd",
                        fallback = bp_fallback)
-  d <- derive_change(b$mean, df$abs_pasi_mean, df$abs_pasi_change_mean)
+  d <- derive_change(b$mean, df$abs_pasi_mean, df$abs_pasi_change_mean,
+                     baseline_sd = b$sd, follow_sd = df$abs_pasi_sd)
   df$baseline        <- fmt_mean_sd(b$mean, b$sd)
   df$on_tx           <- fmt_mean_sd(df$abs_pasi_mean, df$abs_pasi_sd)
   df$abs_pasi_change <- fmt_mean_sd_marked(d$change, df$abs_pasi_change_sd,
-                                           d$change_derived)
+                                           d$change_derived,
+                                           derived_sd = d$change_sd_derived)
   df$drug  <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
   df$trial <- fmt_trial(df$trial, df$ref_id)
   # Drop pure baseline rows; each follow-up row now carries its baseline.
   df <- df[is.na(df$timepoint) | df$timepoint > 0, ]
-  has_any <- nzchar(df$baseline) | nzchar(df$on_tx) | nzchar(df$abs_pasi_change)
+  has_any <- nzchar(df$on_tx) | nzchar(df$abs_pasi_change)
   df <- df[has_any, , drop = FALSE]
   df[, c("trial", "drug", "n", "baseline", "on_tx", "abs_pasi_change")]
 }
@@ -380,15 +396,17 @@ format_dlqi_zero <- function(df) {
 
 format_dlqi_absolute <- function(df) {
   b <- baseline_lookup(df, "abs_dlqi_mean", "abs_dlqi_sd")
-  d <- derive_change(b$mean, df$abs_dlqi_mean, df$abs_dlqi_change_mean)
+  d <- derive_change(b$mean, df$abs_dlqi_mean, df$abs_dlqi_change_mean,
+                     baseline_sd = b$sd, follow_sd = df$abs_dlqi_sd)
   df$baseline        <- fmt_mean_sd(b$mean, b$sd)
   df$on_tx           <- fmt_mean_sd(df$abs_dlqi_mean, df$abs_dlqi_sd)
   df$abs_dlqi_change <- fmt_mean_sd_marked(d$change, df$abs_dlqi_change_sd,
-                                           d$change_derived)
+                                           d$change_derived,
+                                           derived_sd = d$change_sd_derived)
   df$drug  <- fmt_drug(df$drug, df$dose, df$timepoint, df$timepoint_unit)
   df$trial <- fmt_trial(df$trial, df$ref_id)
   df <- df[is.na(df$timepoint) | df$timepoint > 0, ]
-  has_any <- nzchar(df$baseline) | nzchar(df$on_tx) | nzchar(df$abs_dlqi_change)
+  has_any <- nzchar(df$on_tx) | nzchar(df$abs_dlqi_change)
   df <- df[has_any, , drop = FALSE]
   df[, c("trial", "drug", "n", "baseline", "on_tx", "abs_dlqi_change")]
 }
@@ -413,10 +431,10 @@ endpoint_groups <- list(
         fmt      = format_pasi_absolute,
         colnames = c("Trial", "Drug", "N",
                      "Baseline", "Follow-up", "Δ from baseline"),
-        note     = paste("Change values marked with * are derived as",
-                         "follow-up - baseline when the study reported",
-                         "both timepoints but not the change directly;",
-                         "SDs are not shown for derived values.")
+        note     = paste("Values marked with * are derived: the mean is",
+                         "follow-up − baseline; the SD is approximated",
+                         "assuming a baseline/follow-up correlation of 0.5.",
+                         "Where an SD could not be derived it is omitted.")
       )
     )
   ),
@@ -435,10 +453,10 @@ endpoint_groups <- list(
         fmt      = format_dlqi_absolute,
         colnames = c("Trial", "Drug", "N",
                      "Baseline", "Follow-up", "Δ from baseline"),
-        note     = paste("Change values marked with * are derived as",
-                         "follow-up - baseline when the study reported",
-                         "both timepoints but not the change directly;",
-                         "SDs are not shown for derived values.")
+        note     = paste("Values marked with * are derived: the mean is",
+                         "follow-up − baseline; the SD is approximated",
+                         "assuming a baseline/follow-up correlation of 0.5.",
+                         "Where an SD could not be derived it is omitted.")
       )
     )
   ),
@@ -730,10 +748,10 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
       DRUG_GAP <- 8L
       fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
       fe_tt <- mapply(function(drug, est, lo, hi)
-        ma_tooltip(sprintf("%s — %s network estimate (FE)", drug, method_lbl), est, lo, hi, digits = 2),
+        ma_tooltip(sprintf("%s — %s network estimate, fixed effects", drug, method_lbl), est, lo, hi, digits = 2),
         df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper)
       re_tt <- mapply(function(drug, est, lo, hi)
-        ma_tooltip(sprintf("%s — %s network estimate (RE)", drug, method_lbl), est, lo, hi, digits = 2),
+        ma_tooltip(sprintf("%s — %s network estimate, random effects", drug, method_lbl), est, lo, hi, digits = 2),
         df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper)
       rows <- data.frame(
         label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
@@ -770,10 +788,10 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
       DRUG_GAP <- 8L
       fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
       fe_tt <- mapply(function(drug, est, lo, hi)
-        ma_tooltip(sprintf("%s — network estimate (FE)", drug), est, lo, hi, digits = 2),
+        ma_tooltip(sprintf("%s — network estimate, fixed effects", drug), est, lo, hi, digits = 2),
         df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper)
       re_tt <- mapply(function(drug, est, lo, hi)
-        ma_tooltip(sprintf("%s — network estimate (RE)", drug), est, lo, hi, digits = 2),
+        ma_tooltip(sprintf("%s — network estimate, random effects", drug), est, lo, hi, digits = 2),
         df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper)
       rows <- data.frame(
         label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
@@ -826,6 +844,12 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
       r <- fetch_trials(outcome$code, comp_tx = a, ref_tx = b,
                         measure = measure_val)
       if (nrow(r)) return(c(a, b))
+      if (is_response) {
+        r <- fetch_ma(outcome$code, type = "network", effects = "random",
+                      comp_tx = a, ref_tx = b, measure = measure_val,
+                      method = "multinomial")
+        if (nrow(r)) return(c(a, b))
+      }
       NULL
     }
     orient <- find_orient(state$from, state$to)
@@ -835,48 +859,57 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
 
     trials <- fetch_trials(outcome$code, comp_tx = comp, ref_tx = ref,
                            measure = measure_val)
-    if (!nrow(trials)) return(NULL)
+    if (!nrow(trials) && !is_response) return(NULL)
 
-    # When one side is Placebo, normalise to drug-vs-Placebo (positive = favours drug).
-    if (identical(comp, "Placebo") && !identical(ref, "Placebo")) {
-      trials$mean  <- -trials$mean
-      tmp          <- trials$lower
-      trials$lower <- -trials$upper
-      trials$upper <- -tmp
-      for (pair in list(c("comp_tx", "ref_tx"), c("n_tx", "n_ref"), c("k_tx", "k_ref"),
-                        c("mean_tx", "mean_ref"), c("sd_tx", "sd_ref"))) {
-        tmp               <- trials[[pair[1]]]
-        trials[[pair[1]]] <- trials[[pair[2]]]
-        trials[[pair[2]]] <- tmp
+    if (nrow(trials)) {
+      # When one side is Placebo, normalise to drug-vs-Placebo (positive = favours drug).
+      if (identical(comp, "Placebo") && !identical(ref, "Placebo")) {
+        trials$mean  <- -trials$mean
+        tmp          <- trials$lower
+        trials$lower <- -trials$upper
+        trials$upper <- -tmp
+        for (pair in list(c("comp_tx", "ref_tx"), c("n_tx", "n_ref"), c("k_tx", "k_ref"),
+                          c("mean_tx", "mean_ref"), c("sd_tx", "sd_ref"))) {
+          tmp               <- trials[[pair[1]]]
+          trials[[pair[1]]] <- trials[[pair[2]]]
+          trials[[pair[2]]] <- tmp
+        }
+        comp <- trials$comp_tx[1]
+        ref  <- trials$ref_tx[1]
       }
-      comp <- trials$comp_tx[1]
-      ref  <- trials$ref_tx[1]
-    }
 
-    rows <- data.frame(
-      label    = trial_name[as.character(trials$ref_id)],
-      est      = trials$mean, lo = trials$lower, hi = trials$upper,
-      square_n = trials$n_tx + coalesce0(trials$n_ref),
-      stringsAsFactors = FALSE
-    )
-    rows$tooltip <- vapply(seq_len(nrow(rows)), function(i) {
-      t <- trials[i, ]
-      lbl_tx  <- sprintf("%s (events/n)", t$comp_tx)
-      lbl_ref <- sprintf("%s (events/n)", t$ref_tx)
-      if (!is_continuous)
-        ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
-                   extra = setNames(
-                     c(sprintf("%d / %d", t$k_tx, t$n_tx),
-                       sprintf("%d / %d", t$k_ref, t$n_ref)),
-                     c(lbl_tx, lbl_ref)))
-      else
-        ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
-                   extra = setNames(
-                     c(sprintf("%.2f (%.2f), %d", t$mean_tx, t$sd_tx, t$n_tx),
-                       sprintf("%.2f (%.2f), %d", t$mean_ref, t$sd_ref, t$n_ref)),
-                     c(sprintf("%s: mean (SD), n", t$comp_tx),
-                       sprintf("%s: mean (SD), n", t$ref_tx))))
-    }, character(1))
+      rows <- data.frame(
+        label    = trial_name[as.character(trials$ref_id)],
+        est      = trials$mean, lo = trials$lower, hi = trials$upper,
+        square_n = trials$n_tx + coalesce0(trials$n_ref),
+        stringsAsFactors = FALSE
+      )
+      rows$tooltip <- vapply(seq_len(nrow(rows)), function(i) {
+        t <- trials[i, ]
+        lbl_tx  <- sprintf("%s (events/n)", t$comp_tx)
+        lbl_ref <- sprintf("%s (events/n)", t$ref_tx)
+        if (!is_continuous)
+          ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
+                     extra = setNames(
+                       c(sprintf("%d / %d", t$k_tx, t$n_tx),
+                         sprintf("%d / %d", t$k_ref, t$n_ref)),
+                       c(lbl_tx, lbl_ref)))
+        else
+          ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
+                     extra = setNames(
+                       c(sprintf("%.2f (%.2f), %d", t$mean_tx, t$sd_tx, t$n_tx),
+                         sprintf("%.2f (%.2f), %d", t$mean_ref, t$sd_ref, t$n_ref)),
+                       c(sprintf("%s: mean (SD), n", t$comp_tx),
+                         sprintf("%s: mean (SD), n", t$ref_tx))))
+      }, character(1))
+    } else {
+      if (identical(comp, "Placebo") && !identical(ref, "Placebo")) {
+        tmp  <- comp; comp <- ref; ref <- tmp
+      }
+      rows <- data.frame(label = character(), est = numeric(), lo = numeric(),
+                         hi = numeric(), square_n = numeric(), tooltip = character(),
+                         stringsAsFactors = FALSE)
+    }
 
     # Pooled diamonds: pairwise FE/RE + network FE/RE (all in comp→ref direction).
     pooled_list <- list()
@@ -908,6 +941,7 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
       }
     }
     pooled <- if (length(pooled_list)) do.call(rbind, pooled_list) else NULL
+    if (!nrow(rows) && is.null(pooled)) return(NULL)
 
     dir_left <- dir_right <- NULL
     if (!is_continuous && is_harm) {
@@ -940,29 +974,35 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
 
     trials <- fetch_trials(outcome$code, comp_tx = state$drug,
                            measure = measure_val)
-    if (!nrow(trials)) return(NULL)
+    if (!nrow(trials) && !is_response) return(NULL)
 
     digits <- if (eff_scale == "prop") 3 else 2
-    rows <- data.frame(
-      label    = trial_name[as.character(trials$ref_id)],
-      est      = trials$mean, lo = trials$lower, hi = trials$upper,
-      square_n = trials$n_tx,
-      stringsAsFactors = FALSE
-    )
-    event_lbl <- if (is_harm) "Events" else "Responders"
-    rows$tooltip <- vapply(seq_len(nrow(rows)), function(i) {
-      t <- trials[i, ]
-      if (!is_continuous)
-        ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
-                   extra = c(setNames(sprintf("%d / %d", t$k_tx, t$n_tx),
-                                      event_lbl)),
-                   digits = digits)
-      else
-        ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
-                   extra = c("Mean (SD), n" = sprintf("%.2f (%.2f), %d",
-                                                       t$mean_tx, t$sd_tx, t$n_tx)),
-                   digits = digits)
-    }, character(1))
+    if (nrow(trials)) {
+      rows <- data.frame(
+        label    = trial_name[as.character(trials$ref_id)],
+        est      = trials$mean, lo = trials$lower, hi = trials$upper,
+        square_n = trials$n_tx,
+        stringsAsFactors = FALSE
+      )
+      event_lbl <- if (is_harm) "Events" else "Responders"
+      rows$tooltip <- vapply(seq_len(nrow(rows)), function(i) {
+        t <- trials[i, ]
+        if (!is_continuous)
+          ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
+                     extra = c(setNames(sprintf("%d / %d", t$k_tx, t$n_tx),
+                                        event_lbl)),
+                     digits = digits)
+        else
+          ma_tooltip(trial_name[as.character(t$ref_id)] %||% as.character(t$ref_id), t$mean, t$lower, t$upper,
+                     extra = c("Mean (SD), n" = sprintf("%.2f (%.2f), %d",
+                                                         t$mean, t$sd_tx, t$n_tx)),
+                     digits = digits)
+      }, character(1))
+    } else {
+      rows <- data.frame(label = character(), est = numeric(), lo = numeric(),
+                         hi = numeric(), square_n = numeric(), tooltip = character(),
+                         stringsAsFactors = FALSE)
+    }
 
     pooled_list <- list()
     for (kind_pair in list(c("Pool-FE", "fixed"), c("Pool-RE", "random"))) {
@@ -993,6 +1033,7 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
       }
     }
     pooled <- if (length(pooled_list)) do.call(rbind, pooled_list) else NULL
+    if (!nrow(rows) && is.null(pooled)) return(NULL)
 
     prop_lbl <- if (is_harm) "Event rate" else "Response rate"
     axis_label <- if (is_continuous)
@@ -1476,9 +1517,9 @@ server <- function(input, output, session) {
       sprintf("%s • %d %s", ax_lbl, n_st, if (n_st == 1) "study" else "studies")
     } else if (!is.null(inputs$n_drugs)) {
       if (!is.null(inputs$response_method))
-        sprintf("Network MA, FE + RE — %d drugs (%s)", inputs$n_drugs, inputs$response_method)
+        sprintf("Network meta-analysis, FE + RE — %d drugs (%s)", inputs$n_drugs, inputs$response_method)
       else
-        sprintf("Network MA, FE + RE — %d drugs", inputs$n_drugs)
+        sprintf("Network meta-analysis, FE + RE — %d drugs", inputs$n_drugs)
     } else {
       sprintf("%d %s", nrow(inputs$rows),
               if (is.null(state)) "drugs" else "studies")

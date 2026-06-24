@@ -13,27 +13,16 @@ source("R/meta-analyse/ma-utils.R")
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 dbListTables(con)
 
-query <- "
-SELECT 
-    p.ref_id, p.arm_no, p.drug, p.timepoint, p.timepoint_unit, p.n,
-    p.pasi50, p.pasi75, p.pasi90, p.pasi100, p.abs_pasi_change_mean, 
-    p.abs_pasi_change_sd, p.abs_pasi_mean, p.abs_pasi_sd,
-    d.dlqi_0_1, d.dlqi_0, d.abs_dlqi_change_mean, d.abs_dlqi_change_sd,
-    d.abs_dlqi_mean, d.abs_dlqi_sd,
-    s.sae, s.disc_any, s.disc_ae, s.serious_infection, s.injection_site_rxn,
-    s.malignancy
-FROM v_pasi p
-LEFT JOIN v_dlqi d      ON p.ref_id = d.ref_id   AND p.arm_no = d.arm_no
-                       AND p.timepoint = d.timepoint     
-LEFT JOIN v_safety s    ON p.ref_id = s.ref_id   AND p.arm_no = s.arm_no
-                       AND p.timepoint = s.timepoint
-"
+join_keys <- colnames(pasi)[seq(1,9)]
+pasi <- dbReadTable(con, "v_pasi")
+dlqi <- dbReadTable(con, "v_dlqi")
+safety <- dbReadTable(con, "v_safety")
 
-data <- dbGetQuery(con, query) |>
-  filter(!is.na(drug)) |> 
-  group_by(ref_id, arm_no) |> 
-  filter(timepoint == 0 | timepoint == max(timepoint)) |> 
-  ungroup()
+data <- pasi |> 
+  full_join(dlqi, by = join_keys) |> 
+  full_join(safety, by = join_keys) |> 
+  filter(!is.na(drug))
+  
 drugs <- unique(data$drug)
 comparisons <- as.data.frame(t(combn(drugs, 2)))
 results <- list()
@@ -283,6 +272,9 @@ bin_outcomes <- c(
   "serious_infection", "injection_site_rxn", "malignancy"
 )
 
+bin_fit_fe <- list()
+bin_fit_re <- list()
+
 for (i in 1:length(bin_outcomes)) {
   placebo_data <- filter(data, drug == "Placebo", !is.na(.data[[bin_outcomes[i]]]))
   bin_ref <- metaprop(
@@ -304,7 +296,7 @@ for (i in 1:length(bin_outcomes)) {
     trt_ref = "Placebo"
   )
   
-  bin_fit_fe <- nma(
+  bin_fit_fe[[i]] <- nma(
     bin_net,
     trt_effects = "fixed",
     prior_intercept = normal(scale = 100),
@@ -319,7 +311,7 @@ for (i in 1:length(bin_outcomes)) {
   )
   
   # Random effects
-  bin_fit_re <- nma(
+  bin_fit_re[[i]] <- nma(
     bin_net,
     trt_effects = "random",
     prior_intercept = normal(scale = 100),

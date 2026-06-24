@@ -85,7 +85,7 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
                        axis_label = NULL, dir_left = NULL, dir_right = NULL) {
   esc <- function(x) htmltools::htmlEscape(x, attribute = FALSE)
   esc_attr <- function(x) htmltools::htmlEscape(x, attribute = TRUE)
-  if (!nrow(rows)) {
+  if (!nrow(rows) && (is.null(pooled) || !nrow(pooled))) {
     return(sprintf('<div class="ma-empty">No meta-analysable data for this comparison.</div>'))
   }
 
@@ -271,22 +271,22 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
       pts    <- forest_diamond_points(xL, xE, xR, yc, 7)
       ci_str <- fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i], ci_digits)
       tt_hdr <- switch(kind,
-        "FE"            = "Common-effect (FE) pairwise estimate",
-        "RE"            = "Random-effects (RE) pairwise estimate",
-        "NMA-FE"        = "Network MA common-effect (FE) estimate",
-        "NMA-RE"        = "Network MA random-effects (RE) estimate",
-        "Pool-FE"       = "Common-effect (FE) pooled estimate",
-        "Pool-RE"       = "Random-effects (RE) pooled estimate",
-        "NMA-R-FE"      = "Network MA common-effect (FE) estimate",
-        "NMA-R-RE"      = "Network MA random-effects (RE) estimate",
-        "Bin-NMA-FE"    = "Binomial network MA common-effect (FE) estimate",
-        "Bin-NMA-RE"    = "Binomial network MA random-effects (RE) estimate",
-        "Mult-NMA-FE"   = "Multinomial network MA common-effect (FE) estimate",
-        "Mult-NMA-RE"   = "Multinomial network MA random-effects (RE) estimate",
-        "Bin-NMA-R-FE"  = "Binomial network MA common-effect (FE) estimate",
-        "Bin-NMA-R-RE"  = "Binomial network MA random-effects (RE) estimate",
-        "Mult-NMA-R-FE" = "Multinomial network MA common-effect (FE) estimate",
-        "Mult-NMA-R-RE" = "Multinomial network MA random-effects (RE) estimate",
+        "FE"            = "Fixed effects pairwise estimate",
+        "RE"            = "Random effects pairwise estimate",
+        "NMA-FE"        = "Fixed effects network estimate",
+        "NMA-RE"        = "Random effects network estimate",
+        "Pool-FE"       = "Fixed effects pooled estimate",
+        "Pool-RE"       = "Random effects pooled estimate",
+        "NMA-R-FE"      = "Fixed effects network estimate",
+        "NMA-R-RE"      = "Random effects network estimate",
+        "Bin-NMA-FE"    = "Fixed effects binomial network estimate",
+        "Bin-NMA-RE"    = "Random effects binomial network estimate",
+        "Mult-NMA-FE"   = "Fixed effects multinomial network estimate",
+        "Mult-NMA-RE"   = "Random effects multinomial network estimate",
+        "Bin-NMA-R-FE"  = "Fixed effects binomial network estimate",
+        "Bin-NMA-R-RE"  = "Random effects binomial network estimate",
+        "Mult-NMA-R-FE" = "Fixed effects multinomial network estimate",
+        "Mult-NMA-R-RE" = "Random effects multinomial network estimate",
         kind)
       tt <- sprintf("%s\n%s", tt_hdr, ci_str)
       parts[length(parts) + 1L] <- paste0(
