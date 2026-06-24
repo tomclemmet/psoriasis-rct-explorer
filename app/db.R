@@ -20,11 +20,11 @@ query_view <- function(table, state) {
       sprintf("SELECT * FROM %s
                WHERE drug IN (?, ?)
                  AND trial IN (
-                   SELECT trial FROM v_pasi WHERE drug = ?
+                   SELECT trial FROM %s WHERE drug = ?
                    INTERSECT
-                   SELECT trial FROM v_pasi WHERE drug = ?
+                   SELECT trial FROM %s WHERE drug = ?
                  )
-               %s", table, base_order),
+               %s", table, table, table, base_order),
       params = list(state$from, state$to, state$from, state$to)
     ))
   }
