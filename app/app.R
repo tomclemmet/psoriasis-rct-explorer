@@ -214,38 +214,15 @@ fmt_citations <- function(pubs) {
   paste0('<div class="trial-cites">', paste(items, collapse = ""), "</div>")
 }
 
-# Pre-rendered citation HTML per study_id. Held as plain (unescaped) HTML
-# because it's delivered to the browser once as a JS object (window.studyCitations)
-# rather than being embedded into a `data-` attribute on every table cell.
-# fmt_trial() only writes the study_id into each cell; the JS click handler
-# looks the HTML up at click time.
+# Pre-rendered citation HTML per study_id, used by the trial detail modal.
 cites_html_by_study <- vapply(
   pubs_by_study, fmt_citations, character(1)
 )
 cites_html_by_study <- cites_html_by_study[nzchar(cites_html_by_study)]
-
-# Prepend trial name + ref_id header to each popover.
-esc <- htmltools::htmlEscape
-for (sid in names(cites_html_by_study)) {
-  name   <- trial_name[sid] %||% sid
-  header <- sprintf(
-    '<div class="trial-pop-title">%s<span class="trial-pop-refid"> · ref %s</span></div>',
-    esc(name), esc(sid))
-  cites_html_by_study[[sid]] <- paste0(header, cites_html_by_study[[sid]])
-}
-
 studies_with_cites <- names(cites_html_by_study)
-cites_json <- jsonlite::toJSON(as.list(cites_html_by_study), auto_unbox = TRUE)
 
-# Render trial text as a popover trigger. Clicking the trial name opens a
-# small floating panel listing every publication for that study (primary +
-# secondaries) as Vancouver-style citations with clickable DOIs. The popover
-# is implemented in vanilla JS (see tags$script in the UI) via event
-# delegation, so it survives DT redraws without a drawCallback.
-#
-# Each anchor carries only `data-ref-id`; the JS handler looks the citation
-# HTML up in window.studyCitations. Trials with no publications fall back to
-# a span (no popover).
+# Render trial text as a clickable link. Clicking sends the ref-id to Shiny
+# which opens a detail modal. Trials with no publications get a plain span.
 # Caller must pass `escape = FALSE` for the Trial column.
 fmt_trial <- function(trial, ref_id) {
   labels <- htmltools::htmlEscape(trial)
@@ -275,6 +252,23 @@ fmt_mean_sd <- function(mean, sd, digits = 1) {
                 sprintf(" (%s)", formatC(sd[ok], format = "f", digits = digits)))
   out[ok] <- paste0(m, s)
   out
+}
+
+# Build a two-row arm header for the trial modal's tables: drug name on top
+# (spanning consecutive arms sharing that drug), dose + sample size below.
+# `dose_label` is the per-arm second-row text, e.g. "45 mg (n = 209)".
+build_arm_header <- function(drug, dose_label) {
+  esc  <- htmltools::htmlEscape
+  grp  <- rle(drug)
+  row1 <- paste0(
+    sprintf('<th colspan="%d">%s</th>', grp$lengths, esc(grp$values)),
+    collapse = ""
+  )
+  row2 <- paste0(sprintf("<th>%s</th>", esc(dose_label)), collapse = "")
+  paste0(
+    "<tr><th rowspan=\"2\"></th>", row1, "</tr>",
+    "<tr>", row2, "</tr>"
+  )
 }
 
 # Fill in the change column when both baseline and follow-up are reported
@@ -1063,51 +1057,16 @@ ui <- fluidPage(
       });
     });
 
-    // Trial-name popover. fmt_trial() emits <a class='trial-pop'
-    // data-citations='...'> elements; clicking one opens a floating panel
-    // anchored beneath the link. Event delegation on document means DT
-    // redraws (filter/paginate) don't break the trigger.
-    (function() {
-      var pop = null;
-      function ensure() {
-        if (pop) return pop;
-        pop = document.createElement('div');
-        pop.id = 'trial-popover';
-        pop.style.display = 'none';
-        document.body.appendChild(pop);
-        return pop;
+    // Trial-name click handler. Sends the ref-id to Shiny so the server
+    // can open a detail modal. Event delegation survives DT redraws.
+    document.addEventListener('click', function(ev) {
+      var t = ev.target.closest && ev.target.closest('.trial-pop');
+      if (t) {
+        ev.preventDefault();
+        Shiny.setInputValue('trial_modal', t.getAttribute('data-ref-id'),
+                            {priority: 'event'});
       }
-      function hide() { if (pop) pop.style.display = 'none'; }
-      function show(trigger) {
-        var p = ensure();
-        var id = trigger.getAttribute('data-ref-id');
-        p.innerHTML = (window.studyCitations && window.studyCitations[id]) || '';
-        p.style.display = 'block';
-        // Measure after layout so we can flip when there's no room below.
-        var r  = trigger.getBoundingClientRect();
-        var ph = p.offsetHeight;
-        var pw = p.offsetWidth;
-        var spaceBelow = window.innerHeight - r.bottom;
-        var top = (spaceBelow < ph + 12 && r.top > spaceBelow)
-          ? window.scrollY + r.top - ph - 6
-          : window.scrollY + r.bottom + 6;
-        var left = window.scrollX + r.left;
-        var maxLeft = window.scrollX + window.innerWidth - pw - 12;
-        if (left > maxLeft) left = Math.max(8, maxLeft);
-        p.style.top  = top  + 'px';
-        p.style.left = left + 'px';
-      }
-      document.addEventListener('click', function(ev) {
-        var t = ev.target.closest && ev.target.closest('.trial-pop');
-        if (t) { ev.preventDefault(); show(t); return; }
-        if (pop && pop.contains(ev.target)) return;  // clicks inside popover
-        hide();
-      });
-      document.addEventListener('keydown', function(ev) {
-        if (ev.key === 'Escape') hide();
-      });
-      window.addEventListener('scroll', hide, true);
-    })();
+    });
 
     // Fast-popup tooltip for forest plot rows. Triggered on mouseover of any
     // element carrying data-tt; positioned next to the cursor with a tiny
@@ -1151,9 +1110,6 @@ ui <- fluidPage(
       });
     })();
   "))),
-  tags$head(tags$script(HTML(paste0(
-    "window.studyCitations = ", cites_json, ";"
-  )))),
   tags$head(
     tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),
     tags$link(rel = "preconnect", href = "https://fonts.gstatic.com",
@@ -1674,6 +1630,215 @@ server <- function(input, output, session) {
                ".")
       )
     ))
+  })
+
+  # --- Trial detail modal ---------------------------------------------------
+  observeEvent(input$trial_modal, {
+    sid  <- input$trial_modal
+    name <- trial_name[sid] %||% sid
+
+    # Primary publication title, shown as a subtitle under the trial name.
+    pubs <- pubs_by_study[[sid]]
+    primary_title <- if (!is.null(pubs) && any(pubs$is_primary == 1)) {
+      trimws(pubs$title[which(pubs$is_primary == 1)[1]])
+    } else NA_character_
+    modal_title <- if (!is.na(primary_title) && nzchar(primary_title)) {
+      tagList(
+        div(class = "trial-modal-title", name),
+        div(class = "trial-modal-subtitle", primary_title)
+      )
+    } else {
+      name
+    }
+
+    # References
+    refs_html <- cites_html_by_study[[sid]] %||%
+      '<p class="trial-modal-empty">No references available.</p>'
+
+    # Baseline characteristics
+    bl <- fetch_baselines(as.integer(sid))
+    if (nrow(bl)) {
+      bl$subcategory[bl$subcategory == "Comorbidity"] <- "Psoriasis characteristics"
+
+      arms <- unique(bl[, c("arm_no", "drug", "dose")])
+      arms <- arms[order(arms$arm_no), ]
+      # Header: drug on top (spanning same-drug arms), dose (n = ...) below.
+      arm_n <- tapply(bl$n, bl$arm_no, function(x) max(x, na.rm = TRUE))
+      has_dose <- !is.na(arms$dose) & nzchar(arms$dose)
+      dose_label <- ifelse(has_dose, arms$dose, "")
+      n_vals <- arm_n[as.character(arms$arm_no)]
+      has_n <- !is.na(n_vals) & is.finite(n_vals)
+      dose_label[has_n] <- trimws(sprintf("%s (n = %d)", dose_label[has_n],
+                                          as.integer(n_vals[has_n])))
+
+      bl_header <- build_arm_header(arms$drug, dose_label)
+
+      subcat_order <- c("Demographics", "Psoriasis characteristics",
+                        "Previous therapy")
+      subcats <- intersect(subcat_order, unique(bl$subcategory))
+      bl_rows <- character(0)
+      for (sc in subcats) {
+        sc_rows <- character(0)
+        labels <- unique(bl$label[bl$subcategory == sc])
+        for (lbl in labels) {
+          cells <- character(nrow(arms))
+          for (j in seq_len(nrow(arms))) {
+            row <- bl[bl$subcategory == sc & bl$label == lbl &
+                      bl$arm_no == arms$arm_no[j], ]
+            if (!nrow(row)) { cells[j] <- ""; next }
+            r <- row[1, ]
+            if (!is.na(r$k) && !is.na(r$n) && r$n > 0) {
+              cells[j] <- sprintf("%d (%d%%)", as.integer(r$k),
+                                  round(r$k / r$n * 100))
+            } else if (!is.na(r$mean)) {
+              cells[j] <- fmt_mean_sd(r$mean, r$sd)
+            } else {
+              cells[j] <- ""
+            }
+          }
+          if (all(!nzchar(cells))) next
+          sc_rows <- c(sc_rows, paste0(
+            "<tr><td>", htmltools::htmlEscape(lbl), "</td>",
+            paste0("<td>", cells, "</td>", collapse = ""),
+            "</tr>"))
+        }
+        if (!length(sc_rows)) next
+        bl_rows <- c(bl_rows,
+          sprintf('<tr class="subcat-row"><td colspan="%d">%s</td></tr>',
+                  1L + nrow(arms), htmltools::htmlEscape(sc)),
+          sc_rows)
+      }
+      bl_html <- paste0(
+        "<h4>Baseline characteristics</h4>",
+        "<table>", bl_header, paste(bl_rows, collapse = ""), "</table>")
+    } else {
+      bl_html <- '<p class="trial-modal-empty">No baseline data available.</p>'
+    }
+
+    # Results from all views
+    res <- fetch_trial_results(as.integer(sid))
+    results_html <- character(0)
+
+    view_labels <- list(
+      pasi = list(
+        title = "PASI",
+        binary = c(pasi50 = "PASI 50", pasi75 = "PASI 75",
+                   pasi90 = "PASI 90", pasi100 = "PASI 100"),
+        continuous = c(abs_pasi_mean = "Absolute PASI")
+      ),
+      dlqi = list(
+        title = "DLQI",
+        binary = c(dlqi_0_1 = "DLQI 0/1", dlqi_0 = "DLQI 0"),
+        continuous = c(abs_dlqi_mean = "Absolute DLQI")
+      ),
+      safety = list(
+        title = "Safety",
+        binary = c(sae = "Any SAE", disc_any = "Disc. (any)",
+                   disc_ae = "Disc. (AE)",
+                   serious_infection = "Serious infection",
+                   injection_site_rxn = "Injection site rxn",
+                   malignancy = "Malignancy"),
+        continuous = character(0)
+      )
+    )
+
+    for (vname in names(view_labels)) {
+      df <- res[[vname]]
+      if (!nrow(df)) next
+      vl <- view_labels[[vname]]
+
+      # Arms that have data in this view — header: drug on top, dose (n = ...) below.
+      arm_cols <- unique(df[, c("arm_no", "drug", "dose")])
+      arm_cols <- arm_cols[order(arm_cols$arm_no), ]
+      has_dose <- !is.na(arm_cols$dose) & nzchar(arm_cols$dose)
+      dose_label <- ifelse(has_dose, arm_cols$dose, "")
+      res_arm_n <- tapply(df$n, df$arm_no, function(x) max(x, na.rm = TRUE))
+      n_vals <- res_arm_n[as.character(arm_cols$arm_no)]
+      has_n <- !is.na(n_vals) & is.finite(n_vals)
+      dose_label[has_n] <- trimws(sprintf("%s (n = %d)", dose_label[has_n],
+                                          as.integer(n_vals[has_n])))
+
+      header <- build_arm_header(arm_cols$drug, dose_label)
+
+      timepoints <- sort(unique(df$timepoint[!is.na(df$timepoint) &
+                                             df$timepoint > 0]))
+      if (!length(timepoints)) timepoints <- unique(df$timepoint)
+
+      rows <- character(0)
+      # Binary outcomes
+      for (col in names(vl$binary)) {
+        if (!(col %in% names(df))) next
+        if (all(is.na(df[[col]]))) next
+        for (tp in timepoints) {
+          tp_df <- df[!is.na(df$timepoint) & df$timepoint == tp, ]
+          if (!nrow(tp_df)) next
+          cells <- character(nrow(arm_cols))
+          for (j in seq_len(nrow(arm_cols))) {
+            r <- tp_df[tp_df$arm_no == arm_cols$arm_no[j], ]
+            if (!nrow(r) || is.na(r[[col]][1])) { cells[j] <- ""; next }
+            cells[j] <- fmt_pasi(r[[col]][1], r$n[1])
+          }
+          if (all(!nzchar(cells))) next
+          tp_unit <- df$timepoint_unit[1]
+          if (!is.na(tp_unit) && !grepl("s$", tp_unit)) tp_unit <- paste0(tp_unit, "s")
+          tp_label <- paste0(tp, " ", tp_unit)
+          row_label <- sprintf("%s (%s)", vl$binary[[col]], tp_label)
+          rows <- c(rows, paste0(
+            "<tr><td>", htmltools::htmlEscape(row_label), "</td>",
+            paste0("<td>", cells, "</td>", collapse = ""),
+            "</tr>"))
+        }
+      }
+      # Continuous outcomes
+      for (col in names(vl$continuous)) {
+        sd_col <- sub("_mean$", "_sd", col)
+        if (!(col %in% names(df))) next
+        if (all(is.na(df[[col]]))) next
+        for (tp in timepoints) {
+          tp_df <- df[!is.na(df$timepoint) & df$timepoint == tp, ]
+          if (!nrow(tp_df)) next
+          cells <- character(nrow(arm_cols))
+          for (j in seq_len(nrow(arm_cols))) {
+            r <- tp_df[tp_df$arm_no == arm_cols$arm_no[j], ]
+            if (!nrow(r) || is.na(r[[col]][1])) { cells[j] <- ""; next }
+            sd_val <- if (sd_col %in% names(r)) r[[sd_col]][1] else NA
+            cells[j] <- fmt_mean_sd(r[[col]][1], sd_val)
+          }
+          if (all(!nzchar(cells))) next
+          tp_unit <- df$timepoint_unit[1]
+          if (!is.na(tp_unit) && !grepl("s$", tp_unit)) tp_unit <- paste0(tp_unit, "s")
+          tp_label <- paste0(tp, " ", tp_unit)
+          row_label <- sprintf("%s (%s)", vl$continuous[[col]], tp_label)
+          rows <- c(rows, paste0(
+            "<tr><td>", htmltools::htmlEscape(row_label), "</td>",
+            paste0("<td>", cells, "</td>", collapse = ""),
+            "</tr>"))
+        }
+      }
+
+      if (length(rows)) {
+        results_html <- c(results_html, paste0(
+          "<h4>", htmltools::htmlEscape(vl$title), "</h4>",
+          "<table>", header, paste(rows, collapse = ""), "</table>"))
+      }
+    }
+
+    if (!length(results_html)) {
+      results_html <- '<p class="trial-modal-empty">No results available.</p>'
+    }
+
+    showModal(modalDialog(
+      title = modal_title,
+      size  = "l",
+      easyClose = TRUE,
+      footer = modalButton("Close"),
+      div(class = "trial-modal-layout",
+        div(class = "trial-modal-refs", HTML(refs_html)),
+        div(class = "trial-modal-data",
+            HTML(bl_html),
+            HTML(paste(results_html, collapse = "")))
+      )
+    ) |> tagAppendAttributes(class = "trial-modal"))
   })
 
   output$download_db <- downloadHandler(

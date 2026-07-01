@@ -64,3 +64,42 @@ fetch_ma_directed <- function(endpoint, type, effects, comp, ref, measure, metho
 }
 
 coalesce0 <- function(x) ifelse(is.na(x), 0L, as.integer(x))
+
+fetch_baselines <- function(study_id) {
+  read_db(
+    "SELECT o.label, o.subcategory, a.arm_no, a.arm_name,
+            d.drug_name AS drug,
+            TRIM(
+              CASE
+                WHEN a.dose_amount IS NULL THEN ''
+                WHEN a.dose_amount = CAST(a.dose_amount AS INTEGER)
+                  THEN CAST(CAST(a.dose_amount AS INTEGER) AS TEXT)
+                ELSE CAST(a.dose_amount AS TEXT)
+              END
+              || ' ' || COALESCE(du.unit_name, '')
+            ) AS dose,
+            m.n, m.k, m.mean, m.sd
+     FROM   measurements m
+     JOIN   outcomes o      ON o.outcome_id = m.outcome_id
+     JOIN   arms a          ON a.arm_id     = m.arm_id
+     LEFT   JOIN drugs d    ON d.drug_id    = a.drug_id
+     LEFT   JOIN dose_units du ON du.unit_id = a.dose_unit_id
+     WHERE  a.study_id = ?
+       AND  o.code IS NULL
+       AND  o.subcategory IN ('Demographics', 'Psoriasis characteristics',
+                              'Previous therapy', 'Comorbidity')
+     ORDER  BY o.subcategory, o.outcome_id, a.arm_no",
+    params = list(study_id)
+  )
+}
+
+fetch_trial_results <- function(study_id) {
+  list(
+    pasi   = read_db("SELECT * FROM v_pasi   WHERE ref_id = ? ORDER BY arm_no, timepoint",
+                     params = list(study_id)),
+    dlqi   = read_db("SELECT * FROM v_dlqi   WHERE ref_id = ? ORDER BY arm_no, timepoint",
+                     params = list(study_id)),
+    safety = read_db("SELECT * FROM v_safety WHERE ref_id = ? ORDER BY arm_no, timepoint",
+                     params = list(study_id))
+  )
+}
