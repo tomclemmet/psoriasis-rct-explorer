@@ -119,24 +119,45 @@ html, body { height: 100%; overflow: hidden; }
 .app-footer { margin-top: 12px; font-size: 12px; color: #888; }
 .app-footer a { color: #1F4E8C; text-decoration: none; }
 .app-footer a:hover { text-decoration: underline; }
-/* Trial-name popover. Anchored absolutely; positioning is set inline by
-   the click handler in <script> above. */
+/* Trial-name link styling. */
 a.trial-pop { color: #1F4E8C; cursor: pointer; }
 a.trial-pop:hover { text-decoration: underline; }
-#trial-popover {
-  position: absolute; z-index: 1000; max-width: 520px;
-  background: #ffffff; border: 1px solid #c8ced6; border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-  padding: 10px 14px; font-size: 13px; line-height: 1.45; color: #222;
+/* Trial detail modal. */
+.trial-modal .modal-dialog { width: 92%; max-width: 1100px; }
+.trial-modal .modal-body { max-height: 75vh; overflow-y: auto;
+                           padding: 14px 18px; }
+.trial-modal-title { font-weight: 600; }
+.trial-modal-subtitle { font-weight: 400; font-size: 16px; color: #333a44;
+                        margin-top: 4px; }
+.trial-modal-layout { display: flex; gap: 20px; }
+.trial-modal-refs { flex: 0 0 30%; max-width: 30%; overflow-y: auto;
+                    max-height: 65vh; font-size: 13px; line-height: 1.45;
+                    border-right: 1px solid #e3e6ea; padding-right: 16px; }
+.trial-modal-refs .trial-cite { margin-bottom: 8px; }
+.trial-modal-refs .trial-cite:last-child { margin-bottom: 0; }
+.trial-modal-refs a { color: #1F4E8C; word-break: break-all; }
+.trial-modal-data { flex: 1 1 auto; min-width: 0; }
+.trial-modal-data h4 { margin-top: 16px; color: #1F4E8C; font-size: 15px; }
+.trial-modal-data h4:first-child { margin-top: 0; }
+.trial-modal-data table { width: 100%; table-layout: fixed;
+                          border-collapse: collapse;
+                          font-size: 13px; margin-bottom: 12px; }
+.trial-modal-data th, .trial-modal-data td {
+  padding: 4px 8px; text-align: left; border-bottom: 1px solid #e3e6ea;
+  overflow-wrap: break-word;
 }
-#trial-popover .trial-pop-title {
-  font-weight: 600; font-size: 13px; margin-bottom: 8px;
-  padding-bottom: 6px; border-bottom: 1px solid #e0e4ea;
+.trial-modal-data th { font-weight: 600; background: #f5f7fa; }
+.trial-modal-data th:first-child, .trial-modal-data td:first-child {
+  width: 26%;
 }
-#trial-popover .trial-pop-refid { font-weight: 400; color: #7f8fa6; }
-#trial-popover .trial-cite { margin-bottom: 8px; }
-#trial-popover .trial-cite:last-child { margin-bottom: 0; }
-#trial-popover a { color: #1F4E8C; word-break: break-all; }
+.trial-modal-data tr:first-child th { text-align: center;
+                                      border-bottom: 1px solid #d7dce3; }
+.trial-modal-data tr:nth-child(2) th { text-align: center; font-weight: 400;
+                                       font-size: 12px; color: #5a6478; }
+.trial-modal-data td:not(:first-child) { text-align: center; }
+.trial-modal-data .subcat-row td { font-weight: 600; color: #5a6478;
+                                   background: #f0f2f5; padding-top: 8px; }
+.trial-modal-empty { color: #5a6478; font-style: italic; padding: 8px 0; }
 /* Per-trial banding applied by drawCallback above. */
 table.dataTable tr.trial-band > td { background-color: #f3f5f8; }
 .title-bar { display: flex; align-items: center; justify-content: space-between;
