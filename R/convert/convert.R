@@ -405,9 +405,18 @@ dbWriteTable(dst, "arms", arms_df, append = TRUE)
 arm_id_of <- setNames(arms_df$arm_id, key(arms_df$study_id, arms_df$arm_no))
 
 # --- 8. Measurements (long format) ----------------------------------------
-# The 21 wide-view outcomes plus baseline PASI, main analysis only, timepoints
-# within MAX_TIMEPOINT_WK week-equivalent weeks.
-keep_outcome_ids <- unique(c(wide_outcomes_df$outcome_id, BASELINE_PASI_OUTCOME_ID))
+# The 21 wide-view outcomes, baseline PASI, and baseline characteristics
+# (demographics, previous therapy, comorbidity, psoriasis characteristics
+# without a view code). Main analysis only, timepoints within
+# MAX_TIMEPOINT_WK week-equivalent weeks.
+baseline_subcats <- c("Demographics", "Previous therapy",
+                      "Comorbidity", "Psoriasis characteristics")
+baseline_outcome_ids <- outcomes_df$outcome_id[
+  is.na(outcomes_df$code) & outcomes_df$subcategory %in% baseline_subcats
+]
+keep_outcome_ids <- unique(c(wide_outcomes_df$outcome_id,
+                             BASELINE_PASI_OUTCOME_ID,
+                             baseline_outcome_ids))
 
 m <- intra[intra$OutcomeID %in% keep_outcome_ids &
            intra$ArmNo > 0 &
