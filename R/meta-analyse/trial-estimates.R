@@ -7,23 +7,14 @@ library(stringr)
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 dbListTables(con)
 
-query <- "
-SELECT 
-    p.ref_id, p.arm_no, p.drug, p.timepoint, p.timepoint_unit, p.n,
-    p.pasi50, p.pasi75, p.pasi90, p.pasi100, p.abs_pasi_change_mean, 
-    p.abs_pasi_change_sd, p.abs_pasi_mean, p.abs_pasi_sd,
-    d.dlqi_0_1, d.dlqi_0, d.abs_dlqi_change_mean, d.abs_dlqi_change_sd,
-    d.abs_dlqi_mean, d.abs_dlqi_sd,
-    s.sae, s.disc_any, s.disc_ae, s.serious_infection, s.injection_site_rxn,
-    s.malignancy
-FROM v_pasi p
-LEFT JOIN v_dlqi d      ON p.ref_id = d.ref_id   AND p.arm_no = d.arm_no
-                       AND p.timepoint = d.timepoint     
-LEFT JOIN v_safety s    ON p.ref_id = s.ref_id   AND p.arm_no = s.arm_no
-                       AND p.timepoint = s.timepoint
-"
+pasi <- dbReadTable(con, "v_pasi")
+dlqi <- dbReadTable(con, "v_dlqi")
+safety <- dbReadTable(con, "v_safety")
+join_keys <- colnames(pasi)[seq(1,9)]
 
-data <- dbGetQuery(con, query) |>
+data <- pasi |> 
+  full_join(dlqi, by = join_keys) |> 
+  full_join(safety, by = join_keys) |> 
   filter(!is.na(drug)) |> 
   group_by(ref_id, arm_no) |> 
   filter(timepoint == 0 | timepoint == max(timepoint)) |> 
