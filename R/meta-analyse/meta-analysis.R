@@ -13,10 +13,10 @@ source("R/meta-analyse/ma-utils.R")
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 dbListTables(con)
 
-join_keys <- colnames(pasi)[seq(1,9)]
 pasi <- dbReadTable(con, "v_pasi")
 dlqi <- dbReadTable(con, "v_dlqi")
 safety <- dbReadTable(con, "v_safety")
+join_keys <- colnames(pasi)[seq(1,9)]
 
 data <- pasi |> 
   full_join(dlqi, by = join_keys) |> 
@@ -305,7 +305,7 @@ for (i in 1:length(bin_outcomes)) {
   )
   
   results[[paste(bin_outcomes[i], "fe")]] <- nma_results(
-    bin_fit_fe, 
+    bin_fit_fe[[i]], 
     beta_dist_metaprop(bin_ref, "fixed"),
     label = bin_outcomes[i]
   )
@@ -321,7 +321,7 @@ for (i in 1:length(bin_outcomes)) {
   )
   
   results[[paste(bin_outcomes[i], "re")]] <- nma_results(
-    bin_fit_re, 
+    bin_fit_re[[i]], 
     beta_dist_metaprop(bin_ref, "random"),
     label = bin_outcomes[i]
   )
