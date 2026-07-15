@@ -5,6 +5,7 @@ suppressPackageStartupMessages({
   library(DT)
   library(visNetwork)
   library(jsonlite)
+  library(igraph)
 })
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -1120,7 +1121,9 @@ ui <- fluidPage(
   ),
   tags$head(tags$link(rel = "stylesheet", href = "style.css")),
   div(class = "title-bar",
-      titlePanel("Psoriasis RCT Explorer"),
+      div(class = "title-heading",
+          titlePanel("Psoriasis Clinical Trial Explorer (working version 0.1.0)"),
+          div(class = "title-subtitle", "Click an edge/node to filter")),
       div(class = "title-actions",
           downloadButton("download_db", "Download SQLite",
                          class = "btn btn-default"),
@@ -1586,7 +1589,7 @@ server <- function(input, output, session) {
 
   observeEvent(input$show_about, {
     showModal(modalDialog(
-      title = "About the Psoriasis RCT Explorer",
+      title = "About",
       easyClose = TRUE,
       size = "l",
       footer = modalButton("Close"),
@@ -1619,8 +1622,12 @@ server <- function(input, output, session) {
                ),
         tags$h4("Network diagram"),
         tags$p("The network diagram shows the drugs and comparisons available
-               for the selected endpoints. Nodes are sizes according sample 
-               size; edges are sizes according to number of trials."),
+               for the selected endpoints. Nodes are sized according to sample 
+               size; edges are sized according to number of trials."),
+        tags$h4("Use of AI"),
+        tags$p("Artificial intelligence tools were used to develop the
+               interface of this app, but not for the data extraction or for
+               the statistical code used in the meta-analyses."),
         tags$h4("Contact"),
         tags$p("If you have a question about the app, please raise an issue 
                on the ",
@@ -1747,24 +1754,19 @@ server <- function(input, output, session) {
       if (!nrow(df)) next
       vl <- view_labels[[vname]]
 
-      # Arms that have data in this view — header: drug on top, dose (n = ...) below.
+      # Arms that have data in this view.
       arm_cols <- unique(df[, c("arm_no", "drug", "dose")])
       arm_cols <- arm_cols[order(arm_cols$arm_no), ]
-      has_dose <- !is.na(arm_cols$dose) & nzchar(arm_cols$dose)
-      dose_label <- ifelse(has_dose, arm_cols$dose, "")
-      res_arm_n <- tapply(df$n, df$arm_no, function(x) max(x, na.rm = TRUE))
-      n_vals <- res_arm_n[as.character(arm_cols$arm_no)]
-      has_n <- !is.na(n_vals) & is.finite(n_vals)
-      dose_label[has_n] <- trimws(sprintf("%s (n = %d)", dose_label[has_n],
-                                          as.integer(n_vals[has_n])))
-
-      header <- build_arm_header(arm_cols$drug, dose_label)
 
       timepoints <- sort(unique(df$timepoint[!is.na(df$timepoint) &
                                              df$timepoint > 0]))
       if (!length(timepoints)) timepoints <- unique(df$timepoint)
 
-      rows <- character(0)
+      # Collect each row's cells (one per arm column) before rendering, so
+      # arm columns with no data anywhere in the table (e.g. a child arm
+      # whose results are all reported against its parent) can be dropped.
+      row_labels <- character(0)
+      row_cells  <- list()
       # Binary outcomes
       for (col in names(vl$binary)) {
         if (!(col %in% names(df))) next
@@ -1782,11 +1784,8 @@ server <- function(input, output, session) {
           tp_unit <- df$timepoint_unit[1]
           if (!is.na(tp_unit) && !grepl("s$", tp_unit)) tp_unit <- paste0(tp_unit, "s")
           tp_label <- paste0(tp, " ", tp_unit)
-          row_label <- sprintf("%s (%s)", vl$binary[[col]], tp_label)
-          rows <- c(rows, paste0(
-            "<tr><td>", htmltools::htmlEscape(row_label), "</td>",
-            paste0("<td>", cells, "</td>", collapse = ""),
-            "</tr>"))
+          row_labels <- c(row_labels, sprintf("%s (%s)", vl$binary[[col]], tp_label))
+          row_cells  <- c(row_cells, list(cells))
         }
       }
       # Continuous outcomes
@@ -1808,13 +1807,33 @@ server <- function(input, output, session) {
           tp_unit <- df$timepoint_unit[1]
           if (!is.na(tp_unit) && !grepl("s$", tp_unit)) tp_unit <- paste0(tp_unit, "s")
           tp_label <- paste0(tp, " ", tp_unit)
-          row_label <- sprintf("%s (%s)", vl$continuous[[col]], tp_label)
-          rows <- c(rows, paste0(
-            "<tr><td>", htmltools::htmlEscape(row_label), "</td>",
-            paste0("<td>", cells, "</td>", collapse = ""),
-            "</tr>"))
+          row_labels <- c(row_labels, sprintf("%s (%s)", vl$continuous[[col]], tp_label))
+          row_cells  <- c(row_cells, list(cells))
         }
       }
+
+      # Drop arm columns with no data in any row, then render.
+      arm_has_data <- if (length(row_cells)) {
+        Reduce(`|`, lapply(row_cells, nzchar))
+      } else rep(FALSE, nrow(arm_cols))
+      arm_cols <- arm_cols[arm_has_data, ]
+      row_cells <- lapply(row_cells, function(cells) cells[arm_has_data])
+
+      has_dose <- !is.na(arm_cols$dose) & nzchar(arm_cols$dose)
+      dose_label <- ifelse(has_dose, arm_cols$dose, "")
+      res_arm_n <- tapply(df$n, df$arm_no, function(x) max(x, na.rm = TRUE))
+      n_vals <- res_arm_n[as.character(arm_cols$arm_no)]
+      has_n <- !is.na(n_vals) & is.finite(n_vals)
+      dose_label[has_n] <- trimws(sprintf("%s (n = %d)", dose_label[has_n],
+                                          as.integer(n_vals[has_n])))
+
+      header <- build_arm_header(arm_cols$drug, dose_label)
+
+      rows <- mapply(function(label, cells) {
+        paste0("<tr><td>", htmltools::htmlEscape(label), "</td>",
+               paste0("<td>", cells, "</td>", collapse = ""),
+               "</tr>")
+      }, row_labels, row_cells, SIMPLIFY = TRUE, USE.NAMES = FALSE)
 
       if (length(rows)) {
         results_html <- c(results_html, paste0(
