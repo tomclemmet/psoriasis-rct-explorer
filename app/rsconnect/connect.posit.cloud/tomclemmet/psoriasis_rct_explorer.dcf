@@ -1,0 +1,13 @@
+name: psoriasis_rct_explorer
+title: Psoriasis RCT Explorer
+username: tomclemmet
+account: tomclemmet
+server: connect.posit.cloud
+hostUrl: https://api.connect.posit.cloud/v1
+appId: 019f5bab-c973-9de1-7422-cbbe892bcd25
+bundleId:
+url: https://connect.posit.cloud/tomclemmet/content/019f5bab-c973-9de1-7422-cbbe892bcd25
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: CD011535-risk-of-bias.csv
