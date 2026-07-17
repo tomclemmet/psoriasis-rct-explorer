@@ -5,7 +5,7 @@ suppressPackageStartupMessages({
   library(DT)
   library(visNetwork)
   library(jsonlite)
-  library(igraph)
+
 })
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -28,6 +28,60 @@ source("forest.R", local = TRUE)
 NODE_SIZE_MIN <- 14
 NODE_SIZE_MAX <- 55
 
+DRUG_CLASS <- c(
+  "Acitretin"        = "conventional",
+  "Cyclosporin"      = "conventional",
+  "Fumaric acid esters" = "conventional",
+  "Methotrexate"     = "conventional",
+  "Phototherapy"     = "conventional",
+  "Topical"          = "conventional",
+  "Apremilast"       = "targeted small molecule",
+  "Deucravacitinib"  = "targeted small molecule",
+  "Orismilast"       = "targeted small molecule",
+  "Tofacitinib"      = "targeted small molecule",
+  "Zasocitinib"      = "targeted small molecule",
+  "Guselkumab"       = "il23",
+  "Icotrokinra"      = "il23",
+  "Risankizumab"     = "il23",
+  "Tildrakizumab"    = "il23",
+  "Bimekizumab"      = "il17",
+  "Brodalumab"       = "il17",
+  "Ixekizumab"       = "il17",
+  "Izokibep"         = "il17",
+  "Netakimab"        = "il17",
+  "Secukinumab"      = "il17",
+  "Sonelokimab"      = "il17",
+  "Xeligekimab"      = "il17",
+  "Adalimumab"       = "tnf",
+  "Certolizumab"     = "tnf",
+  "Etanercept"       = "tnf",
+  "Infliximab"       = "tnf",
+  "Ustekinumab"      = "il12_23",
+  "Placebo"          = "placebo"
+)
+
+CLASS_ARC_ORDER <- c("il17", "il23", "il12_23", "tnf",
+                     "targeted small molecule", "conventional")
+
+CLASS_COLORS <- c(
+  "il17"                  = "#E63946",
+  "il23"                  = "#F4A261",
+  "il12_23"               = "#E9C46A",
+  "tnf"                   = "#2A9D8F",
+  "targeted small molecule" = "#264653",
+  "conventional"          = "#6C757D",
+  "placebo"               = "#AAAAAA"
+)
+
+CLASS_LABELS <- c(
+  "il17"                  = "IL-17",
+  "il23"                  = "IL-23",
+  "il12_23"               = "IL-12/23",
+  "tnf"                   = "TNF",
+  "targeted small molecule" = "Targeted small molecule",
+  "conventional"          = "Conventional"
+)
+
 # Scale a vector of patient counts to a visible-radius range using sqrt so
 # that area ∝ patients. `ref_max` anchors the upper end so the same patient
 # count produces the same on-screen size across every endpoint subset —
@@ -39,6 +93,14 @@ size_from_patients <- function(n, ref_max) {
   r <- sqrt(pmax(n, 1)) / sqrt(ref_max)
   pmin(NODE_SIZE_MAX, pmax(NODE_SIZE_MIN,
                             NODE_SIZE_MIN + (NODE_SIZE_MAX - NODE_SIZE_MIN) * r))
+}
+
+# Blend a hex colour toward white so hover states brighten a node's own
+# class colour instead of switching to an unrelated fixed colour.
+lighten <- function(hex, amount = 0.45) {
+  rgb_mat   <- grDevices::col2rgb(hex) / 255
+  rgb_light <- rgb_mat + (1 - rgb_mat) * amount
+  grDevices::rgb(rgb_light[1, ], rgb_light[2, ], rgb_light[3, ])
 }
 
 build_network_data <- function(td, ref_max_n = NA_real_) {
@@ -69,16 +131,22 @@ build_network_data <- function(td, ref_max_n = NA_real_) {
 
   size_ref <- if (is.finite(ref_max_n) && ref_max_n > 0) ref_max_n
               else max(n_patients, 1, na.rm = TRUE)
+  drug_classes <- DRUG_CLASS[drugs]
+  drug_classes[is.na(drug_classes)] <- "conventional"
   nodes_df <- data.frame(
     id    = drugs,
     label = drugs,
-    # Absolute size in pixels (radius). Bypassing visNetwork's `scaling.value`
-    # auto-rescale so a given patient count looks identical across endpoint
-    # subsets. sqrt → area ∝ patients (standard NMA-diagram convention).
     size  = size_from_patients(n_patients, size_ref),
     title = sprintf("<b>%s</b><br/>%d trial(s), %s patient(s)",
                     drugs, n_trials_per_drug,
                     formatC(n_patients, format = "d", big.mark = ",")),
+    group = unname(drug_classes),
+    color.background = unname(CLASS_COLORS[drug_classes]),
+    color.border     = unname(CLASS_COLORS[drug_classes]),
+    color.highlight.background = "#FF8A3D",
+    color.highlight.border     = "#B5521A",
+    color.hover.background     = lighten(unname(CLASS_COLORS[drug_classes])),
+    color.hover.border         = unname(CLASS_COLORS[drug_classes]),
     stringsAsFactors = FALSE
   )
   nodes_df <- nodes_df[order(-n_patients[match(nodes_df$id, drugs)],
@@ -599,17 +667,24 @@ master_td <- unique(do.call(rbind, lapply(group_td, function(tab_grps)
   do.call(rbind, tab_grps))))
 master_network <- build_network_data(master_td, ref_max_n = .global_max_patients)
 
-.master_layout <- visNetwork(master_network$nodes, master_network$edges) |>
-  visIgraphLayout(layout = "layout_with_kk", randomSeed = 42, physics = FALSE)
-.layout_nodes <- .master_layout$x$nodes
-.mi <- match(master_network$nodes$id, .layout_nodes$id)
-# visIgraphLayout normalises coords to ~[-1, 1] and relies on a JS-side
-# square-fit multiplier to spread them across the canvas. We bypass that
-# wrapper (so subset switches don't relayout), so scale to pixel space
-# ourselves — ~650 gives the larger patient-count-sized nodes room to
-# breathe without overlapping labels.
-master_network$nodes$x <- .layout_nodes$x[.mi] * 650
-master_network$nodes$y <- .layout_nodes$y[.mi] * 650
+# Circular layout: drugs ordered by treatment class arc, Placebo at centre.
+.circle_drugs <- master_network$nodes$id
+.circle_classes <- master_network$nodes$group
+.is_placebo <- .circle_drugs == "Placebo"
+.ring_idx <- which(!.is_placebo)
+.ring_drugs <- .circle_drugs[.ring_idx]
+.ring_classes <- .circle_classes[.ring_idx]
+.class_order <- match(.ring_classes, CLASS_ARC_ORDER)
+.ring_order <- order(.class_order, .ring_drugs)
+.ring_drugs <- .ring_drugs[.ring_order]
+.n_ring <- length(.ring_drugs)
+.angles <- seq(0, 2 * pi, length.out = .n_ring + 1)[seq_len(.n_ring)]
+.radius <- 500
+master_network$nodes$x <- 0
+master_network$nodes$y <- 0
+.ring_match <- match(.ring_drugs, master_network$nodes$id)
+master_network$nodes$x[.ring_match] <- .radius * cos(.angles)
+master_network$nodes$y[.ring_match] <- .radius * sin(.angles)
 
 attach_master_coords <- function(nw) {
   m <- match(nw$nodes$id, master_network$nodes$id)
@@ -1351,25 +1426,16 @@ server <- function(input, output, session) {
     nw <- isolate(current_network())
     visNetwork(nw$nodes, nw$edges) |>
       visNodes(shape   = "dot",
-               # Per-node `size` is set in build_network_data() (sqrt of
-               # patient count, anchored to the global max). No `scaling`
-               # block — that would re-rescale per render and break visual
-               # comparability across endpoint subsets.
-               font    = list(size = 44, face = "Helvetica",
-                              strokeWidth = 6, strokeColor = "#ffffff"),
-               color   = list(background = "#4C9AFF",
-                              border     = "#1F4E8C",
-                              highlight  = list(background = "#FF8A3D",
-                                                border     = "#B5521A"),
-                              hover      = list(background = "#7FB5FF",
-                                                border     = "#1F4E8C")),
+               # vadjust pulls the label up, closer to the dot — vis.js's
+               # default placement for non-box shapes leaves a large gap
+               # below the node.
+               font    = list(size = 36, face = "Helvetica",
+                              strokeWidth = 5, strokeColor = "#ffffff",
+                              vadjust = -14),
                borderWidth = 2,
                physics = FALSE) |>
-      visEdges(smooth   = list(enabled = TRUE, type = "continuous"),
-               # Floor the minimum width at 3px so single-trial edges stay
-               # easily clickable; head-to-heads with many trials still
-               # stand out at the top end.
-               scaling  = list(min = 3, max = 14),
+      visEdges(smooth   = list(enabled = FALSE),
+               scaling  = list(min = 5, max = 24),
                color    = list(color = "rgba(80,80,80,0.35)",
                                highlight = "#FF8A3D",
                                hover     = "#1F4E8C")) |>
