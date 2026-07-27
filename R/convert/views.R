@@ -12,8 +12,9 @@
 # Each view is per (arm, timepoint). Columns the app expects from arm context:
 # trial, ref_id, arm_no, arm_name, drug, dose, timepoint, timepoint_unit, n.
 
-# Common arm/study context CTE. Dose is rebuilt as "<amount> <unit>"
-# (integer-valued amounts render without a trailing .0).
+# Common arm/study context CTE. Dose is rebuilt as "<amount> <unit> <frequency>"
+# (integer-valued amounts render without a trailing .0; frequency is omitted
+# when not recorded, e.g. "30 mg" or "30 mg QW").
 .arm_ctx_cte <- "
 WITH arm_ctx AS (
   SELECT a.arm_id,
@@ -23,19 +24,23 @@ WITH arm_ctx AS (
          a.arm_name     AS arm_name,
          dr.drug_name   AS drug,
          TRIM(
-           CASE
-             WHEN a.dose_amount IS NULL THEN ''
-             WHEN a.dose_amount = CAST(a.dose_amount AS INTEGER)
-               THEN CAST(CAST(a.dose_amount AS INTEGER) AS TEXT)
-             ELSE CAST(a.dose_amount AS TEXT)
-           END
-           || ' ' || COALESCE(du.unit_name, '')
+           TRIM(
+             CASE
+               WHEN a.dose_amount IS NULL THEN ''
+               WHEN a.dose_amount = CAST(a.dose_amount AS INTEGER)
+                 THEN CAST(CAST(a.dose_amount AS INTEGER) AS TEXT)
+               ELSE CAST(a.dose_amount AS TEXT)
+             END
+             || ' ' || COALESCE(du.unit_name, '')
+           )
+           || ' ' || COALESCE(fr.frequency_name, '')
          )              AS dose,
          s.timepoint_unit AS timepoint_unit
   FROM   arms a
   JOIN   studies s          ON s.study_id = a.study_id
   LEFT   JOIN drugs dr      ON dr.drug_id = a.drug_id
   LEFT   JOIN dose_units du ON du.unit_id = a.dose_unit_id
+  LEFT   JOIN frequencies fr ON fr.frequency_id = a.frequency_id
 )"
 
 # Build one view. `pivot_cols` is a vector of pivot expressions (see case_*);

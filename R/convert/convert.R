@@ -9,6 +9,7 @@
 #   Lookups
 #     drugs(drug_id PK, drug_name UNIQUE)
 #     dose_units(unit_id PK, unit_name UNIQUE)
+#     frequencies(frequency_id PK, frequency_name UNIQUE)  -- e.g. QW, BID
 #     data_types(data_type_id PK, name)            -- from tblDataTypes
 #     outcomes(outcome_id PK, code, label, subcategory,
 #              data_type_id FK, endpoint_group)    -- full Access catalogue
@@ -23,7 +24,9 @@
 #                  authors, year, journal, volume, issue, page_start, page_end,
 #                  notes)
 #     arms(arm_id PK, study_id FK, arm_no, arm_name,
-#          drug_id FK, dose_amount, dose_unit_id FK)
+#          drug_id FK, dose_amount, dose_unit_id FK, frequency_id FK)
+#         -- frequency_id is only set where the source distinguishes arms by
+#         -- dosing frequency (e.g. "30 mg QW" vs "30 mg Q2W").
 #
 #   Facts
 #     measurements(measurement_id PK, arm_id FK, outcome_id FK,
@@ -140,6 +143,10 @@ CREATE TABLE dose_units (
   unit_id    INTEGER PRIMARY KEY,
   unit_name  TEXT NOT NULL UNIQUE
 );
+CREATE TABLE frequencies (
+  frequency_id    INTEGER PRIMARY KEY,
+  frequency_name  TEXT NOT NULL UNIQUE
+);
 CREATE TABLE data_types (
   data_type_id  INTEGER PRIMARY KEY,
   name          TEXT NOT NULL UNIQUE
@@ -186,6 +193,7 @@ CREATE TABLE arms (
   drug_id       INTEGER REFERENCES drugs(drug_id),
   dose_amount   REAL,
   dose_unit_id  INTEGER REFERENCES dose_units(unit_id),
+  frequency_id  INTEGER REFERENCES frequencies(frequency_id),
   UNIQUE (study_id, arm_no)
 );
 CREATE TABLE measurements (
@@ -269,6 +277,21 @@ dose_units_df <- data.frame(
 )
 dbWriteTable(dst, "dose_units", dose_units_df, append = TRUE)
 dose_unit_id_of <- setNames(dose_units_df$unit_id, dose_units_df$unit_name)
+
+# Frequencies (CatID = 61). Only populated where the source distinguishes
+# arms by dosing frequency, so most arms have no value here.
+freq_used  <- chars[chars$CatID == 61 & !is.na(chars$ArmNo) & chars$ArmNo > 0, ]
+freq_names <- sort(unique(lookups$AnsText[
+  lookups$CatID == 61 & lookups$AnsID %in% freq_used$ListVal
+]))
+freq_names <- freq_names[!is.na(freq_names) & nzchar(freq_names)]
+frequencies_df <- data.frame(
+  frequency_id   = seq_along(freq_names),
+  frequency_name = freq_names,
+  stringsAsFactors = FALSE
+)
+dbWriteTable(dst, "frequencies", frequencies_df, append = TRUE)
+frequency_id_of <- setNames(frequencies_df$frequency_id, frequencies_df$frequency_name)
 
 # --- 6. Studies -----------------------------------------------------------
 # Universe = *primary* RefIDs (ParentID NULL/0) that have any extracted data,
@@ -388,6 +411,13 @@ unit_name_per_arm <- setNames(
   key(unit_rows$RefID, unit_rows$ArmNo)
 )
 
+freq_rows <- chars[chars$CatID == 61 & chars$ArmNo > 0, ]
+freq_lkp  <- lookups[lookups$CatID == 61, c("AnsID", "AnsText")]
+freq_name_per_arm <- setNames(
+  freq_lkp$AnsText[match(freq_rows$ListVal, freq_lkp$AnsID)],
+  key(freq_rows$RefID, freq_rows$ArmNo)
+)
+
 k <- key(arm_keys$RefID, arm_keys$ArmNo)
 arms_df <- data.frame(
   arm_id       = arm_keys$arm_id,
@@ -397,6 +427,7 @@ arms_df <- data.frame(
   drug_id      = unname(drug_id_of[unname(drug_name_per_arm[k])]),
   dose_amount  = unname(dose_amt_per_arm[k]),
   dose_unit_id = unname(dose_unit_id_of[unname(unit_name_per_arm[k])]),
+  frequency_id = unname(frequency_id_of[unname(freq_name_per_arm[k])]),
   stringsAsFactors = FALSE
 )
 dbWriteTable(dst, "arms", arms_df, append = TRUE)
