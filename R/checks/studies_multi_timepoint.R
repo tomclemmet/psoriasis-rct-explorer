@@ -25,7 +25,7 @@ find_script_dir <- function() {
 
 here <- find_script_dir()
 if (is.null(here)) here <- file.path(getwd(), "checks")
-sqlite_p <- normalizePath(file.path(here, "..", "app", "psoriasis-rcts.sqlite"),
+sqlite_p <- normalizePath(file.path(here, "...", "app", "psoriasis-rcts.sqlite"),
                           mustWork = TRUE)
 
 if (exists("con", envir = globalenv(), inherits = FALSE)) {
