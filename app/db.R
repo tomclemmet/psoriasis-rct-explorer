@@ -31,8 +31,12 @@ query_view <- function(table, state) {
   read_db(sprintf("SELECT * FROM %s %s", table, base_order))
 }
 
+# `axes` is a named list filtering "which model produced this row" columns
+# (see MA_DISTINCT_COLUMNS below) — e.g. list(likelihood = "multinomial",
+# method = "class_effects"). Column names are checked against that allowlist
+# since they're interpolated into the SQL (not bind parameters).
 fetch_ma <- function(endpoint, type = NULL, effects = NULL,
-                     comp_tx = NULL, ref_tx = NULL, measure = NULL, method = NULL) {
+                     comp_tx = NULL, ref_tx = NULL, measure = NULL, axes = list()) {
   conds  <- "WHERE endpoint = ?"
   params <- list(endpoint)
   if (!is.null(type))    { conds <- paste(conds, "AND type = ?");    params <- c(params, list(type)) }
@@ -40,7 +44,11 @@ fetch_ma <- function(endpoint, type = NULL, effects = NULL,
   if (!is.null(comp_tx)) { conds <- paste(conds, "AND comp_tx = ?"); params <- c(params, list(comp_tx)) }
   if (!is.null(ref_tx))  { conds <- paste(conds, "AND ref_tx = ?");  params <- c(params, list(ref_tx)) }
   if (!is.null(measure)) { conds <- paste(conds, "AND measure = ?"); params <- c(params, list(measure)) }
-  if (!is.null(method))  { conds <- paste(conds, "AND method = ?");  params <- c(params, list(method)) }
+  for (col in names(axes)) {
+    stopifnot(col %in% MA_DISTINCT_COLUMNS)
+    conds  <- paste(conds, sprintf("AND %s = ?", col))
+    params <- c(params, list(axes[[col]]))
+  }
   read_db(sprintf("SELECT * FROM v_meta_analysis %s", conds), params = params)
 }
 
@@ -53,14 +61,34 @@ fetch_trials <- function(endpoint, comp_tx = NULL, ref_tx = NULL, measure = NULL
   read_db(sprintf("SELECT * FROM v_trial_estimates %s", conds), params = params)
 }
 
-fetch_ma_directed <- function(endpoint, type, effects, comp, ref, measure, method = NULL) {
+fetch_ma_directed <- function(endpoint, type, effects, comp, ref, measure, axes = list()) {
   r <- fetch_ma(endpoint, type = type, effects = effects,
-                comp_tx = comp, ref_tx = ref, measure = measure, method = method)
+                comp_tx = comp, ref_tx = ref, measure = measure, axes = axes)
   if (nrow(r)) return(list(mean = r$mean[1], lower = r$lower[1], upper = r$upper[1], dic = r$dic[1]))
   r <- fetch_ma(endpoint, type = type, effects = effects,
-                comp_tx = ref, ref_tx = comp, measure = measure, method = method)
+                comp_tx = ref, ref_tx = comp, measure = measure, axes = axes)
   if (nrow(r)) return(list(mean = -r$mean[1], lower = -r$upper[1], upper = -r$lower[1], dic = r$dic[1]))
   NULL
+}
+
+# Columns treated as "which model produced this row" axes, dynamically
+# discoverable and filterable rather than hardcoded — see MA_AXIS_COLUMNS in
+# app.R and the project memory: meta-analysis-modelling-seam.
+MA_DISTINCT_COLUMNS <- c("method", "likelihood")
+
+# Distinct combinations of several axis columns present for a set of
+# endpoints + a result type (one row per combination actually occurring in
+# the data, not the full cartesian product of each column's individual
+# values) — drives dynamic multi-axis discovery in app.R.
+fetch_ma_axis_combos <- function(endpoint, type, columns) {
+  stopifnot(all(columns %in% MA_DISTINCT_COLUMNS))
+  in_list  <- paste(rep("?", length(endpoint)), collapse = ", ")
+  cols_sql <- paste(columns, collapse = ", ")
+  sql <- sprintf(
+    "SELECT DISTINCT %s FROM v_meta_analysis WHERE type = ? AND endpoint IN (%s)",
+    cols_sql, in_list
+  )
+  read_db(sql, params = c(list(type), as.list(endpoint)))
 }
 
 coalesce0 <- function(x) ifelse(is.na(x), 0L, as.integer(x))

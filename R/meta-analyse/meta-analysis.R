@@ -68,6 +68,19 @@ results$pasi_fe <- nma_results(
   base_dist = beta_dist_metaprop(pasi_ref, "fixed")
 )
 
+#!!!!
+results$pasi_fe_c <- nma_results(
+  pasi_fit_fe, 
+  base_dist = beta_dist_metaprop(pasi_ref, "fixed"),
+  method = "baseline adjusted"
+)
+results$pasi_re_c <- nma_results(
+  pasi_fit_re, 
+  beta_dist_metaprop(pasi_ref, "random"),
+  method = "baseline adjusted"
+)
+#!!!!
+
 # Random effects
 pasi_fit_re <- nma(
   pasi_net,
