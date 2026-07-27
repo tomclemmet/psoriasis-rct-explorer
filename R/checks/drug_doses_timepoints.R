@@ -1,32 +1,12 @@
 #!/usr/bin/env Rscript
 # For each drug in psoriasis-rcts.sqlite, print the distinct doses and
-# timepoints observed across all arms / measurements. Runs from Rscript,
-# RStudio's Source button, or source() at the console.
+# timepoints observed across all arms / measurements. Run from the project
+# root (e.g. RStudio's Source button with the project open).
 
 library(DBI)
 library(RSQLite)
 
-find_script_dir <- function() {
-  args <- commandArgs(trailingOnly = FALSE)
-  fa <- sub("^--file=", "", grep("^--file=", args, value = TRUE))
-  if (length(fa)) return(dirname(normalizePath(fa[1], mustWork = FALSE)))
-  for (i in seq_along(sys.frames())) {
-    of <- sys.frame(i)$ofile
-    if (!is.null(of)) return(dirname(normalizePath(of, mustWork = FALSE)))
-  }
-  if (requireNamespace("rstudioapi", quietly = TRUE) &&
-      rstudioapi::isAvailable()) {
-    p <- tryCatch(rstudioapi::getSourceEditorContext()$path,
-                  error = function(e) "")
-    if (nzchar(p)) return(dirname(normalizePath(p, mustWork = FALSE)))
-  }
-  NULL
-}
-
-here <- find_script_dir()
-if (is.null(here)) here <- file.path(getwd(), "checks")
-sqlite_p <- normalizePath(file.path(here, "..", "app", "psoriasis-rcts.sqlite"),
-                          mustWork = TRUE)
+sqlite_p <- "app/psoriasis-rcts.sqlite"
 
 # Close anything stale from a previous run in this R session.
 if (exists("con", envir = globalenv(), inherits = FALSE)) {
