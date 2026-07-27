@@ -56,10 +56,10 @@ fetch_trials <- function(endpoint, comp_tx = NULL, ref_tx = NULL, measure = NULL
 fetch_ma_directed <- function(endpoint, type, effects, comp, ref, measure, method = NULL) {
   r <- fetch_ma(endpoint, type = type, effects = effects,
                 comp_tx = comp, ref_tx = ref, measure = measure, method = method)
-  if (nrow(r)) return(list(mean = r$mean[1], lower = r$lower[1], upper = r$upper[1]))
+  if (nrow(r)) return(list(mean = r$mean[1], lower = r$lower[1], upper = r$upper[1], dic = r$dic[1]))
   r <- fetch_ma(endpoint, type = type, effects = effects,
                 comp_tx = ref, ref_tx = comp, measure = measure, method = method)
-  if (nrow(r)) return(list(mean = -r$mean[1], lower = -r$upper[1], upper = -r$lower[1]))
+  if (nrow(r)) return(list(mean = -r$mean[1], lower = -r$upper[1], upper = -r$lower[1], dic = r$dic[1]))
   NULL
 }
 
@@ -70,13 +70,16 @@ fetch_baselines <- function(study_id) {
     "SELECT o.label, o.subcategory, a.arm_no, a.arm_name,
             d.drug_name AS drug,
             TRIM(
-              CASE
-                WHEN a.dose_amount IS NULL THEN ''
-                WHEN a.dose_amount = CAST(a.dose_amount AS INTEGER)
-                  THEN CAST(CAST(a.dose_amount AS INTEGER) AS TEXT)
-                ELSE CAST(a.dose_amount AS TEXT)
-              END
-              || ' ' || COALESCE(du.unit_name, '')
+              TRIM(
+                CASE
+                  WHEN a.dose_amount IS NULL THEN ''
+                  WHEN a.dose_amount = CAST(a.dose_amount AS INTEGER)
+                    THEN CAST(CAST(a.dose_amount AS INTEGER) AS TEXT)
+                  ELSE CAST(a.dose_amount AS TEXT)
+                END
+                || ' ' || COALESCE(du.unit_name, '')
+              )
+              || ' ' || COALESCE(fr.frequency_name, '')
             ) AS dose,
             m.n, m.k, m.mean, m.sd
      FROM   measurements m
@@ -84,6 +87,7 @@ fetch_baselines <- function(study_id) {
      JOIN   arms a          ON a.arm_id     = m.arm_id
      LEFT   JOIN drugs d    ON d.drug_id    = a.drug_id
      LEFT   JOIN dose_units du ON du.unit_id = a.dose_unit_id
+     LEFT   JOIN frequencies fr ON fr.frequency_id = a.frequency_id
      WHERE  a.study_id = ?
        AND  o.code IS NULL
        AND  o.subcategory IN ('Demographics', 'Psoriasis characteristics',

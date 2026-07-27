@@ -70,7 +70,7 @@ CLASS_COLORS <- c(
   "tnf"                   = "#2A9D8F",
   "targeted small molecule" = "#264653",
   "conventional"          = "#6C757D",
-  "placebo"               = "#AAAAAA"
+  "placebo"               = "#1D3557"
 )
 
 CLASS_LABELS <- c(
@@ -817,12 +817,14 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
       PAIR_H   <- 14L
       DRUG_GAP <- 8L
       fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
-      fe_tt <- mapply(function(drug, est, lo, hi)
-        ma_tooltip(sprintf("%s — %s network estimate, fixed effects", drug, method_lbl), est, lo, hi, digits = 2),
-        df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper)
-      re_tt <- mapply(function(drug, est, lo, hi)
-        ma_tooltip(sprintf("%s — %s network estimate, random effects", drug, method_lbl), est, lo, hi, digits = 2),
-        df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper)
+      fe_tt <- mapply(function(drug, est, lo, hi, dic)
+        ma_tooltip(sprintf("%s — %s network estimate, fixed effects", drug, method_lbl), est, lo, hi,
+                   extra = dic_extra(dic), digits = 2),
+        df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper, df_fe$dic)
+      re_tt <- mapply(function(drug, est, lo, hi, dic)
+        ma_tooltip(sprintf("%s — %s network estimate, random effects", drug, method_lbl), est, lo, hi,
+                   extra = dic_extra(dic), digits = 2),
+        df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper, df_re$dic)
       rows <- data.frame(
         label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
         badge     = c(rbind(rep("FE", n_drugs), rep("RE", n_drugs))),
@@ -857,12 +859,14 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
       PAIR_H   <- 14L
       DRUG_GAP <- 8L
       fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
-      fe_tt <- mapply(function(drug, est, lo, hi)
-        ma_tooltip(sprintf("%s — network estimate, fixed effects", drug), est, lo, hi, digits = 2),
-        df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper)
-      re_tt <- mapply(function(drug, est, lo, hi)
-        ma_tooltip(sprintf("%s — network estimate, random effects", drug), est, lo, hi, digits = 2),
-        df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper)
+      fe_tt <- mapply(function(drug, est, lo, hi, dic)
+        ma_tooltip(sprintf("%s — network estimate, fixed effects", drug), est, lo, hi,
+                   extra = dic_extra(dic), digits = 2),
+        df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper, df_fe$dic)
+      re_tt <- mapply(function(drug, est, lo, hi, dic)
+        ma_tooltip(sprintf("%s — network estimate, random effects", drug), est, lo, hi,
+                   extra = dic_extra(dic), digits = 2),
+        df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper, df_re$dic)
       rows <- data.frame(
         label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
         badge     = c(rbind(rep("FE", n_drugs), rep("RE", n_drugs))),
@@ -988,7 +992,7 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
                              comp, ref, measure_val)
       if (!is.null(r))
         pooled_list[[kind_pair[1]]] <- data.frame(
-          kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper)
+          kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper, dic = r$dic)
     }
     if (is_response) {
       for (kind_pair in list(c("Bin-NMA-FE",  "fixed",  "binomial"),
@@ -999,7 +1003,7 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
                                comp, ref, measure_val, method = kind_pair[3])
         if (!is.null(r))
           pooled_list[[kind_pair[1]]] <- data.frame(
-            kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper)
+            kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper, dic = r$dic)
       }
     } else {
       for (kind_pair in list(c("NMA-FE", "fixed"), c("NMA-RE", "random"))) {
@@ -1007,7 +1011,7 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
                                comp, ref, measure_val)
         if (!is.null(r))
           pooled_list[[kind_pair[1]]] <- data.frame(
-            kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper)
+            kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper, dic = r$dic)
       }
     }
     pooled <- if (length(pooled_list)) do.call(rbind, pooled_list) else NULL
@@ -1080,7 +1084,7 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
                     comp_tx = state$drug, measure = measure_val)
       if (nrow(r))
         pooled_list[[kind_pair[1]]] <- data.frame(
-          kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1])
+          kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1], dic = NA_real_)
     }
     if (is_response) {
       for (kind_pair in list(c("Bin-NMA-R-FE",  "fixed",  "binomial"),
@@ -1091,7 +1095,7 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
                       comp_tx = state$drug, measure = measure_val, method = kind_pair[3])
         if (nrow(r))
           pooled_list[[kind_pair[1]]] <- data.frame(
-            kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1])
+            kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1], dic = r$dic[1])
       }
     } else {
       for (kind_pair in list(c("NMA-R-FE", "fixed"), c("NMA-R-RE", "random"))) {
@@ -1099,7 +1103,7 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
                       comp_tx = state$drug, measure = measure_val)
         if (nrow(r))
           pooled_list[[kind_pair[1]]] <- data.frame(
-            kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1])
+            kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1], dic = r$dic[1])
       }
     }
     pooled <- if (length(pooled_list)) do.call(rbind, pooled_list) else NULL
@@ -1197,7 +1201,7 @@ ui <- fluidPage(
   tags$head(tags$link(rel = "stylesheet", href = "style.css")),
   div(class = "title-bar",
       div(class = "title-heading",
-          titlePanel("Psoriasis Clinical Trial Explorer (working version 0.1.0)"),
+          titlePanel("Psoriasis Clinical Trial Explorer (working version 0.1.1)"),
           div(class = "title-subtitle", "Click an edge/node to filter")),
       div(class = "title-actions",
           downloadButton("download_db", "Download SQLite",
@@ -1715,14 +1719,14 @@ server <- function(input, output, session) {
     primary_title <- if (!is.null(pubs) && any(pubs$is_primary == 1)) {
       trimws(pubs$title[which(pubs$is_primary == 1)[1]])
     } else NA_character_
-    modal_title <- if (!is.na(primary_title) && nzchar(primary_title)) {
-      tagList(
-        div(class = "trial-modal-title", name),
+    modal_title <- tagList(
+      div(class = "trial-modal-title",
+          name,
+          span(class = "trial-modal-refid", sprintf(" · Ref %s", sid))),
+      if (!is.na(primary_title) && nzchar(primary_title)) {
         div(class = "trial-modal-subtitle", primary_title)
-      )
-    } else {
-      name
-    }
+      }
+    )
 
     # References
     refs_html <- cites_html_by_study[[sid]] %||%

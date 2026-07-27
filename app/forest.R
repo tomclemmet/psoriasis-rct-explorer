@@ -3,6 +3,8 @@ fmt_ci <- function(est, lo, hi, digits = 2) {
           digits, est, digits, lo, digits, hi)
 }
 
+dic_extra <- function(dic) if (length(dic) && !is.na(dic)) c(DIC = sprintf("%.1f", dic)) else NULL
+
 ma_tooltip <- function(label, est, lo, hi, extra = NULL, digits = 2) {
   parts <- c(
     label,
@@ -288,7 +290,11 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
         "Mult-NMA-R-FE" = "Fixed effects multinomial network estimate",
         "Mult-NMA-R-RE" = "Random effects multinomial network estimate",
         kind)
-      tt <- sprintf("%s\n%s", tt_hdr, ci_str)
+      dic_i <- if (!is.null(pooled$dic)) pooled$dic[i] else NA_real_
+      tt <- if (!is.na(dic_i))
+        sprintf("%s\n%s\nDIC: %.1f", tt_hdr, ci_str, dic_i)
+      else
+        sprintf("%s\n%s", tt_hdr, ci_str)
       parts[length(parts) + 1L] <- paste0(
         sprintf('<g class="ma-pooled %s" data-tt="%s">', klass, esc_attr(tt)),
         sprintf('<text class="ma-rowlabel ma-pooled-label" x="%g" y="%g">%s</text>',

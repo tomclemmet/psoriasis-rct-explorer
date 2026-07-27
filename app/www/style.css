@@ -130,6 +130,7 @@ a.trial-pop:hover { text-decoration: underline; }
 .trial-modal-title { font-weight: 600; }
 .trial-modal-subtitle { font-weight: 400; font-size: 16px; color: #333a44;
                         margin-top: 4px; }
+.trial-modal-refid { font-weight: 400; color: #aaaaaa; }
 .trial-modal-layout { display: flex; gap: 20px; }
 .trial-modal-refs { flex: 0 0 30%; max-width: 30%; overflow-y: auto;
                     max-height: 65vh; font-size: 13px; line-height: 1.45;

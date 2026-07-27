@@ -276,16 +276,6 @@ bin_fit_fe <- list()
 bin_fit_re <- list()
 
 for (i in 1:length(bin_outcomes)) {
-  placebo_data <- filter(data, drug == "Placebo", !is.na(.data[[bin_outcomes[i]]]))
-  bin_ref <- metaprop(
-    event = placebo_data[[bin_outcomes[i]]],
-    n = n,
-    sm = "PLOGIT",
-    method = "Inverse",
-    method.incr = "all",
-    incr = 0.5,
-    data = placebo_data
-  )
   
   bin_net <- set_agd_arm(
     filter(data, !is.na(.data[[bin_outcomes[i]]])),
@@ -304,13 +294,6 @@ for (i in 1:length(bin_outcomes)) {
     iter = niter
   )
   
-  results[[paste(bin_outcomes[i], "fe")]] <- nma_results(
-    bin_fit_fe[[i]], 
-    beta_dist_metaprop(bin_ref, "fixed"),
-    label = bin_outcomes[i]
-  )
-  
-  # Random effects
   bin_fit_re[[i]] <- nma(
     bin_net,
     trt_effects = "random",
@@ -320,11 +303,33 @@ for (i in 1:length(bin_outcomes)) {
     iter = niter
   )
   
+  message(bin_outcomes[i])
+}
+
+for (i in 1:length(bin_outcomes)) {
+  placebo_data <- filter(data, drug == "Placebo", !is.na(.data[[bin_outcomes[i]]]))
+  bin_ref <- metaprop(
+    event = placebo_data[[bin_outcomes[i]]],
+    n = n,
+    sm = "PLOGIT",
+    method = "Inverse",
+    method.incr = "all",
+    incr = 0.5,
+    data = placebo_data
+  )
+  
+  results[[paste(bin_outcomes[i], "fe")]] <- nma_results(
+    bin_fit_fe[[i]], 
+    beta_dist_metaprop(bin_ref, "fixed"),
+    label = bin_outcomes[i]
+  )
+  
   results[[paste(bin_outcomes[i], "re")]] <- nma_results(
     bin_fit_re[[i]], 
     beta_dist_metaprop(bin_ref, "random"),
     label = bin_outcomes[i]
   )
+
   message(bin_outcomes[i])
 }
 
@@ -405,6 +410,7 @@ for (j in 1:nrow(comparisons)) {
 }
 
 ## Absolute change in DLQI -----------------------------------------------------
+
 for (j in 1:nrow(comparisons)) {
   tx <- comparisons[[j, 1]]
   ref <- comparisons[[j, 2]]
@@ -440,6 +446,7 @@ for (j in 1:nrow(comparisons)) {
 drugs <- unique(data$drug)
 
 ## Binary outcomes -------------------------------------------------------------
+
 for (i in 1:length(outcomes)) {
   for (k in 1:length(drugs)) {
     univar <- data |> 
@@ -466,6 +473,7 @@ for (i in 1:length(outcomes)) {
 }
 
 ## Absolute change in PASI -----------------------------------------------------
+
 for (k in 1:length(drugs)) {
   univar <- abs_pasi_data |> 
     filter(drug == drugs[k])
@@ -484,6 +492,7 @@ for (k in 1:length(drugs)) {
 }
 
 ## Absolute change in DLQI -----------------------------------------------------
+
 for (k in 1:length(drugs)) {
   univar <- abs_dlqi_data |> 
     filter(drug == drugs[k])
