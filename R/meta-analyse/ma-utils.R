@@ -1,4 +1,4 @@
-nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
+nma_results <- function(m, base_dist=NA, method = "standard", label=NA, t=NA, reft=NA) {
   
   results <- list()
   
@@ -30,7 +30,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
       ) |> 
         mutate(
           type = "network",
-          method = "multinomial",
+          likelihood = "multinomial",
+          method = method,
           effects = m$trt_effects,
           comp_tx = drug,
           ref_tx = NA,
@@ -53,7 +54,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
           mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
         ) |> mutate(
           type = "network",
-          method = "multinomial",
+          likelihood = "multinomial",
+          method = method,
           effects = m$trt_effects,
           ref_tx = comparisons[i,2],
           comp_tx = comparisons[i,1],
@@ -86,7 +88,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
       ) |> 
         mutate(
           type = "network",
-          method = "normal",
+          likelihood = "normal",
+          method = method,
           endpoint = label,
           effects = m$trt_effects,
           ref_tx = NA,
@@ -109,7 +112,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
           mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
         ) |> mutate(
           type = "network",
-          method = "normal",
+          likelihood = "normal",
+          method = method,
           endpoint = label,
           effects = m$trt_effects,
           ref_tx = comparisons[i,2],
@@ -142,7 +146,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
       ) |> 
         mutate(
           type = "network",
-          method = "binomial",
+          likelihood = "binomial",
+          method = method,
           endpoint = label,
           effects = m$trt_effects,
           comp_tx = drug,
@@ -165,7 +170,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
           mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
         ) |> mutate(
           type = "network",
-          method = "binomial",
+          likelihood = "binomial",
+          method = method,
           endpoint = label,
           effects = m$trt_effects,
           ref_tx = comparisons[i,2],
@@ -181,7 +187,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
     results[[1]] <- data.frame(
       endpoint = label,
       type = "univariate",
-      method = "logit",
+      likelihood = "logit",
+      method = method,
       effects = "fixed",
       ref_tx = NA,
       comp_tx = t,
@@ -193,7 +200,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
     results[[2]] <- data.frame(
       endpoint = label,
       type = "univariate",
-      method = "logit",
+      likelihood = "logit",
+      method = method,
       effects = "random",
       ref_tx = NA,
       comp_tx = t,
@@ -206,7 +214,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
     results[[1]] <- data.frame(
       endpoint = label,
       type = "pairwise",
-      method = "binomial",
+      likelihood = "binomial",
+      method = method,
       effects = "fixed",
       ref_tx = reft,
       comp_tx = t,
@@ -218,7 +227,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
     results[[2]] <- data.frame(
       endpoint = label,
       type = "pairwise",
-      method = "binomial",
+      likelihood = "binomial",
+      method = method,
       effects = "random",
       ref_tx = reft,
       comp_tx = t,
@@ -231,7 +241,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
     results[[1]] <- data.frame(
       endpoint = label,
       type = "pairwise",
-      method = "normal",
+      likelihood = "normal",
+      method = method,
       effects = "fixed",
       ref_tx = reft,
       comp_tx = t,
@@ -243,7 +254,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
     results[[2]] <- data.frame(
       endpoint = label,
       type = "pairwise",
-      method = "normal",
+      likelihood = "normal",
+      method = method,
       effects = "random",
       ref_tx = reft,
       comp_tx = t,
@@ -256,7 +268,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
     results[[1]] <- data.frame(
       endpoint = label,
       type = "univariate",
-      method = "normal",
+      likelihood = "normal",
+      method = method,
       effects = "fixed",
       ref_tx = NA,
       comp_tx = t,
@@ -268,7 +281,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
     results[[2]] <- data.frame(
       endpoint = label,
       type = "univariate",
-      method = "normal",
+      likelihood = "normal",
+      method = method,
       effects = "random",
       ref_tx = NA,
       comp_tx = t,

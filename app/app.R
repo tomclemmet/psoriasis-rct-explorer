@@ -761,9 +761,131 @@ ma_tables_present <- function() {
 }
 HAS_MA <- ma_tables_present()
 
+# Columns in meta_analysis/v_meta_analysis treated as independent,
+# discoverable "which model produced this row" axes. A new value written into
+# any of these columns is picked up automatically (toggle + labelling) with
+# no code changes here. `likelihood` = outcome-distribution family (binomial/
+# multinomial/normal/logit); `method` = effect-structure variant (standard/
+# class_effects/...), orthogonal to likelihood — see project memory:
+# meta-analysis-modelling-seam.
+MA_AXIS_COLUMNS <- c("likelihood", "method")
+
+# Preferred value per axis when more than one is available and the caller
+# hasn't explicitly selected one yet (e.g. modal just opened).
+MA_AXIS_DEFAULT <- c(likelihood = "multinomial", method = "standard")
+
+# Optional friendly display names for axis values; anything absent here still
+# gets a readable label via title-casing.
+MA_AXIS_LABELS <- c(multinomial = "Multinomial", binomial = "Binomial")
+
+axis_display_label <- function(value) {
+  if (is.na(value)) return(value)
+  # Note: MA_AXIS_LABELS[value] (single-bracket) would return NA rather than
+  # NULL for a missing key, silently defeating a `%||%` fallback here.
+  if (value %in% names(MA_AXIS_LABELS)) return(unname(MA_AXIS_LABELS[[value]]))
+  # Sentence case, not title case ("Class effects", not "Class Effects") —
+  # matches the label style used everywhere else this feeds into.
+  phrase <- gsub("_", " ", value)
+  substr(phrase, 1, 1) <- toupper(substr(phrase, 1, 1))
+  phrase
+}
+
+# Order an axis's distinct values for display/grouping: the configured
+# MA_AXIS_DEFAULT value first when present (e.g. "standard" always leads
+# "class_effects" for method), then everything else alphabetically — so a
+# newly added method value sorts after "standard" with no explicit ordering
+# list to maintain.
+order_axis_values <- function(column, vals) {
+  vals <- sort(unique(vals))
+  pref <- MA_AXIS_DEFAULT[[column]]
+  if (!is.null(pref) && pref %in% vals) vals <- c(pref, setdiff(vals, pref))
+  vals
+}
+
+# Pick the "active" value of an axis out of its already-discovered `vals`:
+# `selected` if it's actually available, else the configured default if
+# available, else the first (alphabetically) available value. NULL if `vals`
+# is empty.
+pick_axis_value <- function(vals, column, selected = NULL) {
+  if (!length(vals)) return(NULL)
+  if (!is.null(selected) && selected %in% vals) return(selected)
+  pref <- MA_AXIS_DEFAULT[[column]]
+  if (!is.null(pref) && pref %in% vals) return(pref)
+  sort(vals)[1]
+}
+
+# Discover every distinct MA_AXIS_COLUMNS combination actually present for
+# this endpoint set + type (one query), resolve the "active" value per axis
+# (selection if valid, else default, else first available), and flag which
+# axes actually vary (>1 distinct value) among those combinations — an axis
+# that doesn't vary here isn't shown in toggles/labels even once it resolves
+# to a non-default value (e.g. `method` stays silent until a second method
+# actually exists for this endpoint).
+axis_state <- function(endpoint, type, selection = list()) {
+  combos <- fetch_ma_axis_combos(endpoint, type, MA_AXIS_COLUMNS)
+  values <- setNames(lapply(MA_AXIS_COLUMNS, function(col)
+    if (nrow(combos)) order_axis_values(col, combos[[col]]) else character(0)), MA_AXIS_COLUMNS)
+  active <- setNames(lapply(MA_AXIS_COLUMNS, function(col)
+    pick_axis_value(values[[col]], col, selection[[col]]) %||% NA_character_), MA_AXIS_COLUMNS)
+  multi <- vapply(values, function(v) length(v) > 1, logical(1))
+  list(values = values, active = active, multi = multi)
+}
+
+# `active` values (NA entries dropped) as a named list ready to pass as
+# fetch_ma()/fetch_ma_directed()'s `axes` argument.
+axis_filter_args <- function(active) {
+  out <- list()
+  for (col in names(active)) {
+    v <- active[[col]]
+    if (!is.null(v) && !is.na(v)) out[[col]] <- v
+  }
+  out
+}
+
+# Short comma-joined label from whichever axes are both resolved and
+# "ambiguous" (multi[col] TRUE) — e.g. NULL today for most endpoints,
+# "Multinomial" once likelihood is ambiguous, "Multinomial, Class effects"
+# once method is too. NULL (not "") when there's nothing to show.
+axis_summary_label <- function(active, multi) {
+  keep <- names(active)[multi[names(active)] & !vapply(active, is.na, logical(1))]
+  if (!length(keep)) return(NULL)
+  paste(vapply(active[keep], axis_display_label, ""), collapse = ", ")
+}
+
+# Build one FE + one RE pooled-diamond row per distinct MA_AXIS_COLUMNS
+# combination found for `endpoint` + `type` (crossed with fixed/random
+# effects), via `fetch_one(type, effects, axes)` -> NULL or list(mean, lower,
+# upper, dic). An axis that doesn't vary across the combinations found here
+# is left NA on the resulting rows (no text in the eventual label); axes that
+# do vary get one FE/RE pair per combination. This is what lets a brand-new
+# `method` (or `likelihood`) value show up as its own diamond with zero code
+# changes here.
+pooled_diamonds <- function(endpoint, type, fetch_one) {
+  combos <- fetch_ma_axis_combos(endpoint, type, MA_AXIS_COLUMNS)
+  if (!nrow(combos)) return(list())
+  multi <- vapply(MA_AXIS_COLUMNS, function(col) length(unique(combos[[col]])) > 1, logical(1))
+  out <- list()
+  for (i in seq_len(nrow(combos))) {
+    axes <- setNames(as.list(combos[i, MA_AXIS_COLUMNS]), MA_AXIS_COLUMNS)
+    for (eff in c("fixed", "random")) {
+      r <- fetch_one(type, eff, axes)
+      if (is.null(r)) next
+      kind <- paste(c(type, unlist(axes, use.names = FALSE), eff), collapse = "-")
+      row <- data.frame(kind = kind, est = r$mean, lo = r$lower, hi = r$upper, dic = r$dic,
+                        type = type, effects = eff, stringsAsFactors = FALSE)
+      for (col in MA_AXIS_COLUMNS) row[[col]] <- if (multi[[col]]) axes[[col]] else NA_character_
+      out[[kind]] <- row
+    }
+  }
+  out
+}
+
 # Translate one MA "outcome spec" + the current filter into a rows/pooled
-# bundle for forest_svg. Returns NULL when no data is available.
-build_forest_inputs <- function(state, tab_id, outcome, response_method = "binomial") {
+# bundle for forest_svg. `axis_selection` is a named list keyed by
+# MA_AXIS_COLUMNS entry (e.g. list(method = "binomial")) giving the
+# user-selected value for axes that have a UI toggle; omitted/NULL entries
+# resolve to MA_AXIS_DEFAULT. Returns NULL when no data is available.
+build_forest_inputs <- function(state, tab_id, outcome, axis_selection = list()) {
   is_continuous <- grepl("^abs_", outcome$code)
   is_harm       <- identical(tab_id, "safety")
   is_response   <- !is_continuous && !is_harm && tab_id %in% c("pasi", "dlqi")
@@ -775,12 +897,12 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
     # model when the preferred one has no data (e.g. rare-event endpoints with
     # only a fixed-effects network).
     measure_val <- if (is_continuous) "diff_cfb" else "rd"
-    fetch_network_vs_placebo <- function(eff, method = NULL) {
+    fetch_network_vs_placebo <- function(eff, axes = list()) {
       r_direct  <- fetch_ma(outcome$code, type = "network", effects = eff,
-                            measure = measure_val, ref_tx = "Placebo", method = method)
+                            measure = measure_val, ref_tx = "Placebo", axes = axes)
       r_direct  <- r_direct[r_direct$comp_tx != "Placebo", , drop = FALSE]
       r_flipped <- fetch_ma(outcome$code, type = "network", effects = eff,
-                            measure = measure_val, comp_tx = "Placebo", method = method)
+                            measure = measure_val, comp_tx = "Placebo", axes = axes)
       r_flipped <- r_flipped[r_flipped$ref_tx != "Placebo" &
                               !is.na(r_flipped$ref_tx) & r_flipped$ref_tx != "",
                              , drop = FALSE]
@@ -795,93 +917,68 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
       rbind(r_direct, r_flipped)
     }
 
-    if (is_response) {
-      # Response endpoints: show FE + RE for the selected method (toggled in UI).
-      method_lbl <- if (identical(response_method, "multinomial")) "multinomial" else "binomial"
-      df_re <- fetch_network_vs_placebo("random", method_lbl)
-      df_fe <- fetch_network_vs_placebo("fixed",  method_lbl)
+    # Resolve every MA_AXIS_COLUMNS value in one go (selection if valid, else
+    # default, else first available) and build a short label from whichever
+    # axes actually have more than one value to choose from for this endpoint
+    # — e.g. nothing today for most endpoints, "Multinomial" once likelihood
+    # is ambiguous, "Multinomial, Class effects" once method is too.
+    st         <- axis_state(outcome$code, "network", axis_selection)
+    axis_args  <- axis_filter_args(st$active)
+    model_lbl  <- axis_summary_label(st$active, st$multi)
+    lbl_prefix <- if (!is.null(model_lbl)) paste0(model_lbl, " ") else ""
 
-      if (!nrow(df_re)) {
-        return(list(empty_reason =
-          sprintf("No %s random effects network model available for this endpoint.", method_lbl)))
-      }
-
-      common <- intersect(df_re$comp_tx, df_fe$comp_tx)
-      df_re  <- df_re[match(common, df_re$comp_tx), , drop = FALSE]
-      df_fe  <- df_fe[match(common, df_fe$comp_tx), , drop = FALSE]
-      ord    <- order(df_re$mean, decreasing = TRUE)
-      df_re  <- df_re[ord, , drop = FALSE]
-      df_fe  <- df_fe[ord, , drop = FALSE]
-      n_drugs <- nrow(df_re)
-
-      PAIR_H   <- 14L
-      DRUG_GAP <- 8L
-      fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
-      fe_tt <- mapply(function(drug, est, lo, hi, dic)
-        ma_tooltip(sprintf("%s — %s network estimate, fixed effects", drug, method_lbl), est, lo, hi,
-                   extra = dic_extra(dic), digits = 2),
-        df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper, df_fe$dic)
-      re_tt <- mapply(function(drug, est, lo, hi, dic)
-        ma_tooltip(sprintf("%s — %s network estimate, random effects", drug, method_lbl), est, lo, hi,
-                   extra = dic_extra(dic), digits = 2),
-        df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper, df_re$dic)
-      rows <- data.frame(
-        label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
-        badge     = c(rbind(rep("FE", n_drugs), rep("RE", n_drugs))),
-        est       = c(rbind(df_fe$mean,  df_re$mean)),
-        lo        = c(rbind(df_fe$lower, df_re$lower)),
-        hi        = c(rbind(df_fe$upper, df_re$upper)),
-        square_n  = NA_real_,
-        klass     = c(rbind(rep("ma-square-fe", n_drugs), rep("ma-square-re", n_drugs))),
-        row_h     = PAIR_H,
-        gap_above = c(rbind(fe_gaps, rep(0L, n_drugs))),
-        tooltip   = c(rbind(fe_tt, re_tt)),
-        stringsAsFactors = FALSE
-      )
-    } else {
-      df_re <- fetch_network_vs_placebo("random")
-      if (!nrow(df_re)) {
-        return(list(empty_reason =
-          "No random effects network model available for this endpoint."))
-      }
-      df_fe <- fetch_network_vs_placebo("fixed")
-
-      # Keep only drugs present in both models, sort by RE estimate best-first.
-      common <- intersect(df_re$comp_tx, df_fe$comp_tx)
-      df_re  <- df_re[match(common, df_re$comp_tx), , drop = FALSE]
-      df_fe  <- df_fe[match(common, df_fe$comp_tx), , drop = FALSE]
-      ord    <- order(df_re$mean, decreasing = !(is_continuous || is_harm))
-      df_re  <- df_re[ord, , drop = FALSE]
-      df_fe  <- df_fe[ord, , drop = FALSE]
-      n_drugs <- nrow(df_re)
-
-      # Interleave FE (grey) then RE (blue) per drug; add gap between drug pairs.
-      PAIR_H   <- 14L
-      DRUG_GAP <- 8L
-      fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
-      fe_tt <- mapply(function(drug, est, lo, hi, dic)
-        ma_tooltip(sprintf("%s — network estimate, fixed effects", drug), est, lo, hi,
-                   extra = dic_extra(dic), digits = 2),
-        df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper, df_fe$dic)
-      re_tt <- mapply(function(drug, est, lo, hi, dic)
-        ma_tooltip(sprintf("%s — network estimate, random effects", drug), est, lo, hi,
-                   extra = dic_extra(dic), digits = 2),
-        df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper, df_re$dic)
-      rows <- data.frame(
-        label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
-        badge     = c(rbind(rep("FE", n_drugs), rep("RE", n_drugs))),
-        est       = c(rbind(df_fe$mean,  df_re$mean)),
-        lo        = c(rbind(df_fe$lower, df_re$lower)),
-        hi        = c(rbind(df_fe$upper, df_re$upper)),
-        square_n  = NA_real_,
-        klass     = c(rbind(rep("ma-square-fe", n_drugs),
-                            rep("ma-square-re", n_drugs))),
-        row_h     = PAIR_H,
-        gap_above = c(rbind(fe_gaps, rep(0L, n_drugs))),
-        tooltip   = c(rbind(fe_tt, re_tt)),
-        stringsAsFactors = FALSE
-      )
+    df_re <- fetch_network_vs_placebo("random", axis_args)
+    if (!nrow(df_re)) {
+      return(list(empty_reason =
+        sprintf("No %srandom effects network model available for this endpoint.", lbl_prefix)))
     }
+    df_fe <- fetch_network_vs_placebo("fixed", axis_args)
+    if (!nrow(df_fe)) {
+      return(list(empty_reason =
+        sprintf("No %sfixed effects network model available for this endpoint.", lbl_prefix)))
+    }
+
+    # Keep only drugs present in both models, sort best-first for response
+    # endpoints (highest response rate) or worst-first otherwise (matches
+    # prior per-branch behaviour, now unified across outcome types).
+    common <- intersect(df_re$comp_tx, df_fe$comp_tx)
+    if (!length(common)) {
+      return(list(empty_reason =
+        sprintf("No drug has both %sfixed and random effects network estimates for this endpoint.",
+                lbl_prefix)))
+    }
+    df_re  <- df_re[match(common, df_re$comp_tx), , drop = FALSE]
+    df_fe  <- df_fe[match(common, df_fe$comp_tx), , drop = FALSE]
+    ord    <- order(df_re$mean, decreasing = is_response)
+    df_re  <- df_re[ord, , drop = FALSE]
+    df_fe  <- df_fe[ord, , drop = FALSE]
+    n_drugs <- nrow(df_re)
+
+    # Interleave FE (grey) then RE (blue) per drug; add gap between drug pairs.
+    PAIR_H   <- 14L
+    DRUG_GAP <- 8L
+    fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
+    fe_tt <- mapply(function(drug, est, lo, hi, dic)
+      ma_tooltip(sprintf("%s — %snetwork estimate, fixed effects", drug, lbl_prefix), est, lo, hi,
+                 extra = dic_extra(dic), digits = 2),
+      df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper, df_fe$dic)
+    re_tt <- mapply(function(drug, est, lo, hi, dic)
+      ma_tooltip(sprintf("%s — %snetwork estimate, random effects", drug, lbl_prefix), est, lo, hi,
+                 extra = dic_extra(dic), digits = 2),
+      df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper, df_re$dic)
+    rows <- data.frame(
+      label     = c(rbind(df_fe$comp_tx, rep("", n_drugs))),
+      badge     = c(rbind(rep("FE", n_drugs), rep("RE", n_drugs))),
+      est       = c(rbind(df_fe$mean,  df_re$mean)),
+      lo        = c(rbind(df_fe$lower, df_re$lower)),
+      hi        = c(rbind(df_fe$upper, df_re$upper)),
+      square_n  = NA_real_,
+      klass     = c(rbind(rep("ma-square-fe", n_drugs), rep("ma-square-re", n_drugs))),
+      row_h     = PAIR_H,
+      gap_above = c(rbind(fe_gaps, rep(0L, n_drugs))),
+      tooltip   = c(rbind(fe_tt, re_tt)),
+      stringsAsFactors = FALSE
+    )
 
     axis_label <- if (is_continuous)
       "Difference in change from baseline vs Placebo (95% CI)"
@@ -901,7 +998,7 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
                 axis_label = axis_label,
                 dir_left = dir_left, dir_right = dir_right,
                 n_drugs = n_drugs,
-                response_method = if (is_response) method_lbl else NULL))
+                response_method = model_lbl))
   }
 
   if (identical(state$kind, "edge")) {
@@ -920,8 +1017,7 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
       if (nrow(r)) return(c(a, b))
       if (is_response) {
         r <- fetch_ma(outcome$code, type = "network", effects = "random",
-                      comp_tx = a, ref_tx = b, measure = measure_val,
-                      method = "multinomial")
+                      comp_tx = a, ref_tx = b, measure = measure_val)
         if (nrow(r)) return(c(a, b))
       }
       NULL
@@ -985,35 +1081,14 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
                          stringsAsFactors = FALSE)
     }
 
-    # Pooled diamonds: pairwise FE/RE + network FE/RE (all in comp→ref direction).
-    pooled_list <- list()
-    for (kind_pair in list(c("FE", "fixed"), c("RE", "random"))) {
-      r <- fetch_ma_directed(outcome$code, "pairwise", kind_pair[2],
-                             comp, ref, measure_val)
-      if (!is.null(r))
-        pooled_list[[kind_pair[1]]] <- data.frame(
-          kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper, dic = r$dic)
-    }
-    if (is_response) {
-      for (kind_pair in list(c("Bin-NMA-FE",  "fixed",  "binomial"),
-                             c("Bin-NMA-RE",  "random", "binomial"),
-                             c("Mult-NMA-FE", "fixed",  "multinomial"),
-                             c("Mult-NMA-RE", "random", "multinomial"))) {
-        r <- fetch_ma_directed(outcome$code, "network", kind_pair[2],
-                               comp, ref, measure_val, method = kind_pair[3])
-        if (!is.null(r))
-          pooled_list[[kind_pair[1]]] <- data.frame(
-            kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper, dic = r$dic)
-      }
-    } else {
-      for (kind_pair in list(c("NMA-FE", "fixed"), c("NMA-RE", "random"))) {
-        r <- fetch_ma_directed(outcome$code, "network", kind_pair[2],
-                               comp, ref, measure_val)
-        if (!is.null(r))
-          pooled_list[[kind_pair[1]]] <- data.frame(
-            kind = kind_pair[1], est = r$mean, lo = r$lower, hi = r$upper, dic = r$dic)
-      }
-    }
+    # Pooled diamonds: pairwise + network estimates (all in comp→ref
+    # direction), one FE/RE pair per axis-value combination actually present
+    # in the DB for this endpoint/type.
+    pooled_fetch <- function(type, effects, axes)
+      fetch_ma_directed(outcome$code, type, effects, comp, ref, measure_val,
+                        axes = axes)
+    pooled_list <- c(pooled_diamonds(outcome$code, "pairwise", pooled_fetch),
+                     pooled_diamonds(outcome$code, "network",  pooled_fetch))
     pooled <- if (length(pooled_list)) do.call(rbind, pooled_list) else NULL
     if (!nrow(rows) && is.null(pooled)) return(NULL)
 
@@ -1078,34 +1153,14 @@ build_forest_inputs <- function(state, tab_id, outcome, response_method = "binom
                          stringsAsFactors = FALSE)
     }
 
-    pooled_list <- list()
-    for (kind_pair in list(c("Pool-FE", "fixed"), c("Pool-RE", "random"))) {
-      r <- fetch_ma(outcome$code, type = "univariate", effects = kind_pair[2],
-                    comp_tx = state$drug, measure = measure_val)
-      if (nrow(r))
-        pooled_list[[kind_pair[1]]] <- data.frame(
-          kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1], dic = NA_real_)
+    pooled_fetch <- function(type, effects, axes) {
+      r <- fetch_ma(outcome$code, type = type, effects = effects,
+                    comp_tx = state$drug, measure = measure_val, axes = axes)
+      if (!nrow(r)) return(NULL)
+      list(mean = r$mean[1], lower = r$lower[1], upper = r$upper[1], dic = r$dic[1])
     }
-    if (is_response) {
-      for (kind_pair in list(c("Bin-NMA-R-FE",  "fixed",  "binomial"),
-                             c("Bin-NMA-R-RE",  "random", "binomial"),
-                             c("Mult-NMA-R-FE", "fixed",  "multinomial"),
-                             c("Mult-NMA-R-RE", "random", "multinomial"))) {
-        r <- fetch_ma(outcome$code, type = "network", effects = kind_pair[2],
-                      comp_tx = state$drug, measure = measure_val, method = kind_pair[3])
-        if (nrow(r))
-          pooled_list[[kind_pair[1]]] <- data.frame(
-            kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1], dic = r$dic[1])
-      }
-    } else {
-      for (kind_pair in list(c("NMA-R-FE", "fixed"), c("NMA-R-RE", "random"))) {
-        r <- fetch_ma(outcome$code, type = "network", effects = kind_pair[2],
-                      comp_tx = state$drug, measure = measure_val)
-        if (nrow(r))
-          pooled_list[[kind_pair[1]]] <- data.frame(
-            kind = kind_pair[1], est = r$mean[1], lo = r$lower[1], hi = r$upper[1], dic = r$dic[1])
-      }
-    }
+    pooled_list <- c(pooled_diamonds(outcome$code, "univariate", pooled_fetch),
+                     pooled_diamonds(outcome$code, "network",    pooled_fetch))
     pooled <- if (length(pooled_list)) do.call(rbind, pooled_list) else NULL
     if (!nrow(rows) && is.null(pooled)) return(NULL)
 
@@ -1520,12 +1575,12 @@ server <- function(input, output, session) {
   # diamonds together (no switch).
   ma_ctx <- reactiveValues(active = FALSE, tab_id = NULL, state = NULL,
                            gid = NULL, outcomes = NULL, state_lbl = NULL,
-                           group_lbl = NULL, is_response_nofilter = FALSE,
-                           response_method = "multinomial")
+                           group_lbl = NULL, axis_choices = list(),
+                           axis_selection = list())
 
   # Build a single plot block for one outcome under the active state.
-  build_plot_block <- function(state, tab_id, outc, response_method = "binomial") {
-    inputs <- tryCatch(build_forest_inputs(state, tab_id, outc, response_method),
+  build_plot_block <- function(state, tab_id, outc, axis_selection = list()) {
+    inputs <- tryCatch(build_forest_inputs(state, tab_id, outc, axis_selection),
                        error = function(e) NULL)
     if (is.null(inputs)) {
       return(div(class = "ma-plot-block",
@@ -1566,24 +1621,41 @@ server <- function(input, output, session) {
   # Reactively rendered plot area. Driven by ma_ctx (set on modal open).
   output$ma_plot_area <- renderUI({
     req(ma_ctx$active, ma_ctx$tab_id, ma_ctx$gid, ma_ctx$outcomes)
-    tab_id          <- ma_ctx$tab_id
-    state           <- ma_ctx$state
-    outcomes        <- ma_ctx$outcomes
-    response_method <- ma_ctx$response_method
-    lapply(outcomes, function(outc) build_plot_block(state, tab_id, outc, response_method))
+    tab_id         <- ma_ctx$tab_id
+    state          <- ma_ctx$state
+    outcomes       <- ma_ctx$outcomes
+    axis_selection <- ma_ctx$axis_selection
+    lapply(outcomes, function(outc) build_plot_block(state, tab_id, outc, axis_selection))
   })
 
-  observeEvent(input$ma_method, {
-    ma_ctx$response_method <- input$ma_method
+  # One observer per potential axis toggle input (MA_AXIS_COLUMNS is small and
+  # fixed at startup, so static `paste0("ma_axis_", column)` input ids are
+  # fine — no need to dynamically register observers).
+  for (.col in MA_AXIS_COLUMNS) local({
+    col <- .col
+    observeEvent(input[[paste0("ma_axis_", col)]], {
+      sel <- ma_ctx$axis_selection
+      sel[[col]] <- input[[paste0("ma_axis_", col)]]
+      ma_ctx$axis_selection <- sel
+    })
   })
 
+  # One toggle per axis that has more than one value available for the
+  # current group (computed at modal-open time in open_ma_modal()). An axis
+  # with only one value (the common case today) renders no toggle at all.
   output$ma_method_toggle <- renderUI({
-    req(ma_ctx$is_response_nofilter)
+    req(ma_ctx$active)
+    choices <- ma_ctx$axis_choices
+    toggles <- Filter(function(col) length(choices[[col]]) > 1, names(choices))
+    if (!length(toggles)) return(NULL)
     div(class = "ma-method-toggle",
-        radioButtons("ma_method", label = NULL,
-                     choices = c("Binomial" = "binomial", "Multinomial" = "multinomial"),
-                     selected = "multinomial",
-                     inline = TRUE))
+        lapply(toggles, function(col) {
+          vals <- choices[[col]]
+          radioButtons(paste0("ma_axis_", col), label = NULL,
+                       choices = setNames(vals, vapply(vals, axis_display_label, "")),
+                       selected = ma_ctx$axis_selection[[col]],
+                       inline = TRUE)
+        }))
   })
 
   open_ma_modal <- function(tab_id) {
@@ -1621,17 +1693,29 @@ server <- function(input, output, session) {
                  else "All drugs"
     group_lbl <- endpoint_groups[[tab_id]]$groups[[gid]]$label %||% gid
 
+    # Axis toggle(s): only meaningful for the no-filter (network-vs-Placebo)
+    # view — edge/node views already show every available combination as its
+    # own diamond (see pooled_diamonds()), so there's nothing to pick there.
+    outcome_codes <- vapply(outcomes, `[[`, "", "code")
+    if (is.null(state)) {
+      st             <- axis_state(outcome_codes, "network")
+      axis_choices   <- st$values
+      axis_selection <- st$active
+    } else {
+      axis_choices   <- list()
+      axis_selection <- list()
+    }
+
     # Stash context for the reactive plot area to consume.
-    ma_ctx$tab_id               <- tab_id
-    ma_ctx$state                <- state
-    ma_ctx$gid                  <- gid
-    ma_ctx$outcomes             <- outcomes
-    ma_ctx$state_lbl            <- state_lbl
-    ma_ctx$group_lbl            <- group_lbl
-    ma_ctx$is_response_nofilter <- is.null(state) && tab_id %in% c("pasi", "dlqi") &&
-                                   gid %in% c("response", "zero")
-    ma_ctx$response_method      <- "multinomial"
-    ma_ctx$active               <- TRUE
+    ma_ctx$tab_id         <- tab_id
+    ma_ctx$state          <- state
+    ma_ctx$gid            <- gid
+    ma_ctx$outcomes       <- outcomes
+    ma_ctx$state_lbl      <- state_lbl
+    ma_ctx$group_lbl      <- group_lbl
+    ma_ctx$axis_choices   <- axis_choices
+    ma_ctx$axis_selection <- axis_selection
+    ma_ctx$active         <- TRUE
 
     summary_text <- sprintf("%s | endpoint group: %s", state_lbl, group_lbl)
 
