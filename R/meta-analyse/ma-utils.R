@@ -3,9 +3,11 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
   results <- list()
   
   if (any(class(m) == "stan_nma")) {
+    dic <- dic(m)$dic
+    
     if(m$likelihood == "ordered") {
     
-      # Generate MCMC trace for response rates
+      # Generate MCMC traces for response rates
       rates <- predict(
           m, type = "response",
           baseline = base_dist,
@@ -19,6 +21,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
         mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
                endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])")) |> 
         suppressWarnings()
+      
+      # Summarise response rates for each treatment
       results[[1]] <- summarise(
         .by = c(drug, endpoint),
         rates,
@@ -31,9 +35,11 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
           comp_tx = drug,
           ref_tx = NA,
           measure = "rate",
+          dic = dic
         ) |> 
         select(-drug)
       
+      # Summarise risk differences for each comparison
       for (i in 1:nrow(comparisons)) {
         if (!all(comparisons[i,] %in% rates$drug)) next
         pairwise <- rates |> 
@@ -51,10 +57,14 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
           effects = m$trt_effects,
           ref_tx = comparisons[i,2],
           comp_tx = comparisons[i,1],
-          measure = "rd"
+          measure = "rd",
+          dic = dic
         )
       }
+    
     } else if(m$likelihood == "normal") {
+      
+      # Generate MCMC traces for response rates
       rates <- predict(
         m, type = "response",
         baseline = base_dist,
@@ -67,6 +77,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
         # Extract drug name
         mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=])")) |> 
         suppressWarnings()
+      
+      # Summarise response rates for each treatment
       results[[1]] <- summarise(
         .by = drug,
         rates,
@@ -80,9 +92,11 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
           ref_tx = NA,
           comp_tx = drug,
           measure = "cfb", # Change from baseline
+          dic = dic
         ) |> 
         select(-drug)
       
+      # Summarise risk differences for each comparison
       for (i in 1:nrow(comparisons)) {
         if (!all(comparisons[i,] %in% rates$drug)) next
         pairwise <- rates |> 
@@ -100,7 +114,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
           effects = m$trt_effects,
           ref_tx = comparisons[i,2],
           comp_tx = comparisons[i,1],
-          measure = "diff_cfb"
+          measure = "diff_cfb",
+          dic = dic
         )
       }
     } else if(m$likelihood == "binomial") {
@@ -118,6 +133,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
         # Extract drug name
         mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=])")) |> 
         suppressWarnings()
+      
+      # Summarise response rates for each treatment
       results[[1]] <- summarise(
         .by = drug,
         rates,
@@ -131,9 +148,11 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
           comp_tx = drug,
           ref_tx = NA,
           measure = "rate",
+          dic = dic
         ) |> 
         select(-drug)
       
+      # Summarise risk differences for each comparison
       for (i in 1:nrow(comparisons)) {
         if (!all(comparisons[i,] %in% rates$drug)) next
         pairwise <- rates |> 
@@ -151,10 +170,13 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
           effects = m$trt_effects,
           ref_tx = comparisons[i,2],
           comp_tx = comparisons[i,1],
-          measure = "rd"
+          measure = "rd",
+          dic = dic
         )
       }
     }
+    
+  # Process pairwise or univariate meta-analysis results
   } else if(any(class(m) == "metaprop")) {
     results[[1]] <- data.frame(
       endpoint = label,
@@ -260,6 +282,8 @@ nma_results <- function(m, base_dist=NA, label=NA, t=NA, reft=NA) {
   bind_rows(results)
 }
 
+# Helper function to produce a beta multinma::distr() object to use as a 
+# baseline in multinma::predict() based on a fitted meta::metaprop() object
 beta_dist_metaprop <- function(mod, effects) {
   
   if (effects == "fixed") {
