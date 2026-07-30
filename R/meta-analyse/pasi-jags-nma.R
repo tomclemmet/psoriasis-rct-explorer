@@ -1,6 +1,5 @@
 rm(list = ls())
 library(R2jags)
-library(posterior)
 source("R/meta-analyse/wide_format.R")
 
 
@@ -15,6 +14,9 @@ pso_jags <- function(
   cutpoints <- match.arg(cutpoints)
   baseline <- match.arg(baseline)
   
+  if (baseline == "unadjusted") {
+    data$mmu <- NULL
+  }
   
   setup <- "
 model {
@@ -140,7 +142,7 @@ model {
   
   jags(
     data = data, parameters.to.save = params, inits = NULL, 
-    model.file = filename, n.chains = 2, n.iter = 1000, n.burnin = 500, n.thin = 1
+    model.file = filename, n.chains = 2, n.iter = 5000, n.burnin = 1000, n.thin = 1
   )
 }
 
@@ -162,10 +164,10 @@ process_jags <- function(mod) {
       as_tibble(rownames = "param") |> 
       left_join(drug_lookup, by = c("param" = "index")) |> 
       relocate(drug, .after = param),
-    trace = as_draws_df(mod$BUGSoutput$sims.array),
+    trace = posterior::as_draws_df(mod$BUGSoutput$sims.array),
     totresdev = mod$BUGSoutput$mean$totresdev,
-    DIC = mod$BUGSoutput$DIC,
-    pV = mod$BUGSoutput$pV
+    pV = mod$BUGSoutput$pV,
+    DIC = mod$BUGSoutput$mean$totresdev + mod$BUGSoutput$pV
   )
 }
 
@@ -196,3 +198,4 @@ ggsave("forest.png", height = 20, width = 7)
 summaries <- lapply(models, process_jags)
 
 lapply(summaries, \(x) {x$DIC})
+
