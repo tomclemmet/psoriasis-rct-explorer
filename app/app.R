@@ -1578,10 +1578,18 @@ server <- function(input, output, session) {
                            group_lbl = NULL, axis_choices = list(),
                            axis_selection = list())
 
-  # Build a single plot block for one outcome under the active state.
-  build_plot_block <- function(state, tab_id, outc, axis_selection = list()) {
-    inputs <- tryCatch(build_forest_inputs(state, tab_id, outc, axis_selection),
-                       error = function(e) NULL)
+  # Fetch forest-plot inputs for one outcome under the active state.
+  fetch_plot_inputs <- function(state, tab_id, outc, axis_selection = list()) {
+    tryCatch(build_forest_inputs(state, tab_id, outc, axis_selection),
+            error = function(e) NULL)
+  }
+
+  # Render one already-fetched outcome's plot block. `xlim`, when supplied,
+  # overrides the plot's own auto-fit x-axis range — see
+  # group_shared_xlim() below, which computes one range shared across every
+  # outcome in the current block so e.g. PASI 50/75/90/100 stay visually
+  # comparable instead of each auto-fitting its own range.
+  render_plot_block <- function(outc, inputs, xlim = NULL) {
     if (is.null(inputs)) {
       return(div(class = "ma-plot-block",
                  div(class = "ma-plot-title", outc$label),
@@ -1611,11 +1619,34 @@ server <- function(input, output, session) {
     svg_html <- forest_svg(inputs$rows, inputs$pooled, scale = eff_scale,
                            axis_label = inputs$axis_label,
                            dir_left   = inputs$dir_left,
-                           dir_right  = inputs$dir_right)
+                           dir_right  = inputs$dir_right,
+                           xlim       = xlim)
     div(class = "ma-plot-block",
         div(class = "ma-plot-title", outc$label),
         div(class = "ma-plot-stats", stats),
         HTML(svg_html))
+  }
+
+  # One x-axis range shared across every plot in `all_inputs`, so a group
+  # like PASI 50/75/90/100 (or DLQI 0/0-1) renders on the same scale and is
+  # actually comparable at a glance, rather than each endpoint auto-fitting
+  # its own range. Only pools inputs that share the same effective scale
+  # (always true within one endpoint group in practice) and actually have
+  # data; returns NULL (falls back to each plot's own auto-fit) when there's
+  # nothing to share or fewer than two comparable plots.
+  group_shared_xlim <- function(all_inputs) {
+    usable <- Filter(function(inp) !is.null(inp) && is.null(inp$empty_reason) &&
+                       (nrow(inp$rows) || (!is.null(inp$pooled) && nrow(inp$pooled))),
+                     all_inputs)
+    if (length(usable) < 2) return(NULL)
+    scales <- vapply(usable, function(inp) inp$effective_scale %||% "md", "")
+    if (length(unique(scales)) != 1) return(NULL)
+    combined_rows <- do.call(rbind, lapply(usable, function(inp) inp$rows[, c("lo", "hi"), drop = FALSE]))
+    pooled_list   <- Filter(function(p) !is.null(p) && nrow(p),
+                            lapply(usable, function(inp) inp$pooled))
+    combined_pooled <- if (length(pooled_list))
+      do.call(rbind, lapply(pooled_list, function(p) p[, c("lo", "hi"), drop = FALSE])) else NULL
+    forest_xlimits(scales[1], combined_rows, combined_pooled)
   }
 
   # Reactively rendered plot area. Driven by ma_ctx (set on modal open).
@@ -1625,7 +1656,11 @@ server <- function(input, output, session) {
     state          <- ma_ctx$state
     outcomes       <- ma_ctx$outcomes
     axis_selection <- ma_ctx$axis_selection
-    lapply(outcomes, function(outc) build_plot_block(state, tab_id, outc, axis_selection))
+    all_inputs  <- lapply(outcomes, function(outc)
+      fetch_plot_inputs(state, tab_id, outc, axis_selection))
+    shared_xlim <- group_shared_xlim(all_inputs)
+    Map(function(outc, inputs) render_plot_block(outc, inputs, xlim = shared_xlim),
+       outcomes, all_inputs)
   })
 
   # One observer per potential axis toggle input (MA_AXIS_COLUMNS is small and
