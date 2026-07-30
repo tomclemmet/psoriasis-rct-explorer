@@ -82,7 +82,7 @@ results$pasi_fe <- nma_results(
   base_dist = beta_dist_metaprop(pasi_ref, "fixed")
 )
 
-results$pasi_fe_c <- nma_results(
+results$pasi_fe_baseline <- nma_results(
   pasi_fit_fe,
   base_dist = beta_dist_metaprop(pasi_ref, "fixed"),
   method = "baseline adjusted"
