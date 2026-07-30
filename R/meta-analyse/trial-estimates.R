@@ -122,7 +122,10 @@ abs_pasi_data <- data |>
   filter(!is.na(abs_pasi_change_mean) & !is.na(abs_pasi_change_sd)) |> 
   rename(comp_tx = drug) |> 
   summarise(.by = c(ref_id, comp_tx), 
-            mean = mean(abs_pasi_change_mean), sd = mean(abs_pasi_change_sd), # Not quite accurate
+            mean = sum(abs_pasi_change_mean * n) / sum(n),
+            sd = sqrt((sum((n - 1) * abs_pasi_change_sd^2) + 
+                         sum(n * (abs_pasi_change_mean - mean)^2)) / 
+                        (sum(n) - 1)),
             n = sum(n)) |> 
   mutate(
     measure = "cfb",
@@ -177,7 +180,10 @@ abs_dlqi_data <- data |>
   filter(!is.na(abs_dlqi_change_mean) & !is.na(abs_dlqi_change_sd)) |> 
   rename(comp_tx = drug) |> 
   summarise(.by = c(ref_id, comp_tx), 
-            mean = mean(abs_dlqi_change_mean), sd = mean(abs_dlqi_change_sd), # Not quite accurate
+            mean = sum(abs_dlqi_change_mean * n) / sum(n),
+            sd = sqrt((sum((n - 1) * abs_dlqi_change_sd^2) + 
+                         sum(n * (abs_dlqi_change_mean - mean)^2)) / 
+                        (sum(n) - 1)),
             n = sum(n)) |> 
   mutate(
     measure = "cfb",
