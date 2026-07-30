@@ -108,8 +108,14 @@ model {
   sd ~ dunif(0, 5)                                                               # vague prior for between-trial SD
   sdz ~ dunif(0, 5)
   tau <- pow(sd,-2)   
-  tauz <- pow(sdz, -2) # between-trial precision = (1/between-trial variance)
+  tauz <- pow(sdz, -2) # between-trial precision = (1 / between-trial variance)
   mubar <- mean(mu[])
+  
+  A ~ dnorm(1.097,123)
+  # calculate prob of achieving PASI 50/75/90/100 on treatment k
+  for (k in 1:nt) {
+    for (j in 1:(Cmax - 1)) { T[j,k] <- 1 - phi(A + d[k] + z[j]) }
+  } 
   # *** PROGRAM ENDS 
 }"
   
@@ -128,7 +134,7 @@ model {
   writeLines(model_code, filename)
   
   params <- c(
-    "d", "z",
+    "d", "z", "T",
     if (effects == "random") "sd" else NULL,
     if (cutpoints == "random") "sdz" else NULL,
     if (baseline == "adjusted") c("beta", "mubar") else NULL,
