@@ -27,7 +27,11 @@ forest_ticks <- function(scale, xmin, xmax) {
             else                   0.25
     seq(0, xmax, by = step)
   } else {
-    pretty(c(xmin, xmax), n = 5)
+    # pretty() is allowed to extend past the requested range to land on round
+    # numbers (e.g. xmax = 1.03 -> a tick at 1.2) — filter those back out, or
+    # the tick mark/label gets drawn past the axis line's own endpoint.
+    t <- pretty(c(xmin, xmax), n = 5)
+    t[t >= xmin & t <= xmax]
   }
 }
 
@@ -139,7 +143,8 @@ pooled_row_meta <- function(type, effects, heading_value, row_axis_values) {
 }
 
 forest_svg <- function(rows, pooled, scale = "rr", width = 880,
-                       axis_label = NULL, dir_left = NULL, dir_right = NULL) {
+                       axis_label = NULL, dir_left = NULL, dir_right = NULL,
+                       xlim = NULL) {
   esc <- function(x) htmltools::htmlEscape(x, attribute = FALSE)
   esc_attr <- function(x) htmltools::htmlEscape(x, attribute = TRUE)
   if (!nrow(rows) && (is.null(pooled) || !nrow(pooled))) {
@@ -204,7 +209,7 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
     (if (n_pooled) POOLED_GAP + n_pooled_groups * POOLED_HEADING_H + n_pooled * POOLED_H else 0)
   height    <- HEADER_PAD + body_h + AXIS_PAD + AXIS_LABEL_H + BOTTOM_PAD
 
-  xlim  <- forest_xlimits(scale, rows, pooled)
+  xlim  <- xlim %||% forest_xlimits(scale, rows, pooled)
   xmin  <- xlim[1]; xmax <- xlim[2]
   xfn   <- forest_xscale(scale, xmin, xmax, PLOT_LEFT, PLOT_W)
   ticks <- forest_ticks(scale, xmin, xmax)
