@@ -8,6 +8,8 @@
 *.RDS
 *.RData
 *.csv
+*.png
+output/
 
 # R
 .Rhistory
@@ -18,7 +20,7 @@
 
 # Scratch / reference material kept locally
 diagram example/
-*/@boneyard/*
+@boneyard/
 todo.txt
 
 # OS / editor
