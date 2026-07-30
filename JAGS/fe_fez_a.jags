@@ -12,7 +12,7 @@ model {
         q.raw[i, k, j] <- 1 - (p[i, k, C[i, j + 1]] /                           # conditional probabilities
         max(p[i, k, C[i, j]], 1e-10)) 
         q[i, k, j] <- max(1e-7, min(1 - 1e-7, q.raw[i, k, j]))
-        theta[i, k, j] <- mu[i] - delta[i, k] + z[j] + beta * (mu[i] - mmu)
+        theta[i, k, j] <- mu[i] - delta[i, k] + z[j] + beta * (mu[i] - mmu) * (1 - equals(k, 1))
         rhat[i, k, j] <- q[i, k, j] * n[i, k, j]                                  # predicted number events
         dv[i, k, j] <- 2 * (                                                    # Deviance contribution of each category  
           r[i, k, j] * 
