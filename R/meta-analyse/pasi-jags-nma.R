@@ -24,7 +24,7 @@ model {
   for(i in 1:ns){                                                               # LOOP THROUGH STUDIES
     w[i, 1] <- 0                                                                # adjustment for multi-arm trials is zero for control arm
     delta[i, 1] <- 0                                                            # treatment effect is zero for control arm
-    mu[i] ~ dnorm(0, .01)                                                     # vague priors for all trial baselines
+    mu[i] ~ dnorm(0, .1)                                                     # vague priors for all trial baselines
     for (k in 1:na[i]) {                                                        # LOOP THROUGH ARMS
       p[i, k, 1] <- 1                                                           # Pr(PASI >0)
       for (j in 1:(nc[i] - 1)) {                                                # LOOP THROUGH CATEGORIES
@@ -103,8 +103,8 @@ model {
   finish <- "
   totresdev <- sum(resdev[])                                                    # Total Residual Deviance
   d[1] <- 0                                                                     # treatment effect is zero for reference treatment
-  for (k in 2:nt){ d[k] ~ dnorm(0,.01) }                                      # vague priors for treatment effects
-  beta ~ dnorm(0,.01)
+  for (k in 2:nt){ d[k] ~ dnorm(0,.1) }                                      # vague priors for treatment effects
+  beta ~ dnorm(0,.1)
   sd ~ dunif(0, 5)                                                               # vague prior for between-trial SD
   sdz ~ dunif(0, 5)
   tau <- pow(sd,-2)   
@@ -142,7 +142,7 @@ model {
   
   jags(
     data = data, parameters.to.save = params, inits = NULL, 
-    model.file = filename, n.chains = 2, n.iter = 5000, n.burnin = 1000, n.thin = 1
+    model.file = filename, n.chains = 2, n.iter = 1000, n.burnin = 500, n.thin = 1
   )
 }
 
@@ -199,3 +199,4 @@ summaries <- lapply(models, process_jags)
 
 lapply(summaries, \(x) {x$DIC})
 
+traceplot(models$fe_fez_u)
