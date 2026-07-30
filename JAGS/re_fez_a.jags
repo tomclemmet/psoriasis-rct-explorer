@@ -1,0 +1,59 @@
+
+model {
+  # *** PROGRAM STARTS
+  for(i in 1:ns){                                                               # LOOP THROUGH STUDIES
+    w[i, 1] <- 0                                                                # adjustment for multi-arm trials is zero for control arm
+    delta[i, 1] <- 0                                                            # treatment effect is zero for control arm
+    mu[i] ~ dnorm(0, .01)                                                     # vague priors for all trial baselines
+    for (k in 1:na[i]) {                                                        # LOOP THROUGH ARMS
+      p[i, k, 1] <- 1                                                           # Pr(PASI >0)
+      for (j in 1:(nc[i] - 1)) {                                                # LOOP THROUGH CATEGORIES
+        r[i, k, j] ~ dbin(q[i, k, j], n[i, k, j])                               # binomial likelihood
+        q.raw[i, k, j] <- 1 - (p[i, k, C[i, j + 1]] /                           # conditional probabilities
+        max(p[i, k, C[i, j]], 1e-10)) 
+        q[i, k, j] <- max(1e-7, min(1 - 1e-7, q.raw[i, k, j]))
+        theta[i, k, j] <- mu[i] - delta[i, k] + z[j] + beta * (mu[i] - mmu)
+        rhat[i, k, j] <- q[i, k, j] * n[i, k, j]                                  # predicted number events
+        dv[i, k, j] <- 2 * (                                                    # Deviance contribution of each category  
+          r[i, k, j] * 
+            (log(max(r[i, k, j], 1e-10)) - log(max(rhat[i, k, j], 1e-10))) +            
+            (n[i, k, j] - r[i, k, j]) * 
+            (log(max(n[i, k, j] - r[i, k, j], 1e-10)) - 
+               log(max(n[i, k, j] - rhat[i, k, j], 1e-10)))
+        )
+      }
+      dev[i, k] <- sum(dv[i, k, 1:(nc[i] - 1)])                                 # deviance contribution of each arm
+      for (j in 2:nc[i]) {                                                      # LOOP THROUGH CATEGORIES
+        p[i, k, C[i, j]] <- 1 - phi.adj[i, k, j]                                # link function
+        # adjust link function phi(x) for extreme values that can give numerical errors
+        # when x< -5, phi(x)=0, when x> 5, phi(x)=1
+        phi.adj[i, k, j] <- step(5 + theta[i, k, j - 1]) * 
+          (step(theta[i, k, j - 1] - 5) +
+             step(5 - theta[i, k, j - 1]) * phi(theta[i, k, j - 1]) )
+      }
+    }
+    for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
+      delta[i, k] ~ dnorm(md[i, k], taud[i, k])
+      md[i, k] <- d[t[i, k]] - d[t[i, 1]] + sw[i, k]                            # mean of LHR distributions, with multi-arm trial correction
+      taud[i, k] <- tau * 2 * (k - 1) / k                                       # precision of LHR distributions (with multi-arm trial correction)
+      w[i, k] <- (delta[i, k] - d[t[i, k]] + d[t[i, 1]])                        # adjustment, multi-arm RCTs
+      sw[i, k] <- sum(w[i, 1:(k-1)]) / (k-1)                                    # cumulative adjustment for multi-arm trials
+    }
+    resdev[i] <- sum(dev[i, 1:na[i]])                                            # summed residual deviance contribution for this trial
+  }
+  z[1] <- 0                                                                     # set z50=0
+  for (j in 2:(Cmax-1)) {                                                         # Set priors for z, for any number of categories
+    z.aux[j] ~ dunif(0,5)                                                       # priors
+    z[j] <- z[j-1] + z.aux[j]                                                   # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
+  }
+  totresdev <- sum(resdev[])                                                    # Total Residual Deviance
+  d[1] <- 0                                                                     # treatment effect is zero for reference treatment
+  for (k in 2:nt){ d[k] ~ dnorm(0,.01) }                                      # vague priors for treatment effects
+  beta ~ dnorm(0,.01)
+  sd ~ dunif(0, 5)                                                               # vague prior for between-trial SD
+  sdz ~ dunif(0, 5)
+  tau <- pow(sd,-2)   
+  tauz <- pow(sdz, -2) # between-trial precision = (1/between-trial variance)
+  mubar <- mean(mu[])
+  # *** PROGRAM ENDS 
+}
