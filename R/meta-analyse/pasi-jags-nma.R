@@ -36,7 +36,7 @@ model {
   z_1d <- "z[j]"
   z_2d <- "zeta[i, j]"
   
-  baseline_adj <- " + beta * (mu[i] - mmu)"
+  baseline_adj <- " + beta * (mu[i] - mmu) * (1 - equals(k, 1))"
   
   deviance <- "
         rhat[i, k, j] <- q[i, k, j] * n[i, k, j]                                  # predicted number events
@@ -137,10 +137,10 @@ model {
                  " effects, ", cutpoints, " cutpoints, and ", 
                  if (baseline == "adjusted") "baseline adjustment" else 
                    "no baseline adjustment"))
+  
   jags(
-    data = data, parameters.to.save = params,
-    inits = NULL, model.file = filename, n.chains = 2, n.iter = 5000,
-    n.burnin = 1000, n.thin = 1
+    data = data, parameters.to.save = params, inits = NULL, 
+    model.file = filename, n.chains = 2, n.iter = 1000, n.burnin = 500, n.thin = 1
   )
 }
 
