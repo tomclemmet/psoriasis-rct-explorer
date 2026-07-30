@@ -7,6 +7,7 @@ library(multinma)
 library(meta)
 options(mc.cores = parallel::detectCores())
 source("R/meta-analyse/ma-utils.R")
+lookup <- read.csv("R/meta-analyse/trt_class.csv")
 
 # Extract data =================================================================
 
@@ -21,7 +22,8 @@ join_keys <- colnames(pasi)[seq(1,9)]
 data <- pasi |> 
   full_join(dlqi, by = join_keys) |> 
   full_join(safety, by = join_keys) |> 
-  filter(!is.na(drug))
+  filter(!is.na(drug)) |> 
+  left_join(lookup, by = "drug")
   
 drugs <- unique(data$drug)
 comparisons <- as.data.frame(t(combn(drugs, 2)))
@@ -51,7 +53,7 @@ pasi_net <- set_agd_arm(
              pasi50, pasi75, pasi90, pasi100,
              inclusive = TRUE,
              type = "ordered")
-)
+  )
 
 pasi_fit_fe <- nma(
   pasi_net,
@@ -63,28 +65,45 @@ pasi_fit_fe <- nma(
   iter = niter
 )
 
+pasi_fit_fe_baseline <- nma(
+  pasi_net,
+  trt_effects = "fixed",
+  regression = ~ .mu,
+  link = "probit",
+  prior_intercept = normal(scale = 100),
+  prior_trt = normal(scale = 10),
+  prior_aux = flat(),
+  iter = niter
+)
+
+
 results$pasi_fe <- nma_results(
   pasi_fit_fe, 
   base_dist = beta_dist_metaprop(pasi_ref, "fixed")
 )
 
-#!!!!
 results$pasi_fe_c <- nma_results(
-  pasi_fit_fe, 
+  pasi_fit_fe,
   base_dist = beta_dist_metaprop(pasi_ref, "fixed"),
   method = "baseline adjusted"
 )
-results$pasi_re_c <- nma_results(
-  pasi_fit_re, 
-  beta_dist_metaprop(pasi_ref, "random"),
-  method = "baseline adjusted"
-)
-#!!!!
+
 
 # Random effects
 pasi_fit_re <- nma(
   pasi_net,
   trt_effects = "random",
+  link = "probit",
+  prior_intercept = normal(scale = 100),
+  prior_trt = normal(scale = 10),
+  prior_aux = flat(),
+  iter = niter
+)
+
+pasi_fit_re <- nma(
+  pasi_net,
+  trt_effects = "random",
+  regression = ~ .mu:.trt,
   link = "probit",
   prior_intercept = normal(scale = 100),
   prior_trt = normal(scale = 10),
