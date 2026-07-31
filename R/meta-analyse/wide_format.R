@@ -69,7 +69,7 @@ pasi_jags <- list(
   ns = nrow(pasi_wide),
   nt = n_distinct(filter(pasi, !if_all(pasi50:pasi100, \(x) is.na(x)))$drug),
   Cmax = max(pasi_wide$nc),
-  mmu = 0.85,
+  mmu = 0.6,
   na = pasi_wide$na,
   nc = pasi_wide$nc,
   t = select(pasi_wide, a1t:a3t) |> as.matrix(),
