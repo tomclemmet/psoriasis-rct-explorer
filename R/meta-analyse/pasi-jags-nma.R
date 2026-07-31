@@ -32,8 +32,8 @@ model {
         "
   theta <- "theta[i, k, j] <- mu[i] - delta[i, k] + "
   
-  z_1d <- "z[j]"
-  z_2d <- "zeta[i, j]"
+  z_1d <- "z[C[i, j + 1] - 1]"
+  z_2d <- "zeta[t[i, k], C[i, j + 1] - 1]"
   
   baseline_adj <- " + beta * (mu[i] - mmu) * (1 - equals(k, 1))"
   
@@ -91,13 +91,13 @@ model {
   for (j in 2:(Cmax-1)) {                                                         # Set priors for z, for any number of categories
     z.aux[j] ~ dunif(0,5)                                                       # priors
     z[j] <- z[j - 1] + z.aux[j]
-    for (i in 1:ns) {
+    for (i in 1:nt) {
       zeta.aux[i, j] ~ dnorm(z.aux[j], tauz)
       zeta[i, j] <- zeta[i, j - 1] + zeta.aux[i, j]                                              # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
     }
   }"
   
-  finish <- "
+  priors <- "
   totresdev <- sum(resdev[])                                                    # Total Residual Deviance
   d[1] <- 0                                                                     # treatment effect is zero for reference treatment
   for (k in 2:nt){ d[k] ~ dnorm(0,.0001) }                                      # vague priors for treatment effects
@@ -108,10 +108,20 @@ model {
   tauz <- pow(sdz, -2) # between-trial precision = (1 / between-trial variance)
   mubar <- mean(mu[])
   
-  A ~ dbeta(147,671)
-  # calculate prob of achieving PASI 50/75/90/100 on treatment k
+  
+  A ~ dnorm(1.097,123) 
+  # calculate prob of achieving PASI 50/75/90/100 on treatment k"
+
+  probs_fez <- "
   for (k in 1:nt) {
     for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + z[j]) }
+  } 
+  # *** PROGRAM ENDS 
+}"
+  
+probs_rez <- "
+  for (k in 1:nt) {
+    for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + zeta[k, j]) }
   } 
   # *** PROGRAM ENDS 
 }"
@@ -125,7 +135,8 @@ model {
     phi,
     if(effects == "fixed") delta_fe else delta_re,
     if (cutpoints == "fixed") fez else rez,
-    finish
+    priors,
+    if (cutpoints == "fixed") probs_fez else probs_rez
   )
   
   writeLines(model_code, filename)
@@ -145,7 +156,7 @@ model {
   
   jags(
     data = data, parameters.to.save = params, inits = NULL, 
-    model.file = filename, n.chains = 2, n.iter = 5000, n.burnin = 1000, n.thin = 1
+    model.file = filename, n.chains = 2, n.iter = 2000, n.burnin = 1000, n.thin = 1
   )
 }
 
