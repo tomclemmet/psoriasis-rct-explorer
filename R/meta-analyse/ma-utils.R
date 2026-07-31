@@ -8,7 +8,8 @@ nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, labe
       "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
       "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
       "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
-      "Phototherapy", "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
+      # "Phototherapy", 
+      "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
       "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
     )
   thresholds <- c("pasi50", "pasi75", "pasi90", "pasi100")
