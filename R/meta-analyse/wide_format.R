@@ -1,4 +1,3 @@
-rm(list=ls())
 library(DBI)
 library(dplyr)
 library(tidyr)
@@ -14,7 +13,8 @@ drug_order <- c(
   "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
   "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
   "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
-  "Phototherapy", "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
+  # "Phototherapy", 
+  "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
   "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
 )
 
@@ -67,7 +67,7 @@ pasi_wide <- pasi |>
 
 pasi_jags <- list(
   ns = nrow(pasi_wide),
-  nt = n_distinct(pasi$drug),
+  nt = n_distinct(filter(pasi, !if_all(pasi50:pasi100, \(x) is.na(x)))$drug),
   Cmax = max(pasi_wide$nc),
   mmu = 0.85,
   na = pasi_wide$na,
