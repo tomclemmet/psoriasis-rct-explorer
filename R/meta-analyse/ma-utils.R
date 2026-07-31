@@ -1,299 +1,395 @@
-nma_results <- function(m, base_dist=NA, method = "standard", label=NA, t=NA, reft=NA) {
+library(stringr)
+
+nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, label=NA, t=NA, reft=NA) {
   
   results <- list()
+  drug_order <- c(
+      "Placebo", "Acitretin", "Adalimumab", "Apremilast", "Bimekizumab",
+      "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
+      "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
+      "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
+      "Phototherapy", "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
+      "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
+    )
+  thresholds <- c("pasi50", "pasi75", "pasi90", "pasi100")
   
-  if (any(class(m) == "stan_nma")) {
-    dic <- dic(m)$dic
+  if (class(m) == "rjags") {
+    ##!!!!! CURRENTLY IGNORES BASE DIST
+    dic <- process_jags(m)$DIC
     
-    if(m$likelihood == "ordered") {
+    # Generate MCMC traces for response rates
+    rates <- process_jags(m)$trace |> 
+      select(starts_with(c("prob", "."))) |> 
+      # Convert to long format
+      pivot_longer(starts_with("prob"), names_to = "param", values_to = "trace") |> 
+      # Extract drug name
+      mutate(drug = drug_order[as.numeric(str_extract(param, pattern = "(?<=,\\s?)\\d+(?=\\])"))],
+             endpoint = thresholds[as.numeric(str_extract(param, pattern = "(?<=prob\\[)\\d+(?=,)"))]) |> 
+      suppressWarnings() 
     
-      # Generate MCMC traces for response rates
-      rates <- predict(
-          m, type = "response",
-          baseline = base_dist,
-          baseline_type = "response",
-          summary = FALSE
-        )$sims |> 
-        posterior::as_draws_df() |>
-        # Convert to long format
-        pivot_longer(!starts_with("."), names_to = "param", values_to = "trace") |>
-        # Extract drug name
-        mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
-               endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])")) |> 
-        suppressWarnings()
-      
-      # Summarise response rates for each treatment
-      results[[1]] <- summarise(
-        .by = c(drug, endpoint),
-        rates,
-        mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)
+    # Summarise response rates for each treatment
+    results[[1]] <- summarise(
+      .by = c(drug, endpoint),
+      rates,
+      mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)
+    ) |> 
+      mutate(
+        type = "network",
+        likelihood = "multinomial",
+        method = method,
+        effects = effects,
+        comp_tx = drug,
+        ref_tx = NA,
+        measure = "rate",
+        dic = dic
       ) |> 
-        mutate(
-          type = "network",
-          likelihood = "multinomial",
-          method = method,
-          effects = m$trt_effects,
-          comp_tx = drug,
-          ref_tx = NA,
-          measure = "rate",
-          dic = dic
-        ) |> 
-        select(-drug)
-      
-      # Summarise risk differences for each comparison
-      for (i in 1:nrow(comparisons)) {
-        if (!all(comparisons[i,] %in% rates$drug)) next
-        pairwise <- rates |> 
-          select(-param) |> 
-          filter(drug %in% comparisons[i,]) |> 
-          pivot_wider(names_from = drug, values_from = trace)
-        pairwise$rd <- pairwise[[comparisons[i,1]]] - pairwise[[comparisons[i,2]]]
-        results[[i + 1]] <- summarise(
-          .by = "endpoint",
-          pairwise,
-          mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
-        ) |> mutate(
-          type = "network",
-          likelihood = "multinomial",
-          method = method,
-          effects = m$trt_effects,
-          ref_tx = comparisons[i,2],
-          comp_tx = comparisons[i,1],
-          measure = "rd",
-          dic = dic
-        )
-      }
+      select(-drug)
     
-    } else if(m$likelihood == "normal") {
-      
-      # Generate MCMC traces for response rates
-      rates <- predict(
-        m, type = "response",
-        baseline = base_dist,
-        summary = FALSE,
-        baseline_type = "response"
-      )$sims |> 
-        posterior::as_draws_df() |>
-        # Convert to long format
-        pivot_longer(!starts_with("."), names_to = "param", values_to = "trace") |>
-        # Extract drug name
-        mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=])")) |> 
-        suppressWarnings()
-      
-      # Summarise response rates for each treatment
-      results[[1]] <- summarise(
-        .by = drug,
-        rates,
-        mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)
-      ) |> 
-        mutate(
-          type = "network",
-          likelihood = "normal",
-          method = method,
-          endpoint = label,
-          effects = m$trt_effects,
-          ref_tx = NA,
-          comp_tx = drug,
-          measure = "cfb", # Change from baseline
-          dic = dic
-        ) |> 
-        select(-drug)
-      
-      # Summarise risk differences for each comparison
-      for (i in 1:nrow(comparisons)) {
-        if (!all(comparisons[i,] %in% rates$drug)) next
-        pairwise <- rates |> 
-          select(-param) |> 
-          filter(drug %in% comparisons[i,]) |> 
-          pivot_wider(names_from = drug, values_from = trace)
-        pairwise$rd <- pairwise[[comparisons[i,1]]] - pairwise[[comparisons[i,2]]]
-        results[[i + 1]] <- summarise(
-          pairwise,
-          mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
-        ) |> mutate(
-          type = "network",
-          likelihood = "normal",
-          method = method,
-          endpoint = label,
-          effects = m$trt_effects,
-          ref_tx = comparisons[i,2],
-          comp_tx = comparisons[i,1],
-          measure = "diff_cfb",
-          dic = dic
-        )
-      }
-    } else if(m$likelihood == "binomial") {
-      
-      # Generate MCMC trace for response rates
-      rates <- predict(
-        m, type = "response",
-        baseline = base_dist,
-        summary = FALSE,
-        baseline_type = "response"
-      )$sims |> 
-        posterior::as_draws_df() |>
-        # Convert to long format
-        pivot_longer(!starts_with("."), names_to = "param", values_to = "trace") |>
-        # Extract drug name
-        mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=])")) |> 
-        suppressWarnings()
-      
-      # Summarise response rates for each treatment
-      results[[1]] <- summarise(
-        .by = drug,
-        rates,
-        mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)
-      ) |> 
-        mutate(
-          type = "network",
-          likelihood = "binomial",
-          method = method,
-          endpoint = label,
-          effects = m$trt_effects,
-          comp_tx = drug,
-          ref_tx = NA,
-          measure = "rate",
-          dic = dic
-        ) |> 
-        select(-drug)
-      
-      # Summarise risk differences for each comparison
-      for (i in 1:nrow(comparisons)) {
-        if (!all(comparisons[i,] %in% rates$drug)) next
-        pairwise <- rates |> 
-          select(-param) |> 
-          filter(drug %in% comparisons[i,]) |> 
-          pivot_wider(names_from = drug, values_from = trace)
-        pairwise$rd <- pairwise[[comparisons[i,1]]] - pairwise[[comparisons[i,2]]]
-        results[[i + 1]] <- summarise(
-          pairwise,
-          mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
-        ) |> mutate(
-          type = "network",
-          likelihood = "binomial",
-          method = method,
-          endpoint = label,
-          effects = m$trt_effects,
-          ref_tx = comparisons[i,2],
-          comp_tx = comparisons[i,1],
-          measure = "rd",
-          dic = dic
-        )
-      }
+    # Summarise risk differences for each comparison
+    for (i in 1:nrow(comparisons)) {
+      if (!all(comparisons[i,] %in% rates$drug)) next
+      pairwise <- rates |> 
+        select(-param) |> 
+        filter(drug %in% comparisons[i,]) |> 
+        pivot_wider(names_from = drug, values_from = trace)
+      pairwise$rd <- pairwise[[comparisons[i,1]]] - pairwise[[comparisons[i,2]]]
+      results[[i + 1]] <- summarise(
+        .by = "endpoint",
+        pairwise,
+        mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
+      ) |> mutate(
+        type = "network",
+        likelihood = "multinomial",
+        method = method,
+        effects = effects,
+        ref_tx = comparisons[i,2],
+        comp_tx = comparisons[i,1],
+        measure = "rd",
+        dic = dic
+      )
     }
     
-  # Process pairwise or univariate meta-analysis results
-  } else if(any(class(m) == "metaprop")) {
-    results[[1]] <- data.frame(
-      endpoint = label,
-      type = "univariate",
-      likelihood = "logit",
-      method = method,
-      effects = "fixed",
-      ref_tx = NA,
-      comp_tx = t,
-      measure = "rate",
-      mean = plogis(m$TE.fixed),
-      lower = plogis(m$lower.fixed),
-      upper = plogis(m$upper.fixed)
-    )
-    results[[2]] <- data.frame(
-      endpoint = label,
-      type = "univariate",
-      likelihood = "logit",
-      method = method,
-      effects = "random",
-      ref_tx = NA,
-      comp_tx = t,
-      measure = "rate",
-      mean = plogis(m$TE.random),
-      lower = plogis(m$lower.random),
-      upper = plogis(m$upper.random)
-    )
-  } else if(any(class(m) == "metabin")) {
-    results[[1]] <- data.frame(
-      endpoint = label,
-      type = "pairwise",
-      likelihood = "binomial",
-      method = method,
-      effects = "fixed",
-      ref_tx = reft,
-      comp_tx = t,
-      measure = "rd",
-      mean = m$TE.fixed,
-      lower = m$lower.fixed,
-      upper = m$upper.fixed
-    )
-    results[[2]] <- data.frame(
-      endpoint = label,
-      type = "pairwise",
-      likelihood = "binomial",
-      method = method,
-      effects = "random",
-      ref_tx = reft,
-      comp_tx = t,
-      measure = "rd",
-      mean = m$TE.random,
-      lower = m$lower.random,
-      upper = m$upper.random
-    )
-  } else if (any(class(m) == "metacont")) {
-    results[[1]] <- data.frame(
-      endpoint = label,
-      type = "pairwise",
-      likelihood = "normal",
-      method = method,
-      effects = "fixed",
-      ref_tx = reft,
-      comp_tx = t,
-      measure = "diff_cfb",
-      mean = m$TE.fixed,
-      lower = m$lower.fixed,
-      upper = m$upper.fixed
-    )
-    results[[2]] <- data.frame(
-      endpoint = label,
-      type = "pairwise",
-      likelihood = "normal",
-      method = method,
-      effects = "random",
-      ref_tx = reft,
-      comp_tx = t,
-      measure = "diff_cfb",
-      mean = m$TE.random,
-      lower = m$lower.random,
-      upper = m$upper.random
-    )
-  } else if (any(class(m) == "metagen")) {
-    results[[1]] <- data.frame(
-      endpoint = label,
-      type = "univariate",
-      likelihood = "normal",
-      method = method,
-      effects = "fixed",
-      ref_tx = NA,
-      comp_tx = t,
-      measure = "cfb",
-      mean = m$TE.fixed,
-      lower = m$lower.fixed,
-      upper = m$upper.fixed
-    )
-    results[[2]] <- data.frame(
-      endpoint = label,
-      type = "univariate",
-      likelihood = "normal",
-      method = method,
-      effects = "random",
-      ref_tx = NA,
-      comp_tx = t,
-      measure = "cfb",
-      mean = m$TE.random,
-      lower = m$lower.random,
-      upper = m$upper.random
-    )
-  }
+  } else {
   
+    if (any(class(m) == "stan_nma")) {
+      dic <- dic(m)$dic
+      
+      if(m$likelihood == "ordered") {
+      
+        # Generate MCMC traces for response rates
+        rates <- predict(
+            m, type = "response",
+            baseline = base_dist,
+            baseline_type = "response",
+            summary = FALSE
+          )$sims |> 
+          posterior::as_draws_df() |>
+          # Convert to long format
+          pivot_longer(!starts_with("."), names_to = "param", values_to = "trace") |>
+          # Extract drug name
+          mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=,)"),
+                 endpoint = str_extract(param, pattern = "(?<=\\, ).*.(?=])")) |> 
+          suppressWarnings()
+        
+        # Summarise response rates for each treatment
+        results[[1]] <- summarise(
+          .by = c(drug, endpoint),
+          rates,
+          mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)
+        ) |> 
+          mutate(
+            type = "network",
+            likelihood = "multinomial",
+            method = method,
+            effects = m$trt_effects,
+            comp_tx = drug,
+            ref_tx = NA,
+            measure = "rate",
+            dic = dic
+          ) |> 
+          select(-drug)
+        
+        # Summarise risk differences for each comparison
+        for (i in 1:nrow(comparisons)) {
+          if (!all(comparisons[i,] %in% rates$drug)) next
+          pairwise <- rates |> 
+            select(-param) |> 
+            filter(drug %in% comparisons[i,]) |> 
+            pivot_wider(names_from = drug, values_from = trace)
+          pairwise$rd <- pairwise[[comparisons[i,1]]] - pairwise[[comparisons[i,2]]]
+          results[[i + 1]] <- summarise(
+            .by = "endpoint",
+            pairwise,
+            mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
+          ) |> mutate(
+            type = "network",
+            likelihood = "multinomial",
+            method = method,
+            effects = m$trt_effects,
+            ref_tx = comparisons[i,2],
+            comp_tx = comparisons[i,1],
+            measure = "rd",
+            dic = dic
+          )
+        }
+      
+      } else if(m$likelihood == "normal") {
+        
+        # Generate MCMC traces for response rates
+        rates <- predict(
+          m, type = "response",
+          baseline = base_dist,
+          summary = FALSE,
+          baseline_type = "response"
+        )$sims |> 
+          posterior::as_draws_df() |>
+          # Convert to long format
+          pivot_longer(!starts_with("."), names_to = "param", values_to = "trace") |>
+          # Extract drug name
+          mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=])")) |> 
+          suppressWarnings()
+        
+        # Summarise response rates for each treatment
+        results[[1]] <- summarise(
+          .by = drug,
+          rates,
+          mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)
+        ) |> 
+          mutate(
+            type = "network",
+            likelihood = "normal",
+            method = method,
+            endpoint = label,
+            effects = m$trt_effects,
+            ref_tx = NA,
+            comp_tx = drug,
+            measure = "cfb", # Change from baseline
+            dic = dic
+          ) |> 
+          select(-drug)
+        
+        # Summarise risk differences for each comparison
+        for (i in 1:nrow(comparisons)) {
+          if (!all(comparisons[i,] %in% rates$drug)) next
+          pairwise <- rates |> 
+            select(-param) |> 
+            filter(drug %in% comparisons[i,]) |> 
+            pivot_wider(names_from = drug, values_from = trace)
+          pairwise$rd <- pairwise[[comparisons[i,1]]] - pairwise[[comparisons[i,2]]]
+          results[[i + 1]] <- summarise(
+            pairwise,
+            mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
+          ) |> mutate(
+            type = "network",
+            likelihood = "normal",
+            method = method,
+            endpoint = label,
+            effects = m$trt_effects,
+            ref_tx = comparisons[i,2],
+            comp_tx = comparisons[i,1],
+            measure = "diff_cfb",
+            dic = dic
+          )
+        }
+      } else if(m$likelihood == "binomial") {
+        
+        # Generate MCMC trace for response rates
+        rates <- predict(
+          m, type = "response",
+          baseline = base_dist,
+          summary = FALSE,
+          baseline_type = "response"
+        )$sims |> 
+          posterior::as_draws_df() |>
+          # Convert to long format
+          pivot_longer(!starts_with("."), names_to = "param", values_to = "trace") |>
+          # Extract drug name
+          mutate(drug = str_extract(param, pattern = "(?<=\\[).*.(?=])")) |> 
+          suppressWarnings()
+        
+        # Summarise response rates for each treatment
+        results[[1]] <- summarise(
+          .by = drug,
+          rates,
+          mean = mean(trace), lower = quantile(trace, 0.025), upper = quantile(trace, 0.975)
+        ) |> 
+          mutate(
+            type = "network",
+            likelihood = "binomial",
+            method = method,
+            endpoint = label,
+            effects = m$trt_effects,
+            comp_tx = drug,
+            ref_tx = NA,
+            measure = "rate",
+            dic = dic
+          ) |> 
+          select(-drug)
+        
+        # Summarise risk differences for each comparison
+        for (i in 1:nrow(comparisons)) {
+          if (!all(comparisons[i,] %in% rates$drug)) next
+          pairwise <- rates |> 
+            select(-param) |> 
+            filter(drug %in% comparisons[i,]) |> 
+            pivot_wider(names_from = drug, values_from = trace)
+          pairwise$rd <- pairwise[[comparisons[i,1]]] - pairwise[[comparisons[i,2]]]
+          results[[i + 1]] <- summarise(
+            pairwise,
+            mean = mean(rd), lower = quantile(rd, 0.025), upper = quantile(rd, 0.975)
+          ) |> mutate(
+            type = "network",
+            likelihood = "binomial",
+            method = method,
+            endpoint = label,
+            effects = m$trt_effects,
+            ref_tx = comparisons[i,2],
+            comp_tx = comparisons[i,1],
+            measure = "rd",
+            dic = dic
+          )
+        }
+      }
+      
+    # Process pairwise or univariate meta-analysis results
+    } else if(any(class(m) == "metaprop")) {
+      results[[1]] <- data.frame(
+        endpoint = label,
+        type = "univariate",
+        likelihood = "logit",
+        method = method,
+        effects = "fixed",
+        ref_tx = NA,
+        comp_tx = t,
+        measure = "rate",
+        mean = plogis(m$TE.fixed),
+        lower = plogis(m$lower.fixed),
+        upper = plogis(m$upper.fixed)
+      )
+      results[[2]] <- data.frame(
+        endpoint = label,
+        type = "univariate",
+        likelihood = "logit",
+        method = method,
+        effects = "random",
+        ref_tx = NA,
+        comp_tx = t,
+        measure = "rate",
+        mean = plogis(m$TE.random),
+        lower = plogis(m$lower.random),
+        upper = plogis(m$upper.random)
+      )
+    } else if(any(class(m) == "metabin")) {
+      results[[1]] <- data.frame(
+        endpoint = label,
+        type = "pairwise",
+        likelihood = "binomial",
+        method = method,
+        effects = "fixed",
+        ref_tx = reft,
+        comp_tx = t,
+        measure = "rd",
+        mean = m$TE.fixed,
+        lower = m$lower.fixed,
+        upper = m$upper.fixed
+      )
+      results[[2]] <- data.frame(
+        endpoint = label,
+        type = "pairwise",
+        likelihood = "binomial",
+        method = method,
+        effects = "random",
+        ref_tx = reft,
+        comp_tx = t,
+        measure = "rd",
+        mean = m$TE.random,
+        lower = m$lower.random,
+        upper = m$upper.random
+      )
+    } else if (any(class(m) == "metacont")) {
+      results[[1]] <- data.frame(
+        endpoint = label,
+        type = "pairwise",
+        likelihood = "normal",
+        method = method,
+        effects = "fixed",
+        ref_tx = reft,
+        comp_tx = t,
+        measure = "diff_cfb",
+        mean = m$TE.fixed,
+        lower = m$lower.fixed,
+        upper = m$upper.fixed
+      )
+      results[[2]] <- data.frame(
+        endpoint = label,
+        type = "pairwise",
+        likelihood = "normal",
+        method = method,
+        effects = "random",
+        ref_tx = reft,
+        comp_tx = t,
+        measure = "diff_cfb",
+        mean = m$TE.random,
+        lower = m$lower.random,
+        upper = m$upper.random
+      )
+    } else if (any(class(m) == "metagen")) {
+      results[[1]] <- data.frame(
+        endpoint = label,
+        type = "univariate",
+        likelihood = "normal",
+        method = method,
+        effects = "fixed",
+        ref_tx = NA,
+        comp_tx = t,
+        measure = "cfb",
+        mean = m$TE.fixed,
+        lower = m$lower.fixed,
+        upper = m$upper.fixed
+      )
+      results[[2]] <- data.frame(
+        endpoint = label,
+        type = "univariate",
+        likelihood = "normal",
+        method = method,
+        effects = "random",
+        ref_tx = NA,
+        comp_tx = t,
+        measure = "cfb",
+        mean = m$TE.random,
+        lower = m$lower.random,
+        upper = m$upper.random
+      )
+    }
+  }
   bind_rows(results)
+}
+
+process_jags <- function(mod) {
+  drug_lookup <- data.frame(
+    drug = c(
+      "Placebo", "Acitretin", "Adalimumab", "Apremilast", "Bimekizumab",
+      "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
+      "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
+      "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
+      # "Phototherapy",
+      "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
+      "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
+    ),
+    index = paste0("d[", seq(1:length(drug_order)), "]")
+  )
+  
+  list(
+    summary = mod$BUGSoutput$summary |> 
+      as_tibble(rownames = "param") |> 
+      left_join(drug_lookup, by = c("param" = "index")) |> 
+      relocate(drug, .after = param) |> 
+      filter(!str_detect(param, "prob")),
+    trace = posterior::as_draws_df(mod$BUGSoutput$sims.array),
+    totresdev = mod$BUGSoutput$mean$totresdev,
+    pV = mod$BUGSoutput$pV,
+    DIC = as.numeric(mod$BUGSoutput$mean$totresdev + mod$BUGSoutput$pV)
+  )
 }
 
 # Helper function to produce a beta multinma::distr() object to use as a 
@@ -327,4 +423,6 @@ beta_dist_metaprop <- function(mod, effects) {
   
   return(distr(qbeta, alpha, beta))
 }
+
+
 
