@@ -6,12 +6,16 @@ library(stringr)
 library(multinma)
 library(meta)
 options(mc.cores = parallel::detectCores())
+load("R/meta-analyse/meta-analysis.RData")
 source("R/meta-analyse/ma-utils.R")
+source("R/meta-analyse/wide_format.R")
+source("R/meta-analyse/pasi-jags-nma.R")
 lookup <- read.csv("R/meta-analyse/trt_class.csv")
+con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+
 
 # Extract data =================================================================
 
-con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 dbListTables(con)
 
 pasi <- dbReadTable(con, "v_pasi")
@@ -28,12 +32,15 @@ data <- pasi |>
 drugs <- unique(data$drug)
 comparisons <- as.data.frame(t(combn(drugs, 2)))
 results <- list()
-# load("R/meta-analyse/meta-analysis.RData")
 niter <- 2000
 
 # Network meta-analyses ========================================================
 
 ## PASI Response ---------------------------------------------------------------
+
+# JAGS
+
+
 
 pasi_ref <- metaprop(
   event = pasi50,
@@ -44,6 +51,29 @@ pasi_ref <- metaprop(
   method.incr = "all",
   incr = 0.5
 )
+
+jags_models <- list(
+  fe_fez_u = pso_jags(pasi_jags, filename = "JAGS/fe_fez_u.jags", effects = "fixed", cutpoints = "fixed", baseline = "unadjusted"),
+  re_fez_u = pso_jags(pasi_jags, filename = "JAGS/re_fez_u.jags", effects = "random", cutpoints = "fixed", baseline = "unadjusted"),
+  fe_rez_u = pso_jags(pasi_jags, filename = "JAGS/fe_rez_u.jags", effects = "fixed", cutpoints = "random", baseline = "unadjusted"),
+  re_rez_u = pso_jags(pasi_jags, filename = "JAGS/re_rez_u.jags", effects = "random", cutpoints = "random", baseline = "unadjusted"),
+  fe_fez_a = pso_jags(pasi_jags, filename = "JAGS/fe_fez_a.jags", effects = "fixed", cutpoints = "fixed", baseline = "adjusted"),
+  re_fez_a = pso_jags(pasi_jags, filename = "JAGS/re_fez_a.jags", effects = "random", cutpoints = "fixed", baseline = "adjusted"),
+  fe_rez_a = pso_jags(pasi_jags, filename = "JAGS/fe_rez_a.jags", effects = "fixed", cutpoints = "random", baseline = "adjusted"),
+  re_rez_a = pso_jags(pasi_jags, filename = "JAGS/re_rez_a.jags", effects = "random", cutpoints = "random", baseline = "adjusted")
+)
+
+m <- pso_jags(pasi_jags, filename = "JAGS/fe_fez_u.jags", effects = "fixed", cutpoints = "fixed", baseline = "unadjusted")
+process_jags(m)$summary |> print(n=100)
+
+results$fe_fez_u <- nma_results(jags_models$fe_fez_u, effects = "fixed", method = "jags")
+results$re_fez_u <- nma_results(jags_models$re_fez_u, effects = "random", method = "jags")
+results$fe_rez_u <- nma_results(jags_models$fe_rez_u, effects = "fixed", method = "random cutpoints")
+results$re_rez_u <- nma_results(jags_models$re_rez_u, effects = "random", method = "random cutpoints")
+results$fe_fez_a <- nma_results(jags_models$fe_fez_a, effects = "fixed", method = "baseline adjusted (jags)")
+results$re_fez_a <- nma_results(jags_models$re_fez_a, effects = "random", method = "baseline adjusted (jags)")
+results$fe_rez_a <- nma_results(jags_models$fe_rez_a, effects = "fixed", method = "random cutpoints, baseline adjusted")
+results$re_rez_a <- nma_results(jags_models$re_rez_a, effects = "random", method = "random cutpoints, baseline adjusted")
 
 pasi_net <- set_agd_arm(
   filter(data, !if_all(pasi50:pasi100, \(x) is.na(x))),
