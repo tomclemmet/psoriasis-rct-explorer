@@ -1,7 +1,4 @@
-rm(list = ls())
 library(R2jags)
-source("R/meta-analyse/wide_format.R")
-
 
 pso_jags <- function(
     data, 
@@ -24,7 +21,7 @@ model {
   for(i in 1:ns){                                                               # LOOP THROUGH STUDIES
     w[i, 1] <- 0                                                                # adjustment for multi-arm trials is zero for control arm
     delta[i, 1] <- 0                                                            # treatment effect is zero for control arm
-    mu[i] ~ dnorm(0, .1)                                                     # vague priors for all trial baselines
+    mu[i] ~ dnorm(0, .0001)                                                     # vague priors for all trial baselines
     for (k in 1:na[i]) {                                                        # LOOP THROUGH ARMS
       p[i, k, 1] <- 1                                                           # Pr(PASI >0)
       for (j in 1:(nc[i] - 1)) {                                                # LOOP THROUGH CATEGORIES
@@ -103,18 +100,18 @@ model {
   finish <- "
   totresdev <- sum(resdev[])                                                    # Total Residual Deviance
   d[1] <- 0                                                                     # treatment effect is zero for reference treatment
-  for (k in 2:nt){ d[k] ~ dnorm(0,.1) }                                      # vague priors for treatment effects
-  beta ~ dnorm(0,.1)
+  for (k in 2:nt){ d[k] ~ dnorm(0,.0001) }                                      # vague priors for treatment effects
+  beta ~ dnorm(0,.0001)
   sd ~ dunif(0, 5)                                                               # vague prior for between-trial SD
   sdz ~ dunif(0, 5)
   tau <- pow(sd,-2)   
   tauz <- pow(sdz, -2) # between-trial precision = (1 / between-trial variance)
   mubar <- mean(mu[])
   
-  A ~ dnorm(1.097,123)
+  A ~ dbeta(147,671)
   # calculate prob of achieving PASI 50/75/90/100 on treatment k
   for (k in 1:nt) {
-    for (j in 1:(Cmax - 1)) { T[j,k] <- 1 - phi(A + d[k] + z[j]) }
+    for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + z[j]) }
   } 
   # *** PROGRAM ENDS 
 }"
@@ -134,7 +131,7 @@ model {
   writeLines(model_code, filename)
   
   params <- c(
-    "d", "z", "T",
+    "d", "z", "prob",
     if (effects == "random") "sd" else NULL,
     if (cutpoints == "random") "sdz" else NULL,
     if (baseline == "adjusted") c("beta", "mubar") else NULL,
@@ -148,61 +145,42 @@ model {
   
   jags(
     data = data, parameters.to.save = params, inits = NULL, 
-    model.file = filename, n.chains = 2, n.iter = 1000, n.burnin = 500, n.thin = 1
+    model.file = filename, n.chains = 2, n.iter = 5000, n.burnin = 1000, n.thin = 1
   )
 }
 
-process_jags <- function(mod) {
-  drug_lookup <- data.frame(
-    drug = c(
-      "Placebo", "Acitretin", "Adalimumab", "Apremilast", "Bimekizumab",
-      "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
-      "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
-      "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
-      "Phototherapy", "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
-      "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
-    ),
-    index = paste0("d[", seq(1:length(drug_order)), "]")
-  )
-  
-  list(
-    summary = mod$BUGSoutput$summary |> 
-      as_tibble(rownames = "param") |> 
-      left_join(drug_lookup, by = c("param" = "index")) |> 
-      relocate(drug, .after = param),
-    trace = posterior::as_draws_df(mod$BUGSoutput$sims.array),
-    totresdev = mod$BUGSoutput$mean$totresdev,
-    pV = mod$BUGSoutput$pV,
-    DIC = mod$BUGSoutput$mean$totresdev + mod$BUGSoutput$pV
-  )
-}
 
-models <- list(
-  fe_fez_u = pso_jags(pasi_jags, filename = "JAGS/fe_fez_u.jags", effects = "fixed", cutpoints = "fixed", baseline = "unadjusted"),
-  re_fez_u = pso_jags(pasi_jags, filename = "JAGS/re_fez_u.jags", effects = "random", cutpoints = "fixed", baseline = "unadjusted"),
-  fe_rez_u = pso_jags(pasi_jags, filename = "JAGS/fe_rez_u.jags", effects = "fixed", cutpoints = "random", baseline = "unadjusted"),
-  re_rez_u = pso_jags(pasi_jags, filename = "JAGS/re_rez_u.jags", effects = "random", cutpoints = "random", baseline = "unadjusted"),
-  fe_fez_a = pso_jags(pasi_jags, filename = "JAGS/fe_fez_a.jags", effects = "fixed", cutpoints = "fixed", baseline = "adjusted"),
-  re_fez_a = pso_jags(pasi_jags, filename = "JAGS/re_fez_a.jags", effects = "random", cutpoints = "fixed", baseline = "adjusted"),
-  fe_rez_a = pso_jags(pasi_jags, filename = "JAGS/fe_rez_a.jags", effects = "fixed", cutpoints = "random", baseline = "adjusted"),
-  re_rez_a = pso_jags(pasi_jags, filename = "JAGS/re_rez_a.jags", effects = "random", cutpoints = "random", baseline = "adjusted")
-)
 
-models |> 
-  lapply(\(x) {process_jags(x)$summary}) |> 
-  bind_rows(.id = "id") |> 
-  filter(!is.na(drug), ! drug %in% c("Phototherapy", "Mirikizumab")) |> 
-  mutate(drug = forcats::fct_reorder(drug, mean, .fun = base::mean)) |>
-  ggplot(aes(x = mean, y = drug, colour = id)) +
-  geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`), 
-                  position = position_dodge(width = 0.7), shape = 15, size = 0.1) +
-  scale_colour_viridis_d(option = "turbo") +
-  theme_minimal() +
-  theme(legend.position = "top")
-ggsave("forest.png", height = 20, width = 7)
 
-summaries <- lapply(models, process_jags)
-
-lapply(summaries, \(x) {x$DIC})
-
-traceplot(models$fe_fez_u)
+# models <- list(
+#   fe_fez_u = pso_jags(pasi_jags, filename = "JAGS/fe_fez_u.jags", effects = "fixed", cutpoints = "fixed", baseline = "unadjusted"),
+#   re_fez_u = pso_jags(pasi_jags, filename = "JAGS/re_fez_u.jags", effects = "random", cutpoints = "fixed", baseline = "unadjusted"),
+#   fe_rez_u = pso_jags(pasi_jags, filename = "JAGS/fe_rez_u.jags", effects = "fixed", cutpoints = "random", baseline = "unadjusted"),
+#   re_rez_u = pso_jags(pasi_jags, filename = "JAGS/re_rez_u.jags", effects = "random", cutpoints = "random", baseline = "unadjusted"),
+#   fe_fez_a = pso_jags(pasi_jags, filename = "JAGS/fe_fez_a.jags", effects = "fixed", cutpoints = "fixed", baseline = "adjusted"),
+#   re_fez_a = pso_jags(pasi_jags, filename = "JAGS/re_fez_a.jags", effects = "random", cutpoints = "fixed", baseline = "adjusted"),
+#   fe_rez_a = pso_jags(pasi_jags, filename = "JAGS/fe_rez_a.jags", effects = "fixed", cutpoints = "random", baseline = "adjusted"),
+#   re_rez_a = pso_jags(pasi_jags, filename = "JAGS/re_rez_a.jags", effects = "random", cutpoints = "random", baseline = "adjusted")
+# )
+# 
+# nma_results(models$fe_fez_u, effects = "fixed", method = "standard") |> View()
+# process_jags(models$fe_fez_a)
+# 
+# models |> 
+#   lapply(\(x) {process_jags(x)$summary}) |> 
+#   bind_rows(.id = "id") |> 
+#   filter(!is.na(drug), ! drug %in% c("Phototherapy", "Mirikizumab")) |> 
+#   mutate(drug = forcats::fct_reorder(drug, mean, .fun = base::mean)) |>
+#   ggplot(aes(x = mean, y = drug, colour = id)) +
+#   geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`), 
+#                   position = position_dodge(width = 0.7), shape = 15, size = 0.1) +
+#   scale_colour_viridis_d(option = "turbo") +
+#   theme_minimal() +
+#   theme(legend.position = "top")
+# ggsave("output/forest.png", height = 20, width = 7)
+# 
+# summaries <- lapply(models, process_jags)
+# 
+# lapply(summaries, \(x) {x$DIC})
+# 
+# traceplot(models$fe_fez_u)
