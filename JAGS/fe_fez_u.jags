@@ -12,7 +12,7 @@ model {
         q.raw[i, k, j] <- 1 - (p[i, k, C[i, j + 1]] /                           # conditional probabilities
         max(p[i, k, C[i, j]], 1e-10)) 
         q[i, k, j] <- max(1e-7, min(1 - 1e-7, q.raw[i, k, j]))
-        theta[i, k, j] <- mu[i] - delta[i, k] + z[j]
+        theta[i, k, j] <- mu[i] - delta[i, k] + z[C[i, j + 1] - 1]
         rhat[i, k, j] <- q[i, k, j] * n[i, k, j]                                  # predicted number events
         dv[i, k, j] <- 2 * (                                                    # Deviance contribution of each category  
           r[i, k, j] * 
@@ -52,7 +52,8 @@ model {
   tauz <- pow(sdz, -2) # between-trial precision = (1 / between-trial variance)
   mubar <- mean(mu[])
   
-  A ~ dbeta(147,671)
+  
+  A ~ dnorm(1.097,123) 
   # calculate prob of achieving PASI 50/75/90/100 on treatment k
   for (k in 1:nt) {
     for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + z[j]) }
