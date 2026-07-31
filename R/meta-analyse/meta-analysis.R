@@ -63,8 +63,20 @@ jags_models <- list(
   re_rez_a = pso_jags(pasi_jags, filename = "JAGS/re_rez_a.jags", effects = "random", cutpoints = "random", baseline = "adjusted")
 )
 
-m <- pso_jags(pasi_jags, filename = "JAGS/fe_fez_u.jags", effects = "fixed", cutpoints = "fixed", baseline = "unadjusted")
-process_jags(m)$summary |> print(n=100)
+lapply(jags_models, \(x) {process_jags(x)$DIC})
+
+jags_models |>
+  lapply(\(x) {process_jags(x)$summary}) |>
+  bind_rows(.id = "id") |>
+  filter(!is.na(drug), ! drug %in% c("Phototherapy", "Mirikizumab")) |>
+  mutate(drug = forcats::fct_reorder(drug, mean, .fun = base::mean)) |>
+  ggplot(aes(x = mean, y = drug, colour = id)) +
+  geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`),
+                  position = position_dodge(width = 0.7), shape = 15, size = 0.1) +
+  scale_colour_viridis_d(option = "turbo") +
+  theme_minimal() +
+  theme(legend.position = "top")
+ggsave("output/forest.png", height = 20, width = 7)
 
 results$fe_fez_u <- nma_results(jags_models$fe_fez_u, effects = "fixed", method = "jags")
 results$re_fez_u <- nma_results(jags_models$re_fez_u, effects = "random", method = "jags")
