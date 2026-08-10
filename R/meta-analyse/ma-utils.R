@@ -14,7 +14,7 @@ nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, labe
     )
   thresholds <- c("pasi50", "pasi75", "pasi90", "pasi100")
   
-  if (class(m) == "rjags") {
+  if (any(class(m) == "rjags")) {
     ##!!!!! CURRENTLY IGNORES BASE DIST
     dic <- process_jags(m)$DIC
     
@@ -385,12 +385,49 @@ process_jags <- function(mod) {
       as_tibble(rownames = "param") |> 
       left_join(drug_lookup, by = c("param" = "index")) |> 
       relocate(drug, .after = param) |> 
-      filter(!str_detect(param, "prob")),
+      filter(!str_detect(param, "prob")) |> 
+      arrange(param %in% c("deviance", "totresdev")) |> 
+      as.data.frame(),
     trace = posterior::as_draws_df(mod$BUGSoutput$sims.array),
     totresdev = mod$BUGSoutput$mean$totresdev,
     pV = mod$BUGSoutput$pV,
     DIC = as.numeric(mod$BUGSoutput$mean$totresdev + mod$BUGSoutput$pV)
   )
+}
+
+# Function to compare model outputs given a list of jags models
+compare_jags <- function(mods) {
+  
+  n_params <- c()
+  
+  for (i in 1:length(mods)) {
+    n_params[i] <- nrow(process_jags(mods[[i]])$summary)
+  }
+  
+  tab <- data.frame(
+    param = process_jags(mods[[which.max(n_params)]])$summary$param,
+    drug = process_jags(mods[[which.max(n_params)]])$summary$drug
+  )
+  
+  for (i in 1:length(mods)) {
+    coefs <- process_jags(mods[[i]])$summary |> 
+      mutate(meansd = paste0(round(mean, 3), " (", round(sd, 3), ")")) |> 
+      select(param, meansd)
+      
+    
+    tab <- tab |> left_join(coefs, by = "param")
+  }
+  
+  dic <- lapply(mods, \(x) {as.character(round(process_jags(x)$DIC, 3))}) |> 
+    as.data.frame() |> 
+    mutate(param = "dic")
+  pV <- lapply(mods, \(x) {as.character(round(process_jags(x)$pV, 3))}) |> 
+    as.data.frame() |> 
+    mutate(param = "pV")
+  
+  tab |> 
+    rename_with(~ names(mods), .cols = starts_with("meansd")) |>
+    bind_rows(dic, pV)
 }
 
 # Helper function to produce a beta multinma::distr() object to use as a 
