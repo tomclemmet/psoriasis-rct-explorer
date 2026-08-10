@@ -27,8 +27,8 @@ model {
       for (j in 1:(nc[i] - 1)) {                                                # LOOP THROUGH CATEGORIES
         r[i, k, j] ~ dbin(q[i, k, j], n[i, k, j])                               # binomial likelihood
         q.raw[i, k, j] <- 1 - (p[i, k, C[i, j + 1]] /                           # conditional probabilities
-        max(p[i, k, C[i, j]], 1e-10)) 
-        q[i, k, j] <- max(1e-7, min(1 - 1e-7, q.raw[i, k, j]))
+        max(p[i, k, C[i, j]], 1e-14)) 
+        q[i, k, j] <- max(1e-12, min(1 - 1e-12, q.raw[i, k, j]))
         "
   theta <- "theta[i, k, j] <- mu[i] - delta[i, k] + "
   
@@ -53,10 +53,10 @@ model {
       for (j in 2:nc[i]) {                                                      # LOOP THROUGH CATEGORIES
         p[i, k, C[i, j]] <- 1 - phi.adj[i, k, j]                                # link function
         # adjust link function phi(x) for extreme values that can give numerical errors
-        # when x< -5, phi(x)=0, when x> 5, phi(x)=1
-        phi.adj[i, k, j] <- step(5 + theta[i, k, j - 1]) * 
-          (step(theta[i, k, j - 1] - 5) +
-             step(5 - theta[i, k, j - 1]) * phi(theta[i, k, j - 1]) )
+        # when x< -8, phi(x)=0, when x> 8, phi(x)=1
+        phi.adj[i, k, j] <- step(8 + theta[i, k, j - 1]) * 
+          (step(theta[i, k, j - 1] - 8) +
+             step(8 - theta[i, k, j - 1]) * phi(theta[i, k, j - 1]))
       }
     }"
   
@@ -156,7 +156,7 @@ probs_rez <- "
   
   jags(
     data = data, parameters.to.save = params, inits = NULL, 
-    model.file = filename, n.chains = 2, n.iter = 2000, n.burnin = 1000, n.thin = 1
+    model.file = filename, n.chains = 2, n.iter = 4000, n.burnin = 2000, n.thin = 1
   )
 }
 
