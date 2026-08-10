@@ -31,11 +31,10 @@ nth_non_na <- function(n, ...) {
 pasi_wide <- pasi |> 
   select(trial, ref_id, arm_no, drug, n:pasi100) |> 
   filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
-  group_by(trial, ref_id, drug) |> 
-  summarise(n = sum(n), pasi50 = sum(pasi50), pasi75 = sum(pasi75), 
-            pasi90 = sum(pasi90), pasi100 = sum(pasi100), .groups = "drop") |> 
+  # group_by(trial, ref_id, drug) |> 
+  # summarise(n = sum(n), pasi50 = sum(pasi50), pasi75 = sum(pasi75), 
+  #           pasi90 = sum(pasi90), pasi100 = sum(pasi100), .groups = "drop") |> 
   group_by(ref_id) |> 
-  filter(n() > 1) |> 
   mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
   ungroup() |> 
   mutate(t = as.numeric(factor(drug, levels = drug_order)), .after = drug) |>
@@ -61,9 +60,9 @@ pasi_wide <- pasi |>
     nc = sum(!is.na(c(C1, C2, C3, C4, C5)))
   ) |> ungroup() |> relocate(C1:nc, .before = t) |> 
   select(-c(drug, trial, n, pasi50:pasi100)) |> 
-  mutate(.by = ref_id, arm_no = min_rank(t)) |> arrange(ref_id, t) |> 
+  mutate(.by = ref_id, na = n(), arm_no = row_number(t)) |> arrange(ref_id, t) |> 
   pivot_wider(names_from = arm_no, values_from = t:n5, names_glue = "a{arm_no}{.value}") |> 
-  mutate(na = if_else(is.na(a3t), 2, 3), .before = nc)
+  relocate(na, .before = nc)
 
 pasi_jags <- list(
   ns = nrow(pasi_wide),
@@ -72,21 +71,24 @@ pasi_jags <- list(
   mmu = 0.6,
   na = pasi_wide$na,
   nc = pasi_wide$nc,
-  t = select(pasi_wide, a1t:a3t) |> as.matrix(),
+  t = select(pasi_wide, a1t:a5t) |> as.matrix(),
   C = select(pasi_wide, C1:C5) |> as.matrix(),
-  r = list(as.matrix(select(pasi_wide, a1r1:a3r1)),
-           as.matrix(select(pasi_wide, a1r2:a3r2)),
-           as.matrix(select(pasi_wide, a1r3:a3r3)),
-           as.matrix(select(pasi_wide, a1r4:a3r4)),
-           as.matrix(select(pasi_wide, a1r5:a3r5))) |> 
+  r = list(as.matrix(select(pasi_wide, a1r1:a5r1)),
+           as.matrix(select(pasi_wide, a1r2:a5r2)),
+           as.matrix(select(pasi_wide, a1r3:a5r3)),
+           as.matrix(select(pasi_wide, a1r4:a5r4)),
+           as.matrix(select(pasi_wide, a1r5:a5r5))) |> 
     simplify2array(),
-  n = list(as.matrix(select(pasi_wide, a1n1:a3n1)),
-           as.matrix(select(pasi_wide, a1n2:a3n2)),
-           as.matrix(select(pasi_wide, a1n3:a3n3)),
-           as.matrix(select(pasi_wide, a1n4:a3n4)),
-           as.matrix(select(pasi_wide, a1n5:a3n5))) |> 
+  n = list(as.matrix(select(pasi_wide, a1n1:a5n1)),
+           as.matrix(select(pasi_wide, a1n2:a5n2)),
+           as.matrix(select(pasi_wide, a1n3:a5n3)),
+           as.matrix(select(pasi_wide, a1n4:a5n4)),
+           as.matrix(select(pasi_wide, a1n5:a5n5))) |> 
     simplify2array()
 )
 
 
-
+# source("R/meta-analyse/pasi-jags-nma.R")
+# source("R/meta-analyse/ma-utils.R")
+# m <- pso_jags(pasi_jags, filename = "JAGS/re_fez_u.jags", effects = "random", cutpoints = "fixed", baseline = "unadjusted") 
+# process_jags(m)$summary
