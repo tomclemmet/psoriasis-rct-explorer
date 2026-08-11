@@ -27,7 +27,11 @@ forest_ticks <- function(scale, xmin, xmax) {
             else                   0.25
     seq(0, xmax, by = step)
   } else {
-    pretty(c(xmin, xmax), n = 5)
+    # pretty() is allowed to extend past the requested range to land on round
+    # numbers (e.g. xmax = 1.03 -> a tick at 1.2) — filter those back out, or
+    # the tick mark/label gets drawn past the axis line's own endpoint.
+    t <- pretty(c(xmin, xmax), n = 5)
+    t[t >= xmin & t <= xmax]
   }
 }
 
@@ -83,19 +87,76 @@ forest_diamond_points <- function(xL, xC, xR, yC, hh) {
           xL, yC, xC, yC - hh, xR, yC, xC, yC + hh)
 }
 
+# Pooled diamonds are grouped under one heading per (type, <first
+# MA_AXIS_COLUMNS entry>) — e.g. "Multinomial network estimates" — with each
+# diamond below labelled by only the *remaining* axes + effects (e.g.
+# "Standard, FE" / "Class effects, RE"). This keeps on-chart text short even
+# as more axis values accumulate; the full detail still lives in the
+# tooltip. MA_AXIS_COLUMNS is defined in app.R (visible here since forest.R
+# is source()'d into app.R's environment) — MA_AXIS_COLUMNS[1] (likelihood
+# today) is the heading axis, the rest (method today) are row axes.
+cap1 <- function(s) { substr(s, 1, 1) <- toupper(substr(s, 1, 1)); s }
+
+# Heading text for a block of pooled diamonds sharing (type, heading_value).
+# `heading_value` is NA when that axis doesn't vary among this endpoint's
+# combinations, so the heading stays plain ("Network estimates") until
+# there's actually more than one value to disambiguate ("Multinomial network
+# estimates").
+pooled_group_heading <- function(type, heading_value) {
+  scope_lc <- switch(type, network = "network", pairwise = "pairwise",
+                     univariate = "pooled", tolower(as.character(type)))
+  prefix <- if (!is.null(heading_value) && !is.na(heading_value))
+    paste0(tolower(axis_display_label(heading_value)), " ") else ""
+  cap1(sprintf("%s%s estimates", prefix, scope_lc))
+}
+
+# CSS class + short row label + full tooltip header for one pooled diamond
+# within a pooled_group_heading() block. `row_axis_values` is a named list of
+# every MA_AXIS_COLUMNS entry except the heading axis (method today); an
+# entry is NA when that axis doesn't vary for this block, so the row label
+# stays as plain as possible ("FE" alone, or "Class effects, FE" once method
+# is also ambiguous). The tooltip header always spells out every axis in
+# full, regardless of what's collapsed into the heading on-chart.
+pooled_row_meta <- function(type, effects, heading_value, row_axis_values) {
+  eff_abbrev <- switch(effects, fixed = "FE", random = "RE",
+                       toupper(substr(as.character(effects), 1, 2)))
+  eff_word   <- switch(effects, fixed = "Fixed effects", random = "Random effects",
+                       tools::toTitleCase(as.character(effects)))
+
+  row_words <- unlist(lapply(row_axis_values, function(v) {
+    if (is.null(v) || !length(v) || is.na(v)) NULL else cap1(tolower(axis_display_label(v)))
+  }), use.names = FALSE)
+  label <- paste(c(row_words, eff_abbrev), collapse = ", ")
+
+  scope_lc <- switch(type, network = "network", pairwise = "pairwise",
+                     univariate = "pooled", tolower(as.character(type)))
+  axis_words <- unlist(lapply(c(list(heading_value), row_axis_values), function(v) {
+    if (is.null(v) || !length(v) || is.na(v)) NULL else tolower(axis_display_label(v))
+  }), use.names = FALSE)
+  phrase <- paste(c(axis_words, scope_lc, "estimate"), collapse = " ")
+
+  list(
+    klass  = if (identical(effects, "random")) "ma-pooled-re" else "ma-pooled-fe",
+    label  = label,
+    tt_hdr = sprintf("%s %s", eff_word, phrase)
+  )
+}
+
 forest_svg <- function(rows, pooled, scale = "rr", width = 880,
-                       axis_label = NULL, dir_left = NULL, dir_right = NULL) {
+                       axis_label = NULL, dir_left = NULL, dir_right = NULL,
+                       xlim = NULL) {
   esc <- function(x) htmltools::htmlEscape(x, attribute = FALSE)
   esc_attr <- function(x) htmltools::htmlEscape(x, attribute = TRUE)
   if (!nrow(rows) && (is.null(pooled) || !nrow(pooled))) {
     return(sprintf('<div class="ma-empty">No meta-analysable data for this comparison.</div>'))
   }
 
-  ROW_H        <- 22
-  HEADER_PAD   <- 8
-  POOLED_GAP   <- 14
-  POOLED_H     <- 22
-  AXIS_PAD     <- 28
+  ROW_H            <- 22
+  HEADER_PAD       <- 8
+  POOLED_GAP       <- 14
+  POOLED_H         <- 22
+  POOLED_HEADING_H <- 20
+  AXIS_PAD         <- 28
   AXIS_LABEL_H <- if (length(axis_label) || length(dir_left) || length(dir_right)) 50 else 0
   BOTTOM_PAD   <- 6
   LEFT_MARGIN  <- 220
@@ -106,15 +167,49 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   n_trials  <- nrow(rows)
   n_pooled  <- if (!is.null(pooled)) nrow(pooled) else 0L
 
+  # Sort pooled rows into heading-groups: by type (pairwise/univariate
+  # sections before network), then the heading axis (MA_AXIS_COLUMNS[1],
+  # likelihood today) alphabetically, then the remaining row axes (default
+  # value first, e.g. "standard" leads "class_effects"), then effects (fixed
+  # before random) — and tag which row starts a new heading. The heading axis
+  # sorts plain-alphabetically rather than default-first so network sections
+  # read "Binomial, Multinomial" — a fixed display convention, unlike the
+  # row/toggle axes which prefer MA_AXIS_DEFAULT.
+  ma_heading_col <- MA_AXIS_COLUMNS[1]
+  ma_row_cols    <- if (length(MA_AXIS_COLUMNS) > 1) MA_AXIS_COLUMNS[-1] else character(0)
+  n_pooled_groups <- 0L
+  pooled_group_start <- logical(0)
+  if (n_pooled) {
+    axis_sort_rank <- function(values, ordered_vals) {
+      ifelse(is.na(values), 0L, match(values, ordered_vals))
+    }
+    type_rank <- c(pairwise = 1L, univariate = 1L, network = 2L)
+    heading_ordered <- sort(unique(pooled[[ma_heading_col]][!is.na(pooled[[ma_heading_col]])]))
+    sort_keys <- list(
+      unname(type_rank[pooled$type]),
+      axis_sort_rank(pooled[[ma_heading_col]], heading_ordered)
+    )
+    for (rc in ma_row_cols) {
+      row_ordered <- order_axis_values(rc, pooled[[rc]][!is.na(pooled[[rc]])])
+      sort_keys[[length(sort_keys) + 1L]] <- axis_sort_rank(pooled[[rc]], row_ordered)
+    }
+    sort_keys[[length(sort_keys) + 1L]] <- match(pooled$effects, c("fixed", "random"))
+    pooled <- pooled[do.call(order, sort_keys), , drop = FALSE]
+
+    group_key <- paste(pooled$type, ifelse(is.na(pooled[[ma_heading_col]]), "", pooled[[ma_heading_col]]))
+    pooled_group_start <- c(TRUE, group_key[-1] != group_key[-length(group_key)])
+    n_pooled_groups <- sum(pooled_group_start)
+  }
+
   row_heights <- if (!is.null(rows$row_h))     rows$row_h     else rep(ROW_H, n_trials)
   gaps_above  <- if (!is.null(rows$gap_above)) rows$gap_above else rep(0L,    n_trials)
 
   trials_body_h <- sum(row_heights) + sum(gaps_above)
   body_h    <- trials_body_h +
-    (if (n_pooled) POOLED_GAP + n_pooled * POOLED_H else 0)
+    (if (n_pooled) POOLED_GAP + n_pooled_groups * POOLED_HEADING_H + n_pooled * POOLED_H else 0)
   height    <- HEADER_PAD + body_h + AXIS_PAD + AXIS_LABEL_H + BOTTOM_PAD
 
-  xlim  <- forest_xlimits(scale, rows, pooled)
+  xlim  <- xlim %||% forest_xlimits(scale, rows, pooled)
   xmin  <- xlim[1]; xmax <- xlim[2]
   xfn   <- forest_xscale(scale, xmin, xmax, PLOT_LEFT, PLOT_W)
   ticks <- forest_ticks(scale, xmin, xmax)
@@ -224,8 +319,26 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   }
 
   if (n_pooled) {
+    y_run <- HEADER_PAD + trials_body_h + POOLED_GAP
     for (i in seq_len(n_pooled)) {
-      yc <- HEADER_PAD + trials_body_h + POOLED_GAP + (i - 0.5) * POOLED_H
+      # Styling/label derived from the (type, effects, MA_AXIS_COLUMNS...)
+      # columns rather than a hardcoded per-combination lookup, so a pooled
+      # row for a new axis value (or a new `type`) renders sensibly with zero
+      # code changes here — see pooled_group_heading()/pooled_row_meta() above
+      # and pooled_diamonds() in app.R, which is the sole place `pooled` rows
+      # get built.
+      type_i    <- if (!is.null(pooled$type))    pooled$type[i]    else NA_character_
+      effects_i <- if (!is.null(pooled$effects)) pooled$effects[i] else NA_character_
+      heading_i <- if (!is.null(pooled[[ma_heading_col]])) pooled[[ma_heading_col]][i] else NA_character_
+
+      if (pooled_group_start[i]) {
+        y_run <- y_run + POOLED_HEADING_H
+        parts[length(parts) + 1L] <- sprintf(
+          '<text class="ma-pooled-heading" x="%g" y="%g">%s</text>',
+          LEFT_MARGIN - 10, y_run - POOLED_HEADING_H / 2 + 4,
+          esc(pooled_group_heading(type_i, heading_i)))
+      }
+      yc <- y_run + POOLED_H / 2
 
       xL_raw <- xfn(pooled$lo[i]); xR_raw <- xfn(pooled$hi[i])
       xE_raw <- xfn(pooled$est[i])
@@ -233,63 +346,15 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
       xR <- min(X_MAX_PX, if (is.finite(xR_raw)) xR_raw else X_MAX_PX)
       xE <- if (is.finite(xE_raw)) min(max(xE_raw, X_MIN_PX), X_MAX_PX)
             else (X_MIN_PX + X_MAX_PX) / 2
-      kind  <- pooled$kind[i]
-      klass <- switch(kind,
-        "FE"           = "ma-pooled-fe",
-        "RE"           = "ma-pooled-re",
-        "NMA-FE"       = "ma-pooled-fe",
-        "NMA-RE"       = "ma-pooled-re",
-        "Pool-FE"      = "ma-pooled-fe",
-        "Pool-RE"      = "ma-pooled-re",
-        "NMA-R-FE"     = "ma-pooled-fe",
-        "NMA-R-RE"     = "ma-pooled-re",
-        "Bin-NMA-FE"   = "ma-pooled-fe",
-        "Bin-NMA-RE"   = "ma-pooled-re",
-        "Mult-NMA-FE"  = "ma-pooled-fe",
-        "Mult-NMA-RE"  = "ma-pooled-re",
-        "Bin-NMA-R-FE"  = "ma-pooled-fe",
-        "Bin-NMA-R-RE"  = "ma-pooled-re",
-        "Mult-NMA-R-FE" = "ma-pooled-fe",
-        "Mult-NMA-R-RE" = "ma-pooled-re",
-        "ma-pooled-fe")
-      kind_lbl <- switch(kind,
-        "FE"            = "Pairwise estimate (FE)",
-        "RE"            = "Pairwise estimate (RE)",
-        "NMA-FE"        = "Network estimate (FE)",
-        "NMA-RE"        = "Network estimate (RE)",
-        "Pool-FE"       = "Pooled estimate (FE)",
-        "Pool-RE"       = "Pooled estimate (RE)",
-        "NMA-R-FE"      = "Network estimate (FE)",
-        "NMA-R-RE"      = "Network estimate (RE)",
-        "Bin-NMA-FE"    = "Binomial network estimate (FE)",
-        "Bin-NMA-RE"    = "Binomial network estimate (RE)",
-        "Mult-NMA-FE"   = "Multinomial network estimate (FE)",
-        "Mult-NMA-RE"   = "Multinomial network estimate (RE)",
-        "Bin-NMA-R-FE"  = "Binomial network estimate (FE)",
-        "Bin-NMA-R-RE"  = "Binomial network estimate (RE)",
-        "Mult-NMA-R-FE" = "Multinomial network estimate (FE)",
-        "Mult-NMA-R-RE" = "Multinomial network estimate (RE)",
-        kind)
+
+      row_axis_i <- setNames(lapply(ma_row_cols, function(col)
+        if (!is.null(pooled[[col]])) pooled[[col]][i] else NA_character_), ma_row_cols)
+      meta   <- pooled_row_meta(type_i, effects_i, heading_i, row_axis_i)
+      klass    <- meta$klass
+      kind_lbl <- meta$label
       pts    <- forest_diamond_points(xL, xE, xR, yc, 7)
       ci_str <- fmt_ci(pooled$est[i], pooled$lo[i], pooled$hi[i], ci_digits)
-      tt_hdr <- switch(kind,
-        "FE"            = "Fixed effects pairwise estimate",
-        "RE"            = "Random effects pairwise estimate",
-        "NMA-FE"        = "Fixed effects network estimate",
-        "NMA-RE"        = "Random effects network estimate",
-        "Pool-FE"       = "Fixed effects pooled estimate",
-        "Pool-RE"       = "Random effects pooled estimate",
-        "NMA-R-FE"      = "Fixed effects network estimate",
-        "NMA-R-RE"      = "Random effects network estimate",
-        "Bin-NMA-FE"    = "Fixed effects binomial network estimate",
-        "Bin-NMA-RE"    = "Random effects binomial network estimate",
-        "Mult-NMA-FE"   = "Fixed effects multinomial network estimate",
-        "Mult-NMA-RE"   = "Random effects multinomial network estimate",
-        "Bin-NMA-R-FE"  = "Fixed effects binomial network estimate",
-        "Bin-NMA-R-RE"  = "Random effects binomial network estimate",
-        "Mult-NMA-R-FE" = "Fixed effects multinomial network estimate",
-        "Mult-NMA-R-RE" = "Random effects multinomial network estimate",
-        kind)
+      tt_hdr <- meta$tt_hdr
       dic_i <- if (!is.null(pooled$dic)) pooled$dic[i] else NA_real_
       tt <- if (!is.na(dic_i))
         sprintf("%s\n%s\nDIC: %.1f", tt_hdr, ci_str, dic_i)
@@ -298,7 +363,7 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
       parts[length(parts) + 1L] <- paste0(
         sprintf('<g class="ma-pooled %s" data-tt="%s">', klass, esc_attr(tt)),
         sprintf('<text class="ma-rowlabel ma-pooled-label" x="%g" y="%g">%s</text>',
-                LEFT_MARGIN - 10, yc + 4, kind_lbl),
+                LEFT_MARGIN - 10, yc + 4, esc(kind_lbl)),
         sprintf('<rect class="ma-rowhit" x="%g" y="%g" width="%g" height="%g"/>',
                 PLOT_LEFT, yc - POOLED_H / 2 + 1, PLOT_W, POOLED_H - 2),
         sprintf('<polygon class="ma-diamond" points="%s"/>', pts),
@@ -306,6 +371,7 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
                 width - RIGHT_MARGIN + 10, yc + 4, esc(ci_str)),
         '</g>'
       )
+      y_run <- y_run + POOLED_H
     }
   }
 
