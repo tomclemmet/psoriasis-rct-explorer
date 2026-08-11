@@ -1,0 +1,67 @@
+
+model {
+  # *** PROGRAM STARTS
+  for(i in 1:ns){                                                               # LOOP THROUGH STUDIES
+    w[i, 1] <- 0                                                                # adjustment for multi-arm trials is zero for control arm
+    delta[i, 1] <- 0                                                            # treatment effect is zero for control arm
+    mu[i] ~ dnorm(0, .0001)                                                     # vague priors for all trial baselines
+    for (k in 1:na[i]) {                                                        # LOOP THROUGH ARMS
+      p[i, k, 1] <- 1                                                           # Pr(PASI >0)
+      for (j in 1:(nc[i] - 1)) {                                                # LOOP THROUGH CATEGORIES
+        r[i, k, j] ~ dbin(q[i, k, j], n[i, k, j])                               # binomial likelihood
+        q.raw[i, k, j] <- 1 - (p[i, k, C[i, j + 1]] /                           # conditional probabilities
+        max(p[i, k, C[i, j]], 1e-14)) 
+        q[i, k, j] <- max(1e-12, min(1 - 1e-12, q.raw[i, k, j]))
+        theta[i, k, j] <- mu[i] - delta[i, k] + zeta[t[i, k], C[i, j + 1] - 1] + beta * (mu[i] - mmu) * (1 - equals(k, 1))
+        rhat[i, k, j] <- q[i, k, j] * n[i, k, j]                                  # predicted number events
+        dv[i, k, j] <- 2 * (                                                    # Deviance contribution of each category  
+          r[i, k, j] * 
+            (log(max(r[i, k, j], 1e-10)) - log(max(rhat[i, k, j], 1e-10))) +            
+            (n[i, k, j] - r[i, k, j]) * 
+            (log(max(n[i, k, j] - r[i, k, j], 1e-10)) - 
+               log(max(n[i, k, j] - rhat[i, k, j], 1e-10)))
+        )
+      }
+      dev[i, k] <- sum(dv[i, k, 1:(nc[i] - 1)])                                 # deviance contribution of each arm
+      for (j in 2:nc[i]) {                                                      # LOOP THROUGH CATEGORIES
+        p[i, k, C[i, j]] <- 1 - phi.adj[i, k, j]                                # link function
+        # adjust link function phi(x) for extreme values that can give numerical errors
+        # when x< -8, phi(x)=0, when x> 8, phi(x)=1
+        phi.adj[i, k, j] <- step(8 + theta[i, k, j - 1]) * 
+          (step(theta[i, k, j - 1] - 8) +
+             step(8 - theta[i, k, j - 1]) * phi(theta[i, k, j - 1]))
+      }
+    }
+    for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
+      delta[i, k] <- d[t[i, k]] - d[t[i, 1]]
+    }
+    resdev[i] <- sum(dev[i, 1:na[i]])                                            # summed residual deviance contribution for this trial
+  }                                                                    
+  for (i in 1:ns) {zeta[i, 1] <- 0 } # set z50=0
+  z[1] <- 0
+  for (j in 2:(Cmax-1)) {                                                         # Set priors for z, for any number of categories
+    z.aux[j] ~ dunif(0,5)                                                       # priors
+    z[j] <- z[j - 1] + z.aux[j]
+    for (i in 1:nt) {
+      zeta.aux[i, j] ~ dnorm(z.aux[j], tauz)
+      zeta[i, j] <- zeta[i, j - 1] + zeta.aux[i, j]                                              # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
+    }
+  }
+  totresdev <- sum(resdev[])                                                    # Total Residual Deviance
+  d[1] <- 0                                                                     # treatment effect is zero for reference treatment
+  for (k in 2:nt){ d[k] ~ dnorm(0,.0001) }                                      # vague priors for treatment effects
+  beta ~ dnorm(0,.0001)
+  sd ~ dunif(0, 5)                                                               # vague prior for between-trial SD
+  sdz ~ dunif(0, 5)
+  tau <- pow(sd,-2)   
+  tauz <- pow(sdz, -2) # between-trial precision = (1 / between-trial variance)
+  mubar <- mean(mu[])
+  
+  
+  A ~ dnorm(1.097,123) 
+  # calculate prob of achieving PASI 50/75/90/100 on treatment k
+  for (k in 1:nt) {
+    for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + zeta[k, j]) }
+  } 
+  # *** PROGRAM ENDS 
+}

@@ -215,7 +215,9 @@ table.dataTable tr.trial-band > td { background-color: #f3f5f8; }
                                         stroke-width: 1; }
 .ma-forest .ma-pooled-re .ma-diamond { fill: #1F4E8C; stroke: #14376a;
                                         stroke-width: 1; }
-.ma-forest .ma-pooled-label { font-weight: 600; }
+.ma-forest .ma-pooled-label { font-weight: 400; }
+.ma-forest .ma-pooled-heading { fill: #1a1f2c; font-size: 13px; font-weight: 700;
+                                  text-anchor: end; }
 .ma-forest .ma-axislabel { fill: #1a1f2c; font-size: 12px;
                             text-anchor: middle; font-weight: 500; }
 .ma-forest .ma-dir       { fill: #5a6478; font-size: 11px;
