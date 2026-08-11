@@ -52,10 +52,6 @@ pasi_ref <- metaprop(
   incr = 0.5
 )
 
-# m <- pso_jags(pasi_jags, filename = "JAGS/re_fez_u.jags", effects = "random", cutpoints = "fixed", baseline = "unadjusted")
-# process_jags(m)$summary |> print(n = 10000)
-# traceplot(m, varname = "sd")
-
 jags_models <- list(
   fe_fez_u = pso_jags(pasi_jags, filename = "JAGS/fe_fez_u.jags", effects = "fixed", cutpoints = "fixed", baseline = "unadjusted"),
   re_fez_u = pso_jags(pasi_jags, filename = "JAGS/re_fez_u.jags", effects = "random", cutpoints = "fixed", baseline = "unadjusted"),
@@ -67,33 +63,43 @@ jags_models <- list(
   re_rez_a = pso_jags(pasi_jags, filename = "JAGS/re_rez_a.jags", effects = "random", cutpoints = "random", baseline = "adjusted")
 )
 
-compare_jags(jags_models) 
+compare_jags(jags_models) |> View()
 
 lapply(jags_models, \(x) {process_jags(x)$DIC}) |> as.data.frame()
 
 # jags_models |>
 #   lapply(\(x) {process_jags(x)$summary}) |>
 #   bind_rows(.id = "id") |>
-#   filter(!is.na(drug), ! drug %in% c("Phototherapy", "Mirikizumab", "Placebo", "Izokibep")) |>
+#   filter(!is.na(drug), ! drug %in% c("Phototherapy", "Mirikizumab", "Placebo",
+#                                      "Izokibep")) |>
 #   left_join(lookup, by = "drug") |>
 #   mutate(drug = forcats::fct_reorder(drug, mean, .fun = base::mean)) |>
 #   ggplot(aes(x = mean, y = drug, colour = id)) +
 #   geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`),
-#                   position = position_dodge(width = 0.7), shape = 15, size = 0.1) +
+#                   position = position_dodge(width = 0.7), shape = 15, 
+#                   size = 0.1) +
 #   scale_colour_viridis_d(option = "turbo") +
 #   theme_minimal() +
 #   theme(legend.position = "top") +
 #   facet_wrap(~ class, scales = "free_y")
 # ggsave("output/forest.png", height = 7, width = 10)
 
-results$fe_fez_u <- nma_results(jags_models$fe_fez_u, effects = "fixed", method = "standard")
-results$re_fez_u <- nma_results(jags_models$re_fez_u, effects = "random", method = "standard")
-results$fe_rez_u <- nma_results(jags_models$fe_rez_u, effects = "fixed", method = "REZ")
-results$re_rez_u <- nma_results(jags_models$re_rez_u, effects = "random", method = "REZ")
-results$fe_fez_a <- nma_results(jags_models$fe_fez_a, effects = "fixed", method = "baseline adjusted")
-results$re_fez_a <- nma_results(jags_models$re_fez_a, effects = "random", method = "baseline adjusted")
-results$fe_rez_a <- nma_results(jags_models$fe_rez_a, effects = "fixed", method = "REZ, baseline adjusted")
-results$re_rez_a <- nma_results(jags_models$re_rez_a, effects = "random", method = "REZ, baseline adjusted")
+results$fe_fez_u <- nma_results(jags_models$fe_fez_u, effects = "fixed", 
+                                method = "standard")
+results$re_fez_u <- nma_results(jags_models$re_fez_u, effects = "random", 
+                                method = "standard")
+results$fe_rez_u <- nma_results(jags_models$fe_rez_u, effects = "fixed", 
+                                method = "REZ")
+results$re_rez_u <- nma_results(jags_models$re_rez_u, effects = "random",
+                                method = "REZ")
+results$fe_fez_a <- nma_results(jags_models$fe_fez_a, effects = "fixed", 
+                                method = "baseline adjusted")
+results$re_fez_a <- nma_results(jags_models$re_fez_a, effects = "random", 
+                                method = "baseline adjusted")
+results$fe_rez_a <- nma_results(jags_models$fe_rez_a, effects = "fixed", 
+                                method = "REZ, baseline adjusted")
+results$re_rez_a <- nma_results(jags_models$re_rez_a, effects = "random", 
+                                method = "REZ, baseline adjusted")
 
 pasi_net <- set_agd_arm(
   filter(data, !if_all(pasi50:pasi100, \(x) is.na(x))),
@@ -233,7 +239,8 @@ abs_pasi_data <- data |>
     ),
     abs_pasi_change_sd = if_else(
       is.na(abs_pasi_change_sd), 
-      sqrt((abs_pasi_sd_follow_up)^2 + (abs_pasi_sd_baseline)^2 - 2 * 0.5 * abs_pasi_sd_follow_up * abs_pasi_sd_baseline), 
+      sqrt((abs_pasi_sd_follow_up)^2 + (abs_pasi_sd_baseline)^2 - 
+             2 * 0.5 * abs_pasi_sd_follow_up * abs_pasi_sd_baseline), 
       abs_pasi_change_sd
     )
   ) |> 
@@ -298,7 +305,10 @@ abs_dlqi_data <- data |>
     ),
     abs_dlqi_change_sd = if_else(
       is.na(abs_dlqi_change_sd), 
-      sqrt((abs_dlqi_sd_follow_up)^2 + (abs_dlqi_sd_baseline)^2 - 2 * 0.5 * abs_dlqi_sd_follow_up * abs_dlqi_sd_baseline), abs_dlqi_change_sd # Assumed 0.5 covariance
+      # Assumed 0.5 covariance
+      sqrt((abs_dlqi_sd_follow_up)^2 + (abs_dlqi_sd_baseline)^2 - 
+             2 * 0.5 * abs_dlqi_sd_follow_up * abs_dlqi_sd_baseline), 
+      abs_dlqi_change_sd 
     )
   ) |> 
   filter(!is.na(abs_dlqi_change_mean) & !is.na(abs_dlqi_change_sd))
@@ -389,7 +399,8 @@ for (i in 1:length(bin_outcomes)) {
 }
 
 for (i in 1:length(bin_outcomes)) {
-  placebo_data <- filter(data, drug == "Placebo", !is.na(.data[[bin_outcomes[i]]]))
+  placebo_data <- filter(data, drug == "Placebo", 
+                         !is.na(.data[[bin_outcomes[i]]]))
   bin_ref <- metaprop(
     event = placebo_data[[bin_outcomes[i]]],
     n = n,
@@ -599,7 +610,8 @@ results$pasi_re <- NULL
 results$pasi_fe_baseline <- NULL
 results_table <- bind_rows(results)
 
-dbWriteTable(con, name = "meta_analysis", value = results_table, overwrite = TRUE)
+dbWriteTable(con, name = "meta_analysis", value = results_table, 
+             overwrite = TRUE)
 
 create_view_sql <- "
   CREATE VIEW v_meta_analysis AS
