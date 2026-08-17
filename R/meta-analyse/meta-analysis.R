@@ -118,7 +118,32 @@ pasi_fit_fe <- nma(
   prior_intercept = normal(scale = 100),
   prior_trt = normal(scale = 10),
   prior_aux = flat(),
-  iter = niter
+  iter = 500,
+  chains = 2
+)
+
+pasi_fit_fe_nodesplit <- nma(
+  pasi_net,
+  consistency = "nodesplit",
+  trt_effects = "fixed",
+  link = "probit",
+  prior_intercept = normal(scale = 100),
+  prior_trt = normal(scale = 10),
+  prior_aux = flat(),
+  iter = 500,
+  chains = 2
+)
+
+pasi_fit_fe_ume <- nma(
+  pasi_net,
+  consistency = "ume",
+  trt_effects = "fixed",
+  link = "probit",
+  prior_intercept = normal(scale = 100),
+  prior_trt = normal(scale = 10),
+  prior_aux = flat(),
+  iter = 500,
+  chains = 2
 )
 
 pasi_fit_fe_baseline <- nma(
@@ -604,11 +629,13 @@ for (k in 1:length(drugs)) {
 }
 
 # Write results ================================================================
+exc <- c("Izokibep", "Mirikizumab", "Phototherapy")
 
 results$pasi_fe <- NULL
 results$pasi_re <- NULL
 results$pasi_fe_baseline <- NULL
-results_table <- bind_rows(results)
+results_table <- bind_rows(results) |> 
+  filter(comp_tx %notin% exc, ref_tx %notin% exc)
 
 dbWriteTable(con, name = "meta_analysis", value = results_table, 
              overwrite = TRUE)
