@@ -42,6 +42,7 @@ DRUG_CLASS <- c(
   "Zasocitinib"      = "targeted small molecule",
   "Guselkumab"       = "il23",
   "Icotrokinra"      = "il23",
+  "Mirikizumab"      = "il23",
   "Risankizumab"     = "il23",
   "Tildrakizumab"    = "il23",
   "Bimekizumab"      = "il17",
@@ -95,6 +96,15 @@ size_from_patients <- function(n, ref_max) {
                             NODE_SIZE_MIN + (NODE_SIZE_MAX - NODE_SIZE_MIN) * r))
 }
 
+# Node labels in the network diagram only (tooltips and drug names
+# elsewhere keep the full name). Flip to FALSE to revert to full names.
+NETWORK_LABEL_ABBREVIATE <- TRUE
+
+network_node_label <- function(drugs) {
+  if (!NETWORK_LABEL_ABBREVIATE) return(drugs)
+  toupper(substr(drugs, 1, 3))
+}
+
 # Blend a hex colour toward white so hover states brighten a node's own
 # class colour instead of switching to an unrelated fixed colour.
 lighten <- function(hex, amount = 0.45) {
@@ -135,7 +145,7 @@ build_network_data <- function(td, ref_max_n = NA_real_) {
   drug_classes[is.na(drug_classes)] <- "conventional"
   nodes_df <- data.frame(
     id    = drugs,
-    label = drugs,
+    label = network_node_label(drugs),
     size  = size_from_patients(n_patients, size_ref),
     title = sprintf("<b>%s</b><br/>%d trial(s), %s patient(s)",
                     drugs, n_trials_per_drug,
