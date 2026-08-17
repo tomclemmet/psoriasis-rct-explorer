@@ -2,7 +2,7 @@
 *.accdb
 *.laccdb
 *.mdb
-*.sqlite
+#*.sqlite
 *.sqlite3
 *.db
 *.RDS
