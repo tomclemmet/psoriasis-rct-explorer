@@ -146,7 +146,8 @@ probs_rez <- "
     if (effects == "random") "sd" else NULL,
     if (cutpoints == "random") "sdz" else NULL,
     if (baseline == "adjusted") c("beta", "mubar") else NULL,
-    "totresdev"
+    "totresdev",
+    "dev"
   )
   
   message(paste0("Fitting psoriasis NMA for PASI response with ", effects, 
@@ -159,39 +160,3 @@ probs_rez <- "
     model.file = filename, n.chains = 2, n.iter = 4000, n.burnin = 2000, n.thin = 1
   )
 }
-
-
-
-
-# models <- list(
-#   fe_fez_u = pso_jags(pasi_jags, filename = "JAGS/fe_fez_u.jags", effects = "fixed", cutpoints = "fixed", baseline = "unadjusted"),
-#   re_fez_u = pso_jags(pasi_jags, filename = "JAGS/re_fez_u.jags", effects = "random", cutpoints = "fixed", baseline = "unadjusted"),
-#   fe_rez_u = pso_jags(pasi_jags, filename = "JAGS/fe_rez_u.jags", effects = "fixed", cutpoints = "random", baseline = "unadjusted"),
-#   re_rez_u = pso_jags(pasi_jags, filename = "JAGS/re_rez_u.jags", effects = "random", cutpoints = "random", baseline = "unadjusted"),
-#   fe_fez_a = pso_jags(pasi_jags, filename = "JAGS/fe_fez_a.jags", effects = "fixed", cutpoints = "fixed", baseline = "adjusted"),
-#   re_fez_a = pso_jags(pasi_jags, filename = "JAGS/re_fez_a.jags", effects = "random", cutpoints = "fixed", baseline = "adjusted"),
-#   fe_rez_a = pso_jags(pasi_jags, filename = "JAGS/fe_rez_a.jags", effects = "fixed", cutpoints = "random", baseline = "adjusted"),
-#   re_rez_a = pso_jags(pasi_jags, filename = "JAGS/re_rez_a.jags", effects = "random", cutpoints = "random", baseline = "adjusted")
-# )
-# 
-# nma_results(models$fe_fez_u, effects = "fixed", method = "standard") |> View()
-# process_jags(models$fe_fez_a)
-# 
-# models |> 
-#   lapply(\(x) {process_jags(x)$summary}) |> 
-#   bind_rows(.id = "id") |> 
-#   filter(!is.na(drug), ! drug %in% c("Phototherapy", "Mirikizumab")) |> 
-#   mutate(drug = forcats::fct_reorder(drug, mean, .fun = base::mean)) |>
-#   ggplot(aes(x = mean, y = drug, colour = id)) +
-#   geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`), 
-#                   position = position_dodge(width = 0.7), shape = 15, size = 0.1) +
-#   scale_colour_viridis_d(option = "turbo") +
-#   theme_minimal() +
-#   theme(legend.position = "top")
-# ggsave("output/forest.png", height = 20, width = 7)
-# 
-# summaries <- lapply(models, process_jags)
-# 
-# lapply(summaries, \(x) {x$DIC})
-# 
-# traceplot(models$fe_fez_u)
