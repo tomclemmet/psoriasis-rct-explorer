@@ -1,4 +1,6 @@
 library(stringr)
+library(posterior)
+library(multinma)
 
 nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, label=NA, t=NA, reft=NA) {
   
@@ -8,7 +10,7 @@ nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, labe
       "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
       "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
       "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
-      # "Phototherapy", 
+      "Phototherapy", 
       "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
       "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
     )
@@ -373,7 +375,7 @@ process_jags <- function(mod) {
       "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
       "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
       "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
-      # "Phototherapy",
+      "Phototherapy",
       "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
       "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
     ),
@@ -385,8 +387,8 @@ process_jags <- function(mod) {
       as_tibble(rownames = "param") |> 
       left_join(drug_lookup, by = c("param" = "index")) |> 
       relocate(drug, .after = param) |> 
-      filter(!str_detect(param, "prob")) |> 
-      arrange(param %in% c("deviance", "totresdev")) |> 
+      # filter(!str_detect(param, "prob")) |> 
+      arrange(param %in% c("deviance", "totresdev") | str_starts(param, "prob") | str_starts(param, "dev")) |> 
       as.data.frame(),
     trace = posterior::as_draws_df(mod$BUGSoutput$sims.array),
     totresdev = mod$BUGSoutput$mean$totresdev,
@@ -461,6 +463,45 @@ beta_dist_metaprop <- function(mod, effects) {
   
   return(distr(qbeta, alpha, beta))
 }
+
+
+devplot <- function(m1, m2, output = "plot") {
+  dev1 <- process_jags(m1)$summary |> 
+    select(param, mean, `2.5%`, `97.5%`) |> 
+    filter(str_starts(param, "dev\\[")) |> 
+    mutate(row = as.numeric(str_extract(param, pattern = "(?<=\\[).*?(?=,)")),
+           arm = as.numeric(str_extract(param, pattern = "(?<=,).*?(?=\\])"))) 
+    # mutate(.by = trial, df = max(as.numeric(str_extract(param, pattern = "(?<=,).*?(?=\\])")))) |> 
+    # rename_with(\(x) paste0(x, "_x"))
+  dev2 <- process_jags(m2)$summary |> 
+    select(param, mean, `2.5%`, `97.5%`) |> 
+    filter(str_starts(param, "dev\\[")) |> 
+    mutate(row = as.numeric(str_extract(param, pattern = "(?<=\\[).*?(?=,)")),
+           arm = as.numeric(str_extract(param, pattern = "(?<=,).*?(?=\\])"))) 
+    # mutate(.by = trial, df = max(as.numeric(str_extract(param, pattern = "(?<=,).*?(?=\\])")))) |> 
+    # rename_with(\(x) paste0(x, "_y"))
+  
+  ids <- pasi_wide |> 
+    select(ref_id) |> 
+    mutate(row = row_number()) |> 
+    right_join(select(pasi, trial, ref_id, arm_no, drug), by = "ref_id")
+  
+  devdev <- full_join(dev1, dev2, by = c("param", "row", "arm")) |> 
+    full_join(ids, by = "row") |> 
+    mutate(.by = ref_id, df = max(arm_no))
+  
+  if (output == "plot") {
+    ggplot(devdev, aes(x = mean.x, y = mean.y)) +
+      geom_point(alpha = 0.5) +
+      geom_abline(intercept = 0, slope = 1, linetype = 2, colour = "red") +
+      theme_classic()
+  } else if (output == "table") {
+    devdev
+  }
+  
+}
+
+
 
 
 
