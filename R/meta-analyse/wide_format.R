@@ -13,7 +13,7 @@ drug_order <- c(
   "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
   "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
   "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
-  # "Phototherapy", 
+  "Phototherapy", 
   "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
   "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
 )
