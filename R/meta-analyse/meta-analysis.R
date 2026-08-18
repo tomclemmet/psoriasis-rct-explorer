@@ -3,6 +3,7 @@ library(DBI)
 library(dplyr)
 library(tidyr)
 library(stringr)
+library(ggplot2)
 library(multinma)
 library(meta)
 options(mc.cores = parallel::detectCores())
@@ -64,7 +65,7 @@ jags_models <- list(
 )
 
 compare_jags(jags_models) |> View()
-
+devplot(jags_models$fe_fez_u, jags_models$re_fez_u, output = "plot")
 lapply(jags_models, \(x) {process_jags(x)$DIC}) |> as.data.frame()
 
 # jags_models |>
@@ -84,21 +85,57 @@ lapply(jags_models, \(x) {process_jags(x)$DIC}) |> as.data.frame()
 #   facet_wrap(~ class, scales = "free_y")
 # ggsave("output/forest.png", height = 7, width = 10)
 
-results$fe_fez_u <- nma_results(jags_models$fe_fez_u, effects = "fixed", 
+order <- process_jags(jags_models$re_rez_a)$summary |> 
+  filter(str_starts(param, "prob")) |> 
+  mutate(drug = drug_order[as.numeric(str_extract(param, "(?<=,).*?(?=])"))]) |> 
+  slice_head(n = 1, by = drug) |> 
+  arrange(mean)
+
+process_jags(jags_models$re_rez_a)$summary |> 
+  filter(str_starts(param, "prob")) |> 
+  mutate(
+    drug = factor(
+      drug_order[as.numeric(str_extract(param, "(?<=,).*?(?=])"))],
+      levels = order$drug
+    ),
+    outcome = factor(
+      outcomes[as.numeric(str_extract(param, "(?<=\\[).*?(?=,)"))],
+      levels = c("pasi50", "pasi75", "pasi90", "pasi100")
+    )
+  ) |> 
+  arrange(drug, desc(outcome)) |> 
+  mutate(.by = drug, mean = mean - lag(mean, default = 0), .after = mean) |> 
+  ggplot(aes(x = mean, y = drug)) +
+  geom_col(aes(fill = outcome)) +
+  theme_classic() +
+  scale_fill_viridis_d() +
+  theme(legend.position = "bottom")
+ggsave("output/props.png", height = 7, width = 4)
+  
+
+results$fe_fez_u <- nma_results(jags_models$fe_fez_u, 
+                                effects = "fixed", 
                                 method = "standard")
-results$re_fez_u <- nma_results(jags_models$re_fez_u, effects = "random", 
+results$re_fez_u <- nma_results(jags_models$re_fez_u, 
+                                effects = "random", 
                                 method = "standard")
-results$fe_rez_u <- nma_results(jags_models$fe_rez_u, effects = "fixed", 
+results$fe_rez_u <- nma_results(jags_models$fe_rez_u, 
+                                effects = "fixed", 
                                 method = "REZ")
-results$re_rez_u <- nma_results(jags_models$re_rez_u, effects = "random",
+results$re_rez_u <- nma_results(jags_models$re_rez_u, 
+                                effects = "random",
                                 method = "REZ")
-results$fe_fez_a <- nma_results(jags_models$fe_fez_a, effects = "fixed", 
+results$fe_fez_a <- nma_results(jags_models$fe_fez_a, 
+                                effects = "fixed", 
                                 method = "baseline adjusted")
-results$re_fez_a <- nma_results(jags_models$re_fez_a, effects = "random", 
+results$re_fez_a <- nma_results(jags_models$re_fez_a, 
+                                effects = "random", 
                                 method = "baseline adjusted")
-results$fe_rez_a <- nma_results(jags_models$fe_rez_a, effects = "fixed", 
+results$fe_rez_a <- nma_results(jags_models$fe_rez_a, 
+                                effects = "fixed", 
                                 method = "REZ, baseline adjusted")
-results$re_rez_a <- nma_results(jags_models$re_rez_a, effects = "random", 
+results$re_rez_a <- nma_results(jags_models$re_rez_a, 
+                                effects = "random", 
                                 method = "REZ, baseline adjusted")
 
 pasi_net <- set_agd_arm(
