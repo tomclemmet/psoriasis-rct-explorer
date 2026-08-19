@@ -36,6 +36,7 @@ DRUG_CLASS <- c(
   "Phototherapy"     = "conventional",
   "Topical"          = "conventional",
   "Apremilast"       = "targeted small molecule",
+  "Roflumilast"      = "targeted small molecule",
   "Deucravacitinib"  = "targeted small molecule",
   "Orismilast"       = "targeted small molecule",
   "Tofacitinib"      = "targeted small molecule",
