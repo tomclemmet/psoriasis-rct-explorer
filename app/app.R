@@ -61,6 +61,16 @@ DRUG_CLASS <- c(
   "Placebo"          = "placebo"
 )
 
+# Drugs that appear in the network diagram (they're trial comparators) but
+# have no meta-analysis modelled for them. Clicking their node still filters
+# the tables, but the meta-analysis modal shows this reason instead of
+# attempting (and failing) to fetch MA estimates. Add an entry here for any
+# future comparator that's in the diagram ahead of its MA being produced.
+MA_EXCLUDED_DRUGS <- c(
+  "Mirikizumab"  = "it is not an approved or investigational systemic therapy for psoriasis",
+  "Phototherapy" = "it is not an approved or investigational systemic therapy for psoriasis"
+)
+
 CLASS_ARC_ORDER <- c("il17", "il23", "il12_23", "tnf",
                      "targeted small molecule", "conventional")
 
@@ -1012,6 +1022,14 @@ build_forest_inputs <- function(state, tab_id, outcome, axis_selection = list())
   }
 
   if (identical(state$kind, "edge")) {
+    excl_drug <- Find(function(d) d %in% names(MA_EXCLUDED_DRUGS),
+                      c(state$from, state$to))
+    if (!is.null(excl_drug)) {
+      return(list(empty_reason = sprintf(
+        "Estimates are not produced for %s as %s.",
+        tolower(excl_drug), MA_EXCLUDED_DRUGS[[excl_drug]])))
+    }
+
     # Edge filter: per-trial pairwise forest with FE/RE + network diamonds.
     measure_val <- if (is_continuous) "diff_cfb" else "rd"
 
@@ -1127,6 +1145,12 @@ build_forest_inputs <- function(state, tab_id, outcome, axis_selection = list())
   }
 
   if (identical(state$kind, "node")) {
+    if (state$drug %in% names(MA_EXCLUDED_DRUGS)) {
+      return(list(empty_reason = sprintf(
+        "Estimates are not produced for %s as %s.",
+        tolower(state$drug), MA_EXCLUDED_DRUGS[[state$drug]])))
+    }
+
     # Node filter: per-trial single-arm estimates with univariate pooled.
     measure_val <- if (is_continuous) "cfb" else "rate"
     eff_scale   <- if (is_continuous) "md" else "prop"
