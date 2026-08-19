@@ -834,6 +834,25 @@ pick_axis_value <- function(vals, column, selected = NULL) {
   sort(vals)[1]
 }
 
+# Distinct `col` values available given the currently selected value of every
+# *earlier* MA_AXIS_COLUMNS entry, e.g. "method" is restricted to whichever
+# methods actually co-occur with the selected "likelihood" in `combos` — a
+# method that was only ever fit under the multinomial likelihood shouldn't
+# stay pickable once binomial is selected. Falls back to `all_vals` when
+# combos are unavailable or nothing matches, so the toggle is never emptied.
+restrict_axis_values <- function(col, all_vals, combos, selection) {
+  if (is.null(combos) || !nrow(combos)) return(all_vals)
+  earlier <- MA_AXIS_COLUMNS[seq_len(match(col, MA_AXIS_COLUMNS) - 1)]
+  keep <- rep(TRUE, nrow(combos))
+  for (ec in earlier) {
+    v <- selection[[ec]]
+    if (!is.null(v) && !is.na(v)) keep <- keep & (combos[[ec]] == v)
+  }
+  avail <- order_axis_values(col, combos[[col]][keep])
+  vals  <- intersect(all_vals, avail)
+  if (!length(vals)) all_vals else vals
+}
+
 # Discover every distinct MA_AXIS_COLUMNS combination actually present for
 # this endpoint set + type (one query), resolve the "active" value per axis
 # (selection if valid, else default, else first available), and flag which
@@ -1610,7 +1629,7 @@ server <- function(input, output, session) {
   ma_ctx <- reactiveValues(active = FALSE, tab_id = NULL, state = NULL,
                            gid = NULL, outcomes = NULL, state_lbl = NULL,
                            group_lbl = NULL, axis_choices = list(),
-                           axis_selection = list())
+                           axis_selection = list(), axis_combos = NULL)
 
   # Fetch forest-plot inputs for one outcome under the active state.
   fetch_plot_inputs <- function(state, tab_id, outc, axis_selection = list()) {
@@ -1709,20 +1728,45 @@ server <- function(input, output, session) {
     })
   })
 
+  # When an earlier axis (e.g. likelihood) is switched such that the current
+  # "method" selection no longer co-occurs with it, snap method to the first
+  # value that's still valid for the new likelihood. Without this the toggle
+  # re-renders correctly (see restrict_axis_values() below) but the stale,
+  # now-invalid selection would still be the one actually fetched.
+  observeEvent(input$ma_axis_likelihood, {
+    combos  <- ma_ctx$axis_combos
+    choices <- ma_ctx$axis_choices
+    if (is.null(combos) || !nrow(combos) || is.null(choices[["method"]])) return()
+    sel_now            <- ma_ctx$axis_selection
+    sel_now$likelihood <- input$ma_axis_likelihood
+    vals <- restrict_axis_values("method", choices[["method"]], combos, sel_now)
+    if (!is.null(sel_now$method) && !(sel_now$method %in% vals)) {
+      sel_now$method <- pick_axis_value(vals, "method")
+      ma_ctx$axis_selection <- sel_now
+    }
+  }, ignoreInit = TRUE)
+
   # One toggle per axis that has more than one value available for the
   # current group (computed at modal-open time in open_ma_modal()). An axis
   # with only one value (the common case today) renders no toggle at all.
+  # Later axes (e.g. "method") are further restricted to whichever values
+  # actually co-occur with the currently selected earlier axis (e.g.
+  # "likelihood") — see restrict_axis_values() — so e.g. a method that only
+  # exists under the multinomial model isn't offered once binomial is picked.
   output$ma_method_toggle <- renderUI({
     req(ma_ctx$active)
     choices <- ma_ctx$axis_choices
+    combos  <- ma_ctx$axis_combos
+    sel     <- ma_ctx$axis_selection
     toggles <- Filter(function(col) length(choices[[col]]) > 1, names(choices))
     if (!length(toggles)) return(NULL)
     div(class = "ma-method-toggle",
         lapply(toggles, function(col) {
-          vals <- choices[[col]]
+          vals <- restrict_axis_values(col, choices[[col]], combos, sel)
+          cur  <- sel[[col]]
           radioButtons(paste0("ma_axis_", col), label = NULL,
                        choices = setNames(vals, vapply(vals, axis_display_label, "")),
-                       selected = ma_ctx$axis_selection[[col]],
+                       selected = if (!is.null(cur) && cur %in% vals) cur else vals[1],
                        inline = TRUE)
         }))
   })
@@ -1770,9 +1814,11 @@ server <- function(input, output, session) {
       st             <- axis_state(outcome_codes, "network")
       axis_choices   <- st$values
       axis_selection <- st$active
+      axis_combos    <- fetch_ma_axis_combos(outcome_codes, "network", MA_AXIS_COLUMNS)
     } else {
       axis_choices   <- list()
       axis_selection <- list()
+      axis_combos    <- NULL
     }
 
     # Stash context for the reactive plot area to consume.
@@ -1784,6 +1830,7 @@ server <- function(input, output, session) {
     ma_ctx$group_lbl      <- group_lbl
     ma_ctx$axis_choices   <- axis_choices
     ma_ctx$axis_selection <- axis_selection
+    ma_ctx$axis_combos    <- axis_combos
     ma_ctx$active         <- TRUE
 
     summary_text <- sprintf("%s | endpoint group: %s", state_lbl, group_lbl)
