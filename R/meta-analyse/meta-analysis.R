@@ -13,7 +13,16 @@ source("R/meta-analyse/wide_format.R")
 source("R/meta-analyse/pasi-jags-nma.R")
 lookup <- read.csv("R/meta-analyse/trt_class.csv")
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
-
+  
+  c(
+  "Placebo", "Acitretin", "Adalimumab", "Apremilast", "Bimekizumab",
+  "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
+  "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
+  "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
+  "Phototherapy", 
+  "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
+  "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
+)
 
 # Extract data =================================================================
 
@@ -34,6 +43,8 @@ drugs <- unique(data$drug)
 comparisons <- as.data.frame(t(combn(drugs, 2)))
 results <- list()
 niter <- 2000
+
+pasi_drugs <- c("Placebo", setdiff(sort(unique(pasi$drug)), "Placebo"))
 
 # Network meta-analyses ========================================================
 

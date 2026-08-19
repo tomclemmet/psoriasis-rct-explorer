@@ -8,16 +8,6 @@ con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 pasi <- dbReadTable(con, "v_pasi")
 dbDisconnect(con)
 
-drug_order <- c(
-  "Placebo", "Acitretin", "Adalimumab", "Apremilast", "Bimekizumab",
-  "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
-  "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
-  "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
-  "Phototherapy", 
-  "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
-  "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
-)
-
 nth_largest <- function(n, ...) {
   vec <- c(...)
   sort(vec, decreasing = TRUE, na.last = TRUE)[n]
@@ -37,7 +27,7 @@ pasi_wide <- pasi |>
   group_by(ref_id) |> 
   mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
   ungroup() |> 
-  mutate(t = as.numeric(factor(drug, levels = drug_order)), .after = drug) |>
+  mutate(t = as.numeric(factor(drug, levels = pasi_drugs)), .after = drug) |>
   rowwise() |> mutate(
     r1 = n - nth_largest(1, pasi50, pasi75, pasi90, pasi100),
     r2 = nth_largest(1, pasi50, pasi75, pasi90, pasi100) - 
