@@ -5,15 +5,6 @@ library(multinma)
 nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, label=NA, t=NA, reft=NA) {
   
   results <- list()
-  drug_order <- c(
-      "Placebo", "Acitretin", "Adalimumab", "Apremilast", "Bimekizumab",
-      "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
-      "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
-      "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
-      "Phototherapy", 
-      "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
-      "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
-    )
   thresholds <- c("pasi50", "pasi75", "pasi90", "pasi100")
   
   if (any(class(m) == "rjags")) {
@@ -26,7 +17,7 @@ nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, labe
       # Convert to long format
       pivot_longer(starts_with("prob"), names_to = "param", values_to = "trace") |> 
       # Extract drug name
-      mutate(drug = drug_order[as.numeric(str_extract(param, pattern = "(?<=,\\s?)\\d+(?=\\])"))],
+      mutate(drug = pasi_drugs[as.numeric(str_extract(param, pattern = "(?<=,\\s?)\\d+(?=\\])"))],
              endpoint = thresholds[as.numeric(str_extract(param, pattern = "(?<=prob\\[)\\d+(?=,)"))]) |> 
       suppressWarnings() 
     
@@ -370,16 +361,8 @@ nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, labe
 
 process_jags <- function(mod) {
   drug_lookup <- data.frame(
-    drug = c(
-      "Placebo", "Acitretin", "Adalimumab", "Apremilast", "Bimekizumab",
-      "Brodalumab", "Certolizumab", "Cyclosporin", "Deucravacitinib", "Etanercept",
-      "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab", "Ixekizumab",
-      "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Orismilast",
-      "Phototherapy",
-      "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab",
-      "Tildrakizumab", "Tofacitinib", "Ustekinumab", "Xeligekimab", "Zasocitinib"
-    ),
-    index = paste0("d[", seq(1:length(drug_order)), "]")
+    drug = pasi_drugs,
+    index = paste0("d[", seq(1:length(pasi_drugs)), "]")
   )
   
   list(
