@@ -9,9 +9,6 @@ library(meta)
 library(metafor)
 options(mc.cores = parallel::detectCores())
 load("R/meta-analyse/meta-analysis.RData")
-source("R/meta-analyse/ma-utils.R")
-source("R/meta-analyse/wide_format.R")
-source("R/meta-analyse/pasi-jags-nma.R")
 lookup <- read.csv("R/meta-analyse/trt_class.csv")
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 
@@ -38,6 +35,9 @@ niter <- 2000
 pasi_drugs <- c("Placebo", setdiff(sort(unique(pasi$drug)), "Placebo"))
 
 # Network meta-analyses ========================================================
+source("R/meta-analyse/ma-utils.R")
+source("R/meta-analyse/wide_format.R")
+source("R/meta-analyse/pasi-jags-nma.R")
 
 ## PASI Response ---------------------------------------------------------------
 
@@ -85,9 +85,9 @@ lapply(jags_models, \(x) {process_jags(x)$DIC}) |> as.data.frame()
 #   facet_wrap(~ class, scales = "free_y")
 # ggsave("output/forest.png", height = 7, width = 10)
 
-order <- process_jags(jags_models$re_rez_a)$summary |> 
+drug_rank <- process_jags(jags_models$re_rez_a)$summary |> 
   filter(str_starts(param, "prob")) |> 
-  mutate(drug = drug_order[as.numeric(str_extract(param, "(?<=,).*?(?=])"))]) |> 
+  mutate(drug = pasi_drugs[as.numeric(str_extract(param, "(?<=,).*?(?=])"))]) |> 
   slice_head(n = 1, by = drug) |> 
   arrange(mean)
 
@@ -95,8 +95,8 @@ process_jags(jags_models$re_rez_a)$summary |>
   filter(str_starts(param, "prob")) |> 
   mutate(
     drug = factor(
-      drug_order[as.numeric(str_extract(param, "(?<=,).*?(?=])"))],
-      levels = order$drug
+      pasi_drugs[as.numeric(str_extract(param, "(?<=,).*?(?=])"))],
+      levels = drug_rank$drug
     ),
     outcome = factor(
       outcomes[as.numeric(str_extract(param, "(?<=\\[).*?(?=,)"))],
@@ -105,11 +105,13 @@ process_jags(jags_models$re_rez_a)$summary |>
   ) |> 
   arrange(drug, desc(outcome)) |> 
   mutate(.by = drug, mean = mean - lag(mean, default = 0), .after = mean) |> 
+  filter(drug %notin% exc) |> 
   ggplot(aes(x = mean, y = drug)) +
-  geom_col(aes(fill = outcome)) +
+  geom_col(aes(fill = outcome), position = position_stack(reverse = FALSE)) +
   theme_classic() +
   scale_fill_viridis_d() +
-  theme(legend.position = "bottom")
+  theme(legend.position = "bottom") +
+  labs(title = "RE REZ with baseline adjustment")
 ggsave("output/props.png", height = 7, width = 4)
   
 
@@ -137,6 +139,8 @@ results$fe_rez_a <- nma_results(jags_models$fe_rez_a,
 results$re_rez_a <- nma_results(jags_models$re_rez_a, 
                                 effects = "random", 
                                 method = "REZ, baseline adjusted")
+
+# multinma .....................................................................
 
 pasi_net <- set_agd_arm(
   filter(data, !if_all(pasi50:pasi100, \(x) is.na(x))),
@@ -194,15 +198,14 @@ pasi_fit_fe_baseline <- nma(
   iter = niter
 )
 
-
 results$pasi_fe <- nma_results(
   pasi_fit_fe, 
-  base_dist = beta_dist_metaprop(pasi_ref, "fixed")
+  base_dist = beta_dist_metaprop(pasi_ref, "random")
 )
 
 results$pasi_fe_baseline <- nma_results(
   pasi_fit_fe,
-  base_dist = beta_dist_metaprop(pasi_ref, "fixed"),
+  base_dist = beta_dist_metaprop(pasi_ref, "random"),
   method = "baseline adjusted"
 )
 
@@ -268,7 +271,7 @@ dlqi_fit_fe <- nma(
 
 results$dlqi_fe <- nma_results(
   dlqi_fit_fe, 
-  beta_dist_metaprop(dlqi_ref, "fixed")
+  beta_dist_metaprop(dlqi_ref, "random")
 )
 
 dlqi_fit_re <- nma(
@@ -334,7 +337,7 @@ abs_pasi_fit_fe <- nma(
 
 results$abs_pasi_fe <- nma_results(
   abs_pasi_fit_fe, 
-  distr(qnorm, abs_pasi_ref$TE.fixed, abs_pasi_ref$seTE.fixed),
+  distr(qnorm, abs_pasi_ref$TE.random, abs_pasi_ref$seTE.random),
   label = "abs_pasi_change"
 )
 
@@ -401,7 +404,7 @@ abs_dlqi_fit_fe <- nma(
 
 results$abs_dlqi_fe <- nma_results(
   abs_dlqi_fit_fe, 
-  distr(qnorm, abs_dlqi_ref$TE.fixed, abs_dlqi_ref$seTE.fixed),
+  distr(qnorm, abs_dlqi_ref$TE.random, abs_dlqi_ref$seTE.random),
   label = "abs_dlqi_change"
 )
 
@@ -461,8 +464,9 @@ for (i in 1:length(bin_outcomes)) {
 }
 
 for (i in 1:length(bin_outcomes)) {
-  placebo_data <- filter(data, drug == "Placebo", 
-                         !is.na(.data[[bin_outcomes[i]]]))
+  placebo_data <- data |> 
+    filter(drug == "Placebo", !is.na(.data[[bin_outcomes[i]]]))
+    
   bin_ref <- metaprop(
     event = placebo_data[[bin_outcomes[i]]],
     n = n,
@@ -475,7 +479,7 @@ for (i in 1:length(bin_outcomes)) {
   
   results[[paste(bin_outcomes[i], "fe")]] <- nma_results(
     bin_fit_fe[[i]], 
-    beta_dist_metaprop(bin_ref, "fixed"),
+    beta_dist_metaprop(bin_ref, "random"),
     label = bin_outcomes[i]
   )
   

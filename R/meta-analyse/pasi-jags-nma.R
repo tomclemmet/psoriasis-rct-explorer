@@ -109,7 +109,9 @@ model {
   mubar <- mean(mu[])
   
   
-  A ~ dnorm(1.097,123) 
+  # A ~ dnorm(1.097,123) 
+  p0 ~ dbeta(127.6, 584.6)
+  A <- probit(1 - p0)
   # calculate prob of achieving PASI 50/75/90/100 on treatment k"
 
   probs_fez <- "

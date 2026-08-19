@@ -8,7 +8,7 @@ nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, labe
   thresholds <- c("pasi50", "pasi75", "pasi90", "pasi100")
   
   if (any(class(m) == "rjags")) {
-    ##!!!!! CURRENTLY IGNORES BASE DIST
+    # CURRENTLY IGNORES BASE DIST HARD CODED
     dic <- process_jags(m)$DIC
     
     # Generate MCMC traces for response rates
@@ -443,6 +443,7 @@ beta_dist_metaprop <- function(mod, effects) {
   
   alpha <- mu * factor
   beta <- (1 - mu) * factor
+  message(paste0("beta(", alpha, ", ", beta, ")"))
   
   return(distr(qbeta, alpha, beta))
 }
