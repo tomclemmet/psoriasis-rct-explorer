@@ -23,6 +23,7 @@ R/meta-analyse/*.csv
 diagram example/
 @boneyard/
 todo.txt
+claude.md
 
 # OS / editor
 .DS_Store
