@@ -47,10 +47,10 @@ pasi_ref <- metaprop(
   event = pasi50,
   n = n,
   data = filter(data, drug == "Placebo", !is.na(pasi50)),
-  sm = "PLOGIT",
-  method = "Inverse",
-  method.incr = "all",
-  incr = 0.5
+  # sm = "PLOGIT",
+  # method = "Inverse",
+  # method.incr = "all",
+  # incr = 0.5
 )
 
 jags_models <- list(
@@ -64,8 +64,9 @@ jags_models <- list(
   re_rez_a = pso_jags(pasi_jags, filename = "JAGS/re_rez_a.jags", effects = "random", cutpoints = "random", baseline = "adjusted")
 )
 
+process_jags(jags_models$fe_fez_u)$summary
 compare_jags(jags_models) |> View()
-devplot(jags_models$fe_fez_u, jags_models$re_fez_u, output = "plot")
+devplot(jags_models$re_rez_u, jags_models$re_rez_a, output = "plot")
 lapply(jags_models, \(x) {process_jags(x)$DIC}) |> as.data.frame()
 
 # jags_models |>
@@ -140,103 +141,103 @@ results$re_rez_a <- nma_results(jags_models$re_rez_a,
                                 effects = "random", 
                                 method = "REZ, baseline adjusted")
 
-# multinma .....................................................................
-
-pasi_net <- set_agd_arm(
-  filter(data, !if_all(pasi50:pasi100, \(x) is.na(x))),
-  study = ref_id,
-  trt = drug,
-  r =  multi(r0 = n,
-             pasi50, pasi75, pasi90, pasi100,
-             inclusive = TRUE,
-             type = "ordered")
-  )
-
-pasi_fit_fe <- nma(
-  pasi_net,
-  trt_effects = "fixed",
-  link = "probit",
-  prior_intercept = normal(scale = 100),
-  prior_trt = normal(scale = 10),
-  prior_aux = flat(),
-  iter = 500,
-  chains = 2
-)
-
-pasi_fit_fe_nodesplit <- nma(
-  pasi_net,
-  consistency = "nodesplit",
-  trt_effects = "fixed",
-  link = "probit",
-  prior_intercept = normal(scale = 100),
-  prior_trt = normal(scale = 10),
-  prior_aux = flat(),
-  iter = 500,
-  chains = 2
-)
-
-pasi_fit_fe_ume <- nma(
-  pasi_net,
-  consistency = "ume",
-  trt_effects = "fixed",
-  link = "probit",
-  prior_intercept = normal(scale = 100),
-  prior_trt = normal(scale = 10),
-  prior_aux = flat(),
-  iter = 500,
-  chains = 2
-)
-
-pasi_fit_fe_baseline <- nma(
-  pasi_net,
-  trt_effects = "fixed",
-  regression = ~ .mu,
-  link = "probit",
-  prior_intercept = normal(scale = 100),
-  prior_trt = normal(scale = 10),
-  prior_aux = flat(),
-  iter = niter
-)
-
-results$pasi_fe <- nma_results(
-  pasi_fit_fe, 
-  base_dist = beta_dist_metaprop(pasi_ref, "random")
-)
-
-results$pasi_fe_baseline <- nma_results(
-  pasi_fit_fe,
-  base_dist = beta_dist_metaprop(pasi_ref, "random"),
-  method = "baseline adjusted"
-)
-
-
-# Random effects
-pasi_fit_re <- nma(
-  pasi_net,
-  trt_effects = "random",
-  link = "probit",
-  prior_intercept = normal(scale = 100),
-  prior_trt = normal(scale = 10),
-  prior_aux = flat(),
-  iter = niter
-)
-
-pasi_fit_re_baseline <- nma(
-  pasi_net,
-  trt_effects = "random",
-  regression = ~ .mu:.trt,
-  link = "probit",
-  prior_intercept = normal(scale = 100),
-  prior_trt = normal(scale = 10),
-  prior_aux = flat(),
-  iter = niter
-)
-
-results$pasi_re <- nma_results(
-  pasi_fit_re, 
-  beta_dist_metaprop(pasi_ref, "random")
-)
-
+## multinma ....................................................................
+# 
+# pasi_net <- set_agd_arm(
+#   filter(data, !if_all(pasi50:pasi100, \(x) is.na(x))),
+#   study = ref_id,
+#   trt = drug,
+#   r =  multi(r0 = n,
+#              pasi50, pasi75, pasi90, pasi100,
+#              inclusive = TRUE,
+#              type = "ordered")
+#   )
+# 
+# pasi_fit_fe <- nma(
+#   pasi_net,
+#   trt_effects = "fixed",
+#   link = "probit",
+#   prior_intercept = normal(scale = 100),
+#   prior_trt = normal(scale = 10),
+#   prior_aux = flat(),
+#   iter = 500,
+#   chains = 2
+# )
+# 
+# pasi_fit_fe_nodesplit <- nma(
+#   pasi_net,
+#   consistency = "nodesplit",
+#   trt_effects = "fixed",
+#   link = "probit",
+#   prior_intercept = normal(scale = 100),
+#   prior_trt = normal(scale = 10),
+#   prior_aux = flat(),
+#   iter = 500,
+#   chains = 2
+# )
+# 
+# pasi_fit_fe_ume <- nma(
+#   pasi_net,
+#   consistency = "ume",
+#   trt_effects = "fixed",
+#   link = "probit",
+#   prior_intercept = normal(scale = 100),
+#   prior_trt = normal(scale = 10),
+#   prior_aux = flat(),
+#   iter = 500,
+#   chains = 2
+# )
+# 
+# pasi_fit_fe_baseline <- nma(
+#   pasi_net,
+#   trt_effects = "fixed",
+#   regression = ~ .mu,
+#   link = "probit",
+#   prior_intercept = normal(scale = 100),
+#   prior_trt = normal(scale = 10),
+#   prior_aux = flat(),
+#   iter = niter
+# )
+# 
+# results$pasi_fe <- nma_results(
+#   pasi_fit_fe, 
+#   base_dist = beta_dist_metaprop(pasi_ref, "random")
+# )
+# 
+# results$pasi_fe_baseline <- nma_results(
+#   pasi_fit_fe,
+#   base_dist = beta_dist_metaprop(pasi_ref, "random"),
+#   method = "baseline adjusted"
+# )
+# 
+# 
+# # Random effects
+# pasi_fit_re <- nma(
+#   pasi_net,
+#   trt_effects = "random",
+#   link = "probit",
+#   prior_intercept = normal(scale = 100),
+#   prior_trt = normal(scale = 10),
+#   prior_aux = flat(),
+#   iter = niter
+# )
+# 
+# pasi_fit_re_baseline <- nma(
+#   pasi_net,
+#   trt_effects = "random",
+#   regression = ~ .mu:.trt,
+#   link = "probit",
+#   prior_intercept = normal(scale = 100),
+#   prior_trt = normal(scale = 10),
+#   prior_aux = flat(),
+#   iter = niter
+# )
+# 
+# results$pasi_re <- nma_results(
+#   pasi_fit_re, 
+#   beta_dist_metaprop(pasi_ref, "random")
+# )
+# 
 ## DLQI response ---------------------------------------------------------------
 
 dlqi_ref <- metaprop(
@@ -470,21 +471,21 @@ for (i in 1:length(bin_outcomes)) {
   bin_ref <- metaprop(
     event = placebo_data[[bin_outcomes[i]]],
     n = n,
-    sm = "PLOGIT",
-    method = "Inverse",
-    method.incr = "all",
-    incr = 0.5,
+    # sm = "PLOGIT",
+    # method = "Inverse",
+    # method.incr = "all",
+    # incr = 0.5,
     data = placebo_data
   )
   
   results[[paste(bin_outcomes[i], "fe")]] <- nma_results(
-    bin_fit_fe[[i]], 
+    bin_fit_fe[[i]],
     beta_dist_metaprop(bin_ref, "random"),
     label = bin_outcomes[i]
   )
-  
+
   results[[paste(bin_outcomes[i], "re")]] <- nma_results(
-    bin_fit_re[[i]], 
+    bin_fit_re[[i]],
     beta_dist_metaprop(bin_ref, "random"),
     label = bin_outcomes[i]
   )
@@ -620,10 +621,10 @@ for (i in 1:length(outcomes)) {
       univar[[outcomes[i]]], 
       univar$n, 
       studylab = univar$ref_id,
-      sm = "PLOGIT",
-      method = "Inverse",
-      method.incr = "all",
-      incr = 0.5
+      # sm = "PLOGIT",
+      # method = "Inverse",
+      # method.incr = "all",
+      # incr = 0.5
     )
     results[[paste(outcomes[i], drugs[k])]] <- nma_results(
       fit, label = outcomes[i], t = drugs[k]
@@ -675,16 +676,29 @@ exc <- c("Izokibep", "Mirikizumab", "Phototherapy")
 results$pasi_fe <- NULL
 results$pasi_re <- NULL
 results$pasi_fe_baseline <- NULL
-results_table <- bind_rows(results) |> 
-  filter(comp_tx %notin% exc, ref_tx %notin% exc)
 
-dbWriteTable(con, name = "meta_analysis", value = results_table, 
-             overwrite = TRUE)
+model_info <- bind_rows(results) |> 
+  mutate(endpoint_group = if_else(likelihood == "multinomial" & 
+                              str_detect(endpoint, "pasi|dlqi"),
+                            substr(endpoint, 1, 4), endpoint)) |> 
+  distinct(endpoint_group, type, likelihood, method, effects, dic) |> 
+  arrange(type != "network", likelihood != "multinomial") |> 
+  mutate(ma_id = row_number())
+
+results_table <- bind_rows(results) |> 
+  filter(comp_tx %notin% exc, ref_tx %notin% exc) |> 
+  left_join(model_info, by = c("type", "likelihood", "method", "effects"),
+            relationship = "many-to-one") |> 
+  select(-c(type, likelihood, method, effects, dic, endpoint_group))
+
+dbWriteTable(con, name = "ma_models", value = model_info, overwrite = TRUE)
+dbWriteTable(con, name = "ma_results", value = results_table, overwrite = TRUE)
 
 create_view_sql <- "
   CREATE VIEW v_meta_analysis AS
   SELECT *
-  FROM meta_analysis
+  FROM ma_results
+  LEFT JOIN ma_models ON ma_results.ma_id = ma_models.ma.id
 "
 dbExecute(con, "DROP VIEW IF EXISTS v_meta_analysis")
 dbExecute(con, create_view_sql)
