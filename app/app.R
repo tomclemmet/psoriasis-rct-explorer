@@ -216,6 +216,46 @@ pubs_by_study <- split(.pub_rows, .pub_rows$study_id)
 .study_names <- read_db("SELECT study_id, trial FROM studies")
 trial_name <- setNames(.study_names$trial, as.character(.study_names$study_id))
 
+# Cochrane RoB2 risk-of-bias assessment, read directly from the exported
+# CSV (kept separate from the sqlite db - this is source review data, not
+# something extracted into the db build). Matched to trials by name below.
+ROB_PATH <- file.path(dirname(DB_PATH), "CD011535-risk-of-bias.csv")
+
+ROB_DOMAINS <- c(
+  "Bias arising from the randomization process"        = "D1",
+  "Bias due to deviations from intended interventions" = "D2",
+  "Bias due to missing outcome data"                    = "D3",
+  "Bias in measurement of the outcome"                  = "D4",
+  "Bias in selection of the reported result"            = "D5"
+)
+
+# Outcomes to show in the trial modal, and their display order. CSV outcome
+# labels (after stripping the "Primary/Secondary outcome" prefix) not listed
+# here - e.g. adverse events, PGA 0/1 - are outside the scope of this review
+# and dropped.
+ROB_OUTCOME_ORDER <- c(
+  "PASI 75"                       = 1,
+  "PASI 90"                       = 2,
+  "serious adverse events (SAEs)" = 3,
+  "PASI 75 at 52 weeks"           = 4,
+  "PASI 90 at 52 weeks"           = 5,
+  "quality of life"               = 6
+)
+
+# Strip the "Primary/Secondary outcome – " prefix RevMan puts on every
+# outcome label, leaving e.g. "PASI 75" - used both to match against
+# ROB_OUTCOME_ORDER and as the label shown in the modal.
+rob_outcome_key <- function(x) {
+  trimws(sub("^(Primary|Secondary) outcome[^A-Za-z0-9]*", "", x))
+}
+
+rob_by_trial <- list()
+if (file.exists(ROB_PATH)) {
+  .rob <- read.csv(ROB_PATH, fileEncoding = "UTF-8-BOM", check.names = FALSE,
+                    stringsAsFactors = FALSE)
+  rob_by_trial <- split(.rob, .rob$Study)
+}
+
 # Pre-render one citations-HTML string per study_id at startup, then
 # attribute-escape it for embedding in data-citations="...". A trial
 # typically appears in dozens of rows (one per arm × timepoint), so doing
@@ -402,6 +442,90 @@ fmt_mean_sd_marked <- function(mean, sd, derived, derived_sd = NULL, digits = 1)
 fmt_timepoint <- function(timepoint, unit) {
   unit_lbl <- ifelse(unit == "wk", "wks", unit)
   ifelse(is.na(timepoint), "", paste(timepoint, unit_lbl))
+}
+
+# The RoB2 rationale text arrives as RevMan-exported HTML (<p> blocks,
+# &nbsp; etc.). Strip it down to plain text for the hover tooltip, which
+# sets textContent via the data-tt mechanism (see the mouseover handler in
+# ui()) rather than rendering HTML.
+strip_html <- function(x) {
+  x <- gsub("<[^>]+>", " ", x)
+  x <- gsub("&nbsp;", " ", x, fixed = TRUE)
+  x <- gsub("&amp;",  "&", x, fixed = TRUE)
+  x <- gsub("&lt;",   "<", x, fixed = TRUE)
+  x <- gsub("&gt;",   ">", x, fixed = TRUE)
+  x <- gsub("&quot;", "\"", x, fixed = TRUE)
+  x <- gsub("&#39;",  "'", x, fixed = TRUE)
+  trimws(gsub("\\s+", " ", x))
+}
+
+ROB_BADGE_CLASS <- c("Low risk" = "low", "Some concerns" = "some", "High risk" = "high")
+
+# Badges are plain colour-coded circles (colour = judgement); the judgement
+# is spelled out at the start of the hover tooltip, followed by the
+# rationale text, so it's not colour-only.
+rob_badge <- function(judgement, rationale) {
+  cls <- unname(ROB_BADGE_CLASS[judgement])
+  if (is.na(cls)) cls <- "unknown"
+  esc_attr <- function(x) htmltools::htmlEscape(x, attribute = TRUE)
+  rationale_txt <- strip_html(rationale)
+  tooltip <- if (nzchar(rationale_txt)) {
+    paste0(judgement, ": ", rationale_txt)
+  } else {
+    judgement
+  }
+  sprintf('<span class="rob-badge rob-%s" data-tt="%s"></span>',
+          cls, esc_attr(tooltip))
+}
+
+# Build the trial modal's "Risk of bias" section: one row per RoB2-assessed
+# outcome, one column per domain plus an overall verdict. Only outcomes in
+# ROB_OUTCOME_ORDER are shown, in that order. Badge colour carries the
+# low/some-concerns/high-risk judgement; hovering a badge shows the
+# judgement and rationale text extracted for it.
+build_rob_section <- function(rob_rows) {
+  empty <- '<h4>Risk of bias</h4><p class="trial-modal-empty">
+           No risk-of-bias assessment available.</p>'
+  if (is.null(rob_rows) || !nrow(rob_rows)) return(empty)
+
+  rob_rows$outcome_key <- rob_outcome_key(rob_rows$Outcome)
+  rob_rows <- rob_rows[rob_rows$outcome_key %in% names(ROB_OUTCOME_ORDER), ]
+  if (!nrow(rob_rows)) return(empty)
+  rob_rows <- rob_rows[order(ROB_OUTCOME_ORDER[rob_rows$outcome_key]), ]
+  # Source labels aren't consistently capitalised ("PASI 90" vs "serious
+  # adverse events (SAEs)") - normalise for display.
+  rob_rows$outcome_label <- rob_rows$outcome_key
+  substring(rob_rows$outcome_label, 1, 1) <- toupper(substring(rob_rows$outcome_label, 1, 1))
+
+  esc      <- htmltools::htmlEscape
+  esc_attr <- function(x) htmltools::htmlEscape(x, attribute = TRUE)
+  domain_cols <- names(ROB_DOMAINS)
+  header <- paste0(
+    "<tr><th>Outcome</th>",
+    paste0(sprintf('<th data-tt="%s">%s</th>', esc_attr(domain_cols), esc(ROB_DOMAINS)),
+           collapse = ""),
+    '<th data-tt="Risk-of-bias judgement across all domains for this outcome">',
+    "Overall</th></tr>"
+  )
+  rows <- apply(rob_rows, 1, function(r) {
+    cells <- vapply(domain_cols, function(dc) {
+      rob_badge(r[[paste0("Domain (judgement): ", dc)]],
+                r[[paste0("Domain (support): ", dc)]])
+    }, character(1))
+    overall <- rob_badge(r[["Domain (judgement): Overall bias"]],
+                         r[["Domain (support): Overall bias"]])
+    paste0("<tr><td>", esc(r[["outcome_label"]]), "</td>",
+           paste0("<td>", cells, "</td>", collapse = ""),
+           "<td>", overall, "</td></tr>")
+  })
+  paste0(
+    "<h4>Risk of bias</h4>",
+    '<p class="rob-caption">Cochrane RoB2 assessment, reproduced from ',
+    'Cochrane\'s living systematic review (<a href="https://doi.org/10.1002/14651858.CD011535.pub7" ',
+    'target="_blank" rel="noopener">Sbidian et al., 2025</a>); ',
+    "hover a circle for the judgement and rationale.</p>",
+    '<table class="rob-table">', header, paste(rows, collapse = ""), "</table>"
+  )
 }
 
 # Build the Drug cell text: "Adalimumab 40 mg, 16 wks". Dose/timepoint
@@ -778,7 +902,7 @@ ma_catalog <- list(
 ma_tables_present <- function() {
   con <- dbConnect(SQLite(), DB_PATH, flags = SQLITE_RO)
   on.exit(dbDisconnect(con), add = TRUE)
-  all(c("meta_analysis", "trial_estimates") %in% dbListTables(con))
+  all(c("v_meta_analysis", "v_trial_estimates") %in% dbListTables(con))
 }
 HAS_MA <- ma_tables_present()
 
@@ -2117,6 +2241,8 @@ server <- function(input, output, session) {
       results_html <- '<p class="trial-modal-empty">No results available.</p>'
     }
 
+    rob_html <- build_rob_section(rob_by_trial[[name]])
+
     showModal(modalDialog(
       title = modal_title,
       size  = "l",
@@ -2126,7 +2252,8 @@ server <- function(input, output, session) {
         div(class = "trial-modal-refs", HTML(refs_html)),
         div(class = "trial-modal-data",
             HTML(bl_html),
-            HTML(paste(results_html, collapse = "")))
+            HTML(paste(results_html, collapse = "")),
+            HTML(rob_html))
       )
     ) |> tagAppendAttributes(class = "trial-modal"))
   })

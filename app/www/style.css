@@ -162,6 +162,18 @@ a.trial-pop:hover { text-decoration: underline; }
 .trial-modal-empty { color: #5a6478; font-style: italic; padding: 8px 0; }
 /* Per-trial banding applied by drawCallback above. */
 table.dataTable tr.trial-band > td { background-color: #f3f5f8; }
+
+/* Risk-of-bias (RoB2) badges in the trial modal. */
+.rob-table th:first-child, .rob-table td:first-child { width: 34%; text-align: left; }
+.rob-caption { font-size: 12px; color: #5a6478; margin: -4px 0 8px; }
+.rob-badge {
+  display: inline-block; width: 14px; height: 14px; border-radius: 50%;
+  cursor: default;
+}
+.rob-low     { background: #3bb08f; }
+.rob-some    { background: #d9a441; }
+.rob-high    { background: #c0392b; }
+.rob-unknown { background: #9aa1ab; }
 .title-bar { display: flex; align-items: center; justify-content: space-between;
              gap: 12px; }
 .title-bar .about-btn { margin-right: 4px; }

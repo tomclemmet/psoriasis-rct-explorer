@@ -7,9 +7,10 @@
 *.db
 *.RDS
 *.RData
-*.csv
 *.png
+#*.csv
 output/
+R/meta-analyse/*.csv
 
 # R
 .Rhistory
