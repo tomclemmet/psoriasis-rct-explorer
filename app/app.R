@@ -528,6 +528,16 @@ build_rob_section <- function(rob_rows) {
   )
 }
 
+# Whether this trial has an overall "High risk" RoB2 verdict on PASI 75 or
+# PASI 90 - surfaced as a standalone warning next to "Ref ###" in the modal
+# header, since that's easy to miss buried in the risk-of-bias table below.
+rob_pasi_high_risk <- function(rob_rows) {
+  if (is.null(rob_rows) || !nrow(rob_rows)) return(FALSE)
+  key <- rob_outcome_key(rob_rows$Outcome)
+  any(key %in% c("PASI 75", "PASI 90") &
+        rob_rows[["Domain (judgement): Overall bias"]] == "High risk")
+}
+
 # Build the Drug cell text: "Adalimumab 40 mg, 16 wks". Dose/timepoint
 # omitted when missing.
 fmt_drug <- function(drug, dose, timepoint, unit) {
@@ -2050,6 +2060,9 @@ server <- function(input, output, session) {
           span(class = "trial-modal-refid", sprintf(" · Ref %s", sid))),
       if (!is.na(primary_title) && nzchar(primary_title)) {
         div(class = "trial-modal-subtitle", primary_title)
+      },
+      if (rob_pasi_high_risk(rob_by_trial[[name]])) {
+        div(class = "trial-modal-rob-warning", "High risk of bias in PASI results")
       }
     )
 
