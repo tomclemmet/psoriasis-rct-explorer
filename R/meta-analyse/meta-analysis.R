@@ -20,6 +20,7 @@ pasi <- dbReadTable(con, "v_pasi")
 dlqi <- dbReadTable(con, "v_dlqi")
 safety <- dbReadTable(con, "v_safety")
 join_keys <- colnames(pasi)[seq(1,9)]
+dbDisconnect(con)
 
 data <- pasi |> 
   full_join(dlqi, by = join_keys) |> 
@@ -69,22 +70,22 @@ compare_jags(jags_models) |> View()
 devplot(jags_models$re_rez_u, jags_models$re_rez_a, output = "plot")
 lapply(jags_models, \(x) {process_jags(x)$DIC}) |> as.data.frame()
 
-# jags_models |>
-#   lapply(\(x) {process_jags(x)$summary}) |>
-#   bind_rows(.id = "id") |>
-#   filter(!is.na(drug), ! drug %in% c("Phototherapy", "Mirikizumab", "Placebo",
-#                                      "Izokibep")) |>
-#   left_join(lookup, by = "drug") |>
-#   mutate(drug = forcats::fct_reorder(drug, mean, .fun = base::mean)) |>
-#   ggplot(aes(x = mean, y = drug, colour = id)) +
-#   geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`),
-#                   position = position_dodge(width = 0.7), shape = 15, 
-#                   size = 0.1) +
-#   scale_colour_viridis_d(option = "turbo") +
-#   theme_minimal() +
-#   theme(legend.position = "top") +
-#   facet_wrap(~ class, scales = "free_y")
-# ggsave("output/forest.png", height = 7, width = 10)
+jags_models |>
+  lapply(\(x) {process_jags(x)$summary}) |>
+  bind_rows(.id = "id") |>
+  filter(!is.na(drug), ! drug %in% c("Phototherapy", "Mirikizumab", "Placebo",
+                                     "Izokibep")) |>
+  left_join(lookup, by = "drug") |>
+  mutate(drug = forcats::fct_reorder(drug, mean, .fun = base::mean)) |>
+  ggplot(aes(x = mean, y = drug, colour = id)) +
+  geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`),
+                  position = position_dodge(width = 0.7), shape = 15,
+                  size = 0.1) +
+  scale_colour_viridis_d(option = "turbo") +
+  theme_minimal() +
+  theme(legend.position = "top") +
+  facet_wrap(~ class, scales = "free_y")
+ggsave("output/forest.png", height = 7, width = 10)
 
 drug_rank <- process_jags(jags_models$re_rez_a)$summary |> 
   filter(str_starts(param, "prob")) |> 
@@ -101,14 +102,16 @@ process_jags(jags_models$re_rez_a)$summary |>
     ),
     outcome = factor(
       outcomes[as.numeric(str_extract(param, "(?<=\\[).*?(?=,)"))],
-      levels = c("pasi50", "pasi75", "pasi90", "pasi100")
+      levels = c("pasi50", "pasi75", "pasi90", "pasi100"),
+      labels = c("PASI 50-75", "PASI 75-90", "PASI 90-100", "PASI 100")
     )
   ) |> 
   arrange(drug, desc(outcome)) |> 
   mutate(.by = drug, mean = mean - lag(mean, default = 0), .after = mean) |> 
+  mutate(outcome = forcats::fct_rev(outcome)) |> 
   filter(drug %notin% exc) |> 
   ggplot(aes(x = mean, y = drug)) +
-  geom_col(aes(fill = outcome), position = position_stack(reverse = FALSE)) +
+  geom_col(aes(fill = outcome), position = position_stack(reverse = TRUE)) +
   theme_classic() +
   scale_fill_viridis_d() +
   theme(legend.position = "bottom") +
@@ -671,6 +674,8 @@ for (k in 1:length(drugs)) {
 }
 
 # Write results ================================================================
+con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+
 exc <- c("Izokibep", "Mirikizumab", "Phototherapy")
 
 results$pasi_fe <- NULL
@@ -687,7 +692,10 @@ model_info <- bind_rows(results) |>
 
 results_table <- bind_rows(results) |> 
   filter(comp_tx %notin% exc, ref_tx %notin% exc) |> 
-  left_join(model_info, by = c("type", "likelihood", "method", "effects"),
+  mutate(endpoint_group = if_else(likelihood == "multinomial" & 
+                                    str_detect(endpoint, "pasi|dlqi"),
+                                  substr(endpoint, 1, 4), endpoint)) |> 
+  left_join(model_info, by = c("endpoint_group", "type", "likelihood", "method", "effects", "dic"),
             relationship = "many-to-one") |> 
   select(-c(type, likelihood, method, effects, dic, endpoint_group))
 
@@ -698,7 +706,7 @@ create_view_sql <- "
   CREATE VIEW v_meta_analysis AS
   SELECT *
   FROM ma_results
-  LEFT JOIN ma_models ON ma_results.ma_id = ma_models.ma.id
+  LEFT JOIN ma_models ON ma_results.ma_id = ma_models.ma_id
 "
 dbExecute(con, "DROP VIEW IF EXISTS v_meta_analysis")
 dbExecute(con, create_view_sql)
