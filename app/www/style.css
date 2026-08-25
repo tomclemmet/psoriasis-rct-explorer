@@ -131,6 +131,11 @@ a.trial-pop:hover { text-decoration: underline; }
 .trial-modal-subtitle { font-weight: 400; font-size: 16px; color: #333a44;
                         margin-top: 4px; }
 .trial-modal-refid { font-weight: 400; color: #aaaaaa; }
+.trial-modal-rob-warning {
+  display: inline-block; margin-top: 6px; padding: 3px 10px;
+  background: #fbe4e1; color: #c0392b; border-radius: 8px;
+  font-size: 13px; font-weight: 600;
+}
 .trial-modal-layout { display: flex; gap: 20px; }
 .trial-modal-refs { flex: 0 0 30%; max-width: 30%; overflow-y: auto;
                     max-height: 65vh; font-size: 13px; line-height: 1.45;
