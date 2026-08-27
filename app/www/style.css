@@ -23,7 +23,6 @@ h1, h2, h3, h4, h5 { font-weight: 600; letter-spacing: -0.01em; }
                 letter-spacing: -0.015em; color: #0f1726;
                 line-height: 1.2; }
 .title-bar .title-actions .btn { padding: 5px 12px; }
-.title-bar .title-subtitle { font-size: 13px; color: #6b7280; margin-top: 2px; }
 
 /* --- buttons -------------------------------------------------------- */
 .btn-default {
@@ -59,16 +58,36 @@ h1, h2, h3, h4, h5 { font-weight: 600; letter-spacing: -0.01em; }
 
 .title-actions { display: flex; align-items: center; gap: 8px; }
 .title-actions .btn { padding: 4px 12px; font-size: 13px; }
-.view-summary-filter { font-weight: 600; color: #1F4E8C; }
-.view-summary-sep    { color: #5a6478; }
 #nma { background: #fafbfc; border: 1px solid #e3e6ea; border-radius: 6px; }
-.endpoint-picker { margin: 0; padding: 6px 0; background: #ffffff;
-                   height: 46px; box-sizing: border-box; }
-.endpoint-picker .form-group { margin-bottom: 0; }
+.endpoint-picker,
+.drug-search { margin: 0; padding: 6px 0; background: #ffffff;
+               height: 46px; box-sizing: border-box; }
+.endpoint-picker .form-group,
+.drug-search .form-group { margin-bottom: 0; }
 .endpoint-picker select { width: 100%; height: 34px; padding: 4px 8px;
                           border: 1px solid #ccc; border-radius: 4px;
                           background: #ffffff; font-size: 14px; }
 .endpoint-picker select option:disabled { color: #b0b0b0; }
+/* Match the endpoint dropdown's look; selectize renders its own markup
+   in place of a native <select>, so it needs separate styling. A hard
+   height + overflow:hidden (not just min-height) keeps this clamped to
+   exactly 34px regardless of selectize's own internal metrics - without
+   it, selectize can render a touch taller than a native <select> and spill
+   under the sticky .view-summary bar directly below. flex/align-items
+   centers the single-line content within that fixed height. */
+.drug-search .selectize-input { height: 34px; overflow: hidden;
+                                box-sizing: border-box;
+                                padding: 4px 8px; border: 1px solid #ccc;
+                                border-radius: 4px; font-size: 14px;
+                                box-shadow: none;
+                                display: flex; align-items: center; }
+.drug-search .selectize-input.focus { border-color: #1F4E8C;
+                                      box-shadow: none; }
+.drug-search .selectize-input > input { height: auto; padding: 0; margin: 0; }
+.selectize-dropdown .optgroup-header {
+  font-weight: 600; color: #5a6478; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.02em; padding: 6px 8px 2px;
+}
 /* Use flexbox so left/right columns share the row's full height; sticky
    then has room to stick as the user scrolls the table. */
 /* Lock the page so only the table column scrolls; the diagram never moves. */
@@ -84,17 +103,28 @@ html, body { height: 100%; overflow: hidden; }
                                    flex: 1 1 auto; min-height: 0; }
 .row.split .col-table .tab-content { flex: 1 1 auto; overflow: auto;
                                       min-height: 0; }
-/* Pin the endpoint dropdown at the top of the scrolling tab-content,
-   and pin the summary line + table header directly underneath it. */
-.row.split .col-table .tab-content .endpoint-picker {
-  position: sticky; top: 0; z-index: 3;
+/* Pin the endpoint dropdown + drug/comparison search box at the top of the
+   scrolling tab-content, and pin the summary line + table header directly
+   underneath. .endpoint-controls stacks two 46px children (92px total), so
+   the .view-summary offset below is exactly that. Its own height isn't
+   fixed (min-height only - the summary text can wrap onto a second line
+   at narrow widths), so the thead offset (145px = 92 + 53) is empirically
+   tuned to the summary's typical single-line rendered height rather than
+   computed from min-height; if the summary's content/layout changes
+   materially, re-measure and adjust. */
+/* z-index must beat .view-summary's: sticky+z-index makes this a stacking
+   context, which caps how high its descendants (incl. the open selectize
+   dropdown) can paint relative to siblings - without this the dropdown
+   list renders underneath .view-summary regardless of its own z-index. */
+.row.split .col-table .tab-content .endpoint-controls {
+  position: sticky; top: 0; z-index: 4;
 }
 /* Let the sticky .view-summary's containing block be the scrolling
    .tab-content rather than this Shiny wrapper (which has no extra
    height of its own and would pin sticky in place). */
 .view-summary-wrap { display: contents; }
 .row.split .col-table .tab-content .view-summary {
-  position: sticky; top: 46px; z-index: 3;
+  position: sticky; top: 92px; z-index: 3;
   background: #ffffff; padding: 9px 4px;
   min-height: 52px; box-sizing: border-box;
   font-size: 16px; font-weight: 500; color: #1a1f2c;
@@ -114,7 +144,7 @@ html, body { height: 100%; overflow: hidden; }
 }
 .view-summary .ma-btn .fa { margin-right: 4px; }
 .row.split .col-table .tab-content table.dataTable thead th {
-  position: sticky; top: 98px; background: #ffffff; z-index: 2;
+  position: sticky; top: 145px; background: #ffffff; z-index: 2;
   box-shadow: inset 0 -1px 0 #ddd;
 }
 .app-footer { margin-top: 12px; font-size: 12px; color: #888; }
@@ -249,6 +279,54 @@ table.dataTable tr.trial-band > td { background-color: #f3f5f8; }
 .ma-forest .ma-row:hover .ma-ci   { stroke: #c0392b; }
 .ma-forest .ma-row:hover .ma-square-default { fill: #c0392b; }
 .ma-forest .ma-pooled:hover .ma-diamond { stroke: #c0392b; stroke-width: 1.5; }
+/* --- mobile reflow ---------------------------------------------------
+   Desktop (>=768px) is untouched by everything below: .mobile-tab-bar
+   stays empty/hidden, and the JS in ui() never relocates the nav tabs /
+   endpoint-controls blocks out of their normal spot. Below 768px, that JS
+   moves the nav tabs + the active tab's endpoint-controls (dropdown +
+   drug/comparison search box) into #mobile-tab-bar, and this media query
+   switches the two-column desktop grid into a single stacked column:
+   title, actions, tabs+dropdown+search, network diagram, table. */
+.mobile-tab-bar { display: none; }
+
+@media (max-width: 767px) {
+  .title-bar { flex-direction: column; align-items: flex-start; }
+  .title-bar .title-actions { margin-top: 8px; }
+
+  /* Desktop locks the page and only scrolls the table column; mobile
+     just lets the whole page scroll normally. */
+  html, body { height: auto; overflow: visible; }
+  .container-fluid, .container { height: auto; display: block; }
+
+  .row.split { display: block; flex: none; }
+  .row.split > [class*='col-'] { width: 100%; }
+  .row.split .col-table { display: block; max-height: none; }
+  .row.split .col-table .tabbable { display: block; flex: none; }
+  .row.split .col-table .tab-content { overflow: visible; flex: none; }
+
+  /* Undo desktop's sticky-within-scrolling-column positioning - the page
+     scrolls as a whole now, so these would just pin at odd offsets. */
+  .row.split .col-table .tab-content .endpoint-controls,
+  .row.split .col-table .tab-content .view-summary,
+  .row.split .col-table .tab-content table.dataTable thead th {
+    position: static;
+  }
+
+  .dataTables_wrapper { overflow-x: auto; }
+
+  #nma { height: 380px !important; }
+
+  .mobile-tab-bar {
+    display: block; margin: 0 -15px 12px -15px; padding: 0 15px 10px;
+    border-bottom: 1px solid #e3e6ea;
+  }
+  .mobile-tab-bar .nav-tabs { margin-bottom: 10px; }
+  /* Only the active tab's controls block (relocated here alongside the
+     other two) is shown; JS toggles this class on tab switch. */
+  .mobile-tab-bar .endpoint-controls { display: none; }
+  .mobile-tab-bar .endpoint-controls.controls-active { display: block; }
+}
+
 /* Fast-popup tooltip (JS-driven; replaces native <title>). */
 .ma-tt-popover {
   position: absolute; z-index: 1100; pointer-events: none;
