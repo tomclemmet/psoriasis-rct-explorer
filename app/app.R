@@ -1379,6 +1379,13 @@ build_forest_inputs <- function(state, tab_id, outcome, axis_selection = list())
   NULL
 }
 
+# A "x" dismiss button for the modal header, positioned top-right (easier to
+# reach on mobile than a footer button at the bottom of a scrolled modal).
+modal_close_x <- function() {
+  tags$button(type = "button", class = "close", `data-dismiss` = "modal",
+              `aria-label` = "Close", tags$span(`aria-hidden` = "true", HTML("&times;")))
+}
+
 ui <- fluidPage(
   tags$head(tags$script(HTML("
     // Disable specific <option> values inside a Shiny select input. Used to
@@ -1518,8 +1525,11 @@ ui <- fluidPage(
       document.addEventListener('DOMContentLoaded', function() {
         captureHomes();
         sync();
-        document.addEventListener('shown.bs.tab', function(ev) {
-          var tabValue = ev.target.getAttribute('data-value');
+        // Bootstrap's tab plugin fires this via jQuery's .trigger(), which
+        // doesn't dispatch as a real native DOM event - a plain
+        // addEventListener here never sees it. Must bind through jQuery.
+        $(document).on('shown.bs.tab', function(ev) {
+          var tabValue = $(ev.target).attr('data-value');
           if (tabValue) setActiveControls(tabValue);
         });
       });
@@ -1537,6 +1547,7 @@ ui <- fluidPage(
     })();
   "))),
   tags$head(
+    tags$meta(name = "google", content = "notranslate"),
     tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),
     tags$link(rel = "preconnect", href = "https://fonts.gstatic.com",
               crossorigin = NA),
@@ -1560,9 +1571,7 @@ ui <- fluidPage(
   div(id = "mobile-tab-bar", class = "mobile-tab-bar"),
   fluidRow(class = "split",
     column(6,
-      visNetworkOutput("nma", height = "640px"),
-      tags$footer(class = "app-footer",
-        HTML("&copy; 2026 Thomas Clemmet"))
+      visNetworkOutput("nma", height = "640px")
     ),
     column(6, class = "col-table",
       do.call(tabsetPanel, c(
@@ -2047,8 +2056,8 @@ server <- function(input, output, session) {
 
     if (!HAS_MA) {
       showModal(modalDialog(
-        title = "Meta-analysis", easyClose = TRUE,
-        footer = modalButton("Close"), class = "ma-modal",
+        title = tagList(modal_close_x(), "Meta-analysis"), easyClose = TRUE,
+        footer = NULL, class = "ma-modal",
         tags$p("No precomputed meta-analysis tables found. Run ",
                tags$code("Rscript app/meta_analyse.R"),
                " after ", tags$code("convert.R"),
@@ -2060,8 +2069,8 @@ server <- function(input, output, session) {
     outcomes <- ma_catalog[[tab_id]][[gid]]
     if (is.null(outcomes) || !length(outcomes)) {
       showModal(modalDialog(
-        title = "Meta-analysis", easyClose = TRUE,
-        footer = modalButton("Close"), class = "ma-modal",
+        title = tagList(modal_close_x(), "Meta-analysis"), easyClose = TRUE,
+        footer = NULL, class = "ma-modal",
         tags$p("Meta-analysis isn't configured for this endpoint group yet.")
       ))
       return(invisible(NULL))
@@ -2105,9 +2114,9 @@ server <- function(input, output, session) {
     summary_text <- sprintf("%s | endpoint group: %s", state_lbl, group_lbl)
 
     showModal(modalDialog(
-      title = tagList(icon("chart-column"), " Meta-analysis"),
+      title = tagList(modal_close_x(), icon("chart-column"), " Meta-analysis"),
       easyClose = TRUE, size = "l", class = "ma-modal",
-      footer = modalButton("Close"),
+      footer = NULL,
       div(
         div(class = "ma-summary", summary_text),
         uiOutput("ma_method_toggle"),
@@ -2128,10 +2137,10 @@ server <- function(input, output, session) {
 
   observeEvent(input$show_about, {
     showModal(modalDialog(
-      title = "About",
+      title = tagList(modal_close_x(), "About"),
       easyClose = TRUE,
       size = "l",
-      footer = modalButton("Close"),
+      footer = NULL,
       class = "about-modal",
       tags$div(
         tags$h4("Overview"),
@@ -2391,16 +2400,17 @@ server <- function(input, output, session) {
     rob_html <- build_rob_section(rob_by_trial[[name]])
 
     showModal(modalDialog(
-      title = modal_title,
+      title = tagList(modal_close_x(), modal_title),
       size  = "l",
       easyClose = TRUE,
-      footer = modalButton("Close"),
+      footer = NULL,
       div(class = "trial-modal-layout",
-        div(class = "trial-modal-refs", HTML(refs_html)),
         div(class = "trial-modal-data",
             HTML(bl_html),
             HTML(paste(results_html, collapse = "")),
-            HTML(rob_html))
+            HTML(rob_html)),
+        tags$h4("References"),
+        div(class = "trial-modal-refs", HTML(refs_html))
       )
     ) |> tagAppendAttributes(class = "trial-modal"))
   })
