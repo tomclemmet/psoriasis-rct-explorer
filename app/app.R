@@ -863,6 +863,18 @@ for (.tid in names(endpoint_groups)) {
 nodes_df <- master_network$nodes
 edges_df <- master_network$edges
 
+# Typeahead choices for the drug/comparison search box (one instance per
+# tab, see ui()): single drugs from the master network's nodes, head-to-head
+# comparisons from its edges. Values are prefixed so the server can tell
+# which kind was picked without re-parsing drug names.
+search_choices <- list(
+  Drug = setNames(paste0("node::", nodes_df$id), nodes_df$id),
+  Comparison = setNames(
+    paste0("edge::", edges_df$from, "__", edges_df$to),
+    paste(edges_df$from, "vs", edges_df$to)
+  )
+)
+
 # ---------------------------------------------------------------------------
 # Meta-analysis catalogue. Maps each (tab_id, group_id) in `endpoint_groups`
 # to the precomputed MA outcomes drawn in the modal. `scale` controls the
@@ -1432,6 +1444,97 @@ ui <- fluidPage(
           hide();
       });
     })();
+
+    // Mobile reflow: below MOBILE_BREAKPOINT, physically relocate the nav
+    // tabs <ul> and the three per-tab endpoint-controls <div>s (endpoint
+    // dropdown + drug/comparison search box, bundled together) into
+    // #mobile-tab-bar (placed above the network diagram), so tabs+dropdown
+    // read before the diagram and the diagram reads before the table. Nodes
+    // are moved (not cloned), so Shiny's tab/select bindings - which live on
+    // the element, not its parent - keep working untouched. At or above the
+    // breakpoint everything is moved back to its exact original spot, so
+    // desktop markup/layout is unaffected.
+    (function() {
+      // Kept in lockstep with the @media (max-width: 767px) rules in
+      // style.css - both must trip at the same width.
+      var mq = window.matchMedia('(max-width: 767px)');
+      var slot = null, navEl = null, navHome = null;
+      var controlsBlocks = [];  // [{el, tabValue, parent, next}]
+      var isMobile = false;
+      var ready = false;
+
+      function captureHomes() {
+        slot  = document.getElementById('mobile-tab-bar');
+        navEl = document.querySelector('.row.split .col-table .nav-tabs');
+        if (navEl) navHome = { parent: navEl.parentNode, next: navEl.nextSibling };
+        document.querySelectorAll('.row.split .col-table .tab-pane').forEach(function(pane) {
+          var controls = pane.querySelector('.endpoint-controls');
+          if (!controls) return;
+          controlsBlocks.push({
+            el: controls,
+            tabValue: pane.getAttribute('data-value'),
+            parent: controls.parentNode,
+            next: controls.nextSibling
+          });
+        });
+        ready = !!(slot && navEl && controlsBlocks.length);
+      }
+
+      function setActiveControls(tabValue) {
+        controlsBlocks.forEach(function(c) {
+          c.el.classList.toggle('controls-active', c.tabValue === tabValue);
+        });
+      }
+
+      function currentTabValue() {
+        var active = navEl.querySelector('li.active > a');
+        return active ? active.getAttribute('data-value')
+                      : (controlsBlocks[0] && controlsBlocks[0].tabValue);
+      }
+
+      function goMobile() {
+        slot.appendChild(navEl);
+        controlsBlocks.forEach(function(c) { slot.appendChild(c.el); });
+        setActiveControls(currentTabValue());
+        isMobile = true;
+      }
+
+      function goDesktop() {
+        navHome.parent.insertBefore(navEl, navHome.next);
+        controlsBlocks.forEach(function(c) { c.parent.insertBefore(c.el, c.next); });
+        isMobile = false;
+      }
+
+      // Reads mq.matches fresh each call, so unlike a resize-handler that
+      // snapshots window.innerWidth at whatever moment the event fired,
+      // this can't go stale relative to the breakpoint it's checking.
+      function sync() {
+        if (!ready) return;
+        var wantMobile = mq.matches;
+        if (wantMobile && !isMobile) goMobile();
+        else if (!wantMobile && isMobile) goDesktop();
+      }
+
+      document.addEventListener('DOMContentLoaded', function() {
+        captureHomes();
+        sync();
+        document.addEventListener('shown.bs.tab', function(ev) {
+          var tabValue = ev.target.getAttribute('data-value');
+          if (tabValue) setActiveControls(tabValue);
+        });
+      });
+      // addListener/removeListener (not addEventListener) for older WebKit;
+      // Shiny's desktop app / older embedded browsers may still need it.
+      if (mq.addEventListener) mq.addEventListener('change', sync);
+      else mq.addListener(sync);
+      window.addEventListener('load', sync);
+      // Belt-and-braces: some devtools/CDP-driven viewport changes (device
+      // toolbars, automated resizing) reflow CSS media queries live but
+      // don't reliably dispatch a resize or matchMedia 'change' event. A
+      // cheap poll guarantees this self-corrects within half a second
+      // regardless of whether the browser fired anything.
+      setInterval(sync, 400);
+    })();
   "))),
   tags$head(
     tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),
@@ -1444,24 +1547,20 @@ ui <- fluidPage(
   tags$head(tags$link(rel = "stylesheet", href = "style.css")),
   div(class = "title-bar",
       div(class = "title-heading",
-          titlePanel("Psoriasis Clinical Trial Explorer (working version 0.1.1)"),
-          div(class = "title-subtitle", "Click an edge/node to filter")),
+          titlePanel("Psoriasis Clinical Trial Explorer (working version 0.1.1)")),
       div(class = "title-actions",
-          downloadButton("download_db", "Download SQLite",
+          downloadButton("download_db", "Download data",
                          class = "btn btn-default"),
           actionButton("show_about", "About", icon = icon("circle-info"),
                        class = "btn btn-default about-btn"))
   ),
+  # Mobile-only landing spot for the nav tabs + endpoint picker, relocated
+  # here by JS below when the viewport is narrow (see mobile-reflow script).
+  # Empty / unused at desktop widths.
+  div(id = "mobile-tab-bar", class = "mobile-tab-bar"),
   fluidRow(class = "split",
     column(6,
       visNetworkOutput("nma", height = "640px"),
-      helpText("Click a node to filter to one drug; click an edge to show only",
-               "trials comparing that pair. The network reflects the currently",
-               "selected endpoint — drugs and comparisons without data for that",
-               "endpoint are hidden. Node area is proportional to the number",
-               "of randomised patients contributing to the endpoint; edge",
-               "width is the number of trials with that head-to-head. Click",
-               "empty space to clear the filter."),
       tags$footer(class = "app-footer",
         HTML("&copy; 2026 Thomas Clemmet"))
     ),
@@ -1475,13 +1574,24 @@ ui <- fluidPage(
           tabPanel(
             tab$label,
             value = tab_id,
-            div(class = "endpoint-picker",
-                selectInput(paste0("group_", tab_id),
-                            label = NULL,
-                            choices  = group_choices,
-                            selected = group_choices[[1]],
-                            selectize = FALSE,
-                            width    = "100%")),
+            div(class = "endpoint-controls",
+                div(class = "endpoint-picker",
+                    selectInput(paste0("group_", tab_id),
+                                label = NULL,
+                                choices  = group_choices,
+                                selected = group_choices[[1]],
+                                selectize = FALSE,
+                                width    = "100%")),
+                div(class = "drug-search",
+                    selectizeInput(paste0("drug_search_", tab_id),
+                                    label = NULL,
+                                    choices  = search_choices,
+                                    selected = "",
+                                    width    = "100%",
+                                    options  = list(
+                                      placeholder = "Search a drug or comparison...",
+                                      onInitialize = I('function() { this.setValue(""); }')
+                                    )))),
             uiOutput(paste0("summary_", tab_id),
                      class = "view-summary-wrap"),
             DTOutput(paste0("tbl_", tab_id))
@@ -1495,14 +1605,6 @@ ui <- fluidPage(
 server <- function(input, output, session) {
 
   filter_state <- reactiveVal(NULL)
-
-  # Plain-text rendering of the current filter for the per-tab summary line.
-  filter_text <- function(s) {
-    if (is.null(s))            "All drugs"
-    else if (s$kind == "node") s$drug
-    else if (s$kind == "edge") sprintf("%s ↔ %s", s$from, s$to)
-    else                       "All drugs"
-  }
 
   # For each (tab, group), does the current filter yield any rows after
   # formatting? Cache table queries within one pass since v_safety is reused
@@ -1575,6 +1677,26 @@ server <- function(input, output, session) {
     this_tab    <- tab_id
     tab_cfg     <- endpoint_groups[[this_tab]]
 
+    # Drug/comparison search box -> filter_state. Guarded with an
+    # identical() check against the current filter so that programmatic
+    # updates (the filter_state() observer below, echoing a node/edge click
+    # back into this same box) don't bounce back into another
+    # filter_state() write.
+    observeEvent(input[[paste0("drug_search_", this_tab)]], {
+      val <- input[[paste0("drug_search_", this_tab)]]
+      new_state <- if (is.null(val) || !nzchar(val)) {
+        NULL
+      } else if (startsWith(val, "node::")) {
+        list(kind = "node", drug = sub("^node::", "", val))
+      } else if (startsWith(val, "edge::")) {
+        pair <- strsplit(sub("^edge::", "", val), "__", fixed = TRUE)[[1]]
+        list(kind = "edge", from = pair[1], to = pair[2])
+      } else {
+        return()
+      }
+      if (!identical(new_state, isolate(filter_state()))) filter_state(new_state)
+    }, ignoreInit = TRUE)
+
     output[[paste0("summary_", this_tab)]] <- renderUI({
       gid <- input[[paste0("group_", this_tab)]]
       req(gid)
@@ -1584,9 +1706,6 @@ server <- function(input, output, session) {
       s <- summarise_view(surv)
       div(class = "view-summary",
           tags$span(class = "view-summary-text",
-              tags$span(class = "view-summary-filter",
-                        filter_text(filter_state())),
-              tags$span(class = "view-summary-sep", " • "),
               sprintf("%s across %s • %s",
                       pluralise(s$n_trials,   "trial"),
                       pluralise(s$n_refs,     "publication"),
@@ -1755,6 +1874,21 @@ server <- function(input, output, session) {
 
   # Empty-canvas click -> clear
   observeEvent(input$nma_clear, { filter_state(NULL) })
+
+  # filter_state -> drug/comparison search boxes (all three tabs, kept in
+  # lockstep). Covers node/edge/clear clicks on the network, and also
+  # re-echoes a change made via the search box itself back into it - a
+  # no-op there since updateSelectizeInput with the value it already has
+  # doesn't re-fire the input on the client.
+  observeEvent(filter_state(), {
+    s   <- filter_state()
+    val <- if (is.null(s)) ""
+           else if (s$kind == "node") paste0("node::", s$drug)
+           else paste0("edge::", s$from, "__", s$to)
+    for (tid in names(endpoint_groups)) {
+      updateSelectizeInput(session, paste0("drug_search_", tid), selected = val)
+    }
+  }, ignoreNULL = FALSE)
 
   # Meta-analysis modal. All forest plots are rendered as plain inline SVG
   # at modal-open time -- no Shiny output bindings, no ggplot, no ggiraph.
