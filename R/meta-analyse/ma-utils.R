@@ -1,6 +1,7 @@
 library(stringr)
 library(posterior)
 library(multinma)
+library(ggplot2)
 
 nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, label=NA, t=NA, reft=NA) {
   
@@ -449,7 +450,9 @@ beta_dist_metaprop <- function(mod, effects) {
 }
 
 
-devplot <- function(m1, m2, output = "plot") {
+devplot <- function(m1, m2, output = c("plot", "table")) {
+  output = match.arg(output)
+  
   dev1 <- process_jags(m1)$summary |> 
     select(param, mean, `2.5%`, `97.5%`) |> 
     filter(str_starts(param, "dev\\[")) |> 
@@ -472,7 +475,7 @@ devplot <- function(m1, m2, output = "plot") {
   
   devdev <- full_join(dev1, dev2, by = c("param", "row", "arm")) |> 
     full_join(ids, by = "row") |> 
-    mutate(.by = ref_id, df = max(arm_no))
+    mutate(.by = ref_id, df = max(arm_no), diff = mean.x - mean.y)
   
   if (output == "plot") {
     ggplot(devdev, aes(x = mean.x, y = mean.y)) +
