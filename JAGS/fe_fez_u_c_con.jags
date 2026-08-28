@@ -42,8 +42,12 @@ model {
     z.aux[j] ~ dunif(0,5)                                                       # priors
     z[j] <- z[j-1] + z.aux[j]                                                   # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
   }
-  d[1] <- 0                                                                     # treatment effect is zero for reference treatment
-  for (k in 2:nt){ d[k] ~ dnorm(0,.0001) }                                      # vague priors for treatment effects
+  d[1] <- 0
+  m[1] <- 0
+  for (k in 2:nt) {
+    d[k] ~ dnorm(m[cl[k]], taucl)
+  }
+  for (p in 2:ncl){ m[p] ~ dnorm(0,.0001) }  
 
   totresdev <- sum(resdev[])                                                    # Total Residual Deviance
   beta ~ dnorm(0,.0001)
