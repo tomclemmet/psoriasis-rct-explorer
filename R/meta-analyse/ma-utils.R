@@ -361,24 +361,38 @@ nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, labe
 }
 
 process_jags <- function(mod) {
-  drug_lookup <- data.frame(
-    drug = pasi_drugs,
-    index = paste0("d[", seq(1:length(pasi_drugs)), "]")
-  )
+  if (inherits(mod, "jags_nma_fit")) return(mod)
   
-  list(
+  param_lookup <- data.frame(
+    label = pasi_drugs,
+    param = paste0("d[", seq(1:length(pasi_drugs)), "]")
+  ) |> bind_rows(distinct(classes, class, cl) |> 
+                mutate(label = class, param = paste0("m[", cl, "]")) |>
+                select(-class, -cl))
+  
+  out <- list(
     summary = mod$BUGSoutput$summary |> 
       as_tibble(rownames = "param") |> 
-      left_join(drug_lookup, by = c("param" = "index")) |> 
-      relocate(drug, .after = param) |> 
-      # filter(!str_detect(param, "prob")) |> 
-      arrange(param %in% c("deviance", "totresdev") | str_starts(param, "prob") | str_starts(param, "dev")) |> 
+      left_join(param_lookup, by = "param") |> 
+      relocate(label, .after = param) |> 
       as.data.frame(),
     trace = posterior::as_draws_df(mod$BUGSoutput$sims.array),
     totresdev = mod$BUGSoutput$mean$totresdev,
     pV = mod$BUGSoutput$pV,
     DIC = as.numeric(mod$BUGSoutput$mean$totresdev + mod$BUGSoutput$pV)
   )
+  
+  class(out) <- c("jags_nma_fit", class(out))
+  
+  out
+}
+
+print.jags_nma_fit <- function(m) {
+  sum <- m$summary |> 
+    filter(!str_detect(param, "prob|dev")) |> 
+    arrange(str_detect(param, "beta"))
+  print(sum)
+  invisible(sum)
 }
 
 # Function to compare model outputs given a list of jags models
