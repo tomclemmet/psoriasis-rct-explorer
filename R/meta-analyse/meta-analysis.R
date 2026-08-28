@@ -54,7 +54,32 @@ pasi_ref <- metaprop(
   # incr = 0.5
 )
 
-jags_models <- list(
+settings <- expand.grid(
+  effects = c("fixed", "random"), cutpoints = c("fixed", "random"), 
+  baseline = c("unadjusted", "adjusted"), class = c("independent", "exchangeable"),
+  consistency = c("consistency", "ume"), stringsAsFactors = FALSE) |> 
+  filter(!(class == "exchangeable" & consistency == "ume")) |> 
+  mutate(filename = paste(if_else(effects == "fixed", "fe", "re"),
+                          if_else(cutpoints == "fixed", "fez", "rez"),
+                          if_else(baseline == "unadjusted", "u", "a"),
+                          if_else(class == "independent", "nc", "c"),
+                          if_else(consistency == "consistency", "con", "ume"),
+                          sep = "_"))
+  
+j <- list()
+for (i in 1:nrow(settings)) {
+  message(paste0("Model ", i, " of " , nrow(settings)))
+  j[[settings$filename[i]]] <- pso_jags(
+    pasi_jags, 
+    filename = paste0("JAGS/", settings$filename[i], ".jags"), 
+    effects = settings$effects[i], 
+    cutpoints = settings$cutpoints[i], 
+    baseline = settings$baseline[i],
+    consistency = settings$consistency[i]
+  )
+}
+
+j <- list(
   fe_fez_u = pso_jags(pasi_jags, filename = "JAGS/fe_fez_u.jags", effects = "fixed", cutpoints = "fixed", baseline = "unadjusted"),
   re_fez_u = pso_jags(pasi_jags, filename = "JAGS/re_fez_u.jags", effects = "random", cutpoints = "fixed", baseline = "unadjusted"),
   fe_rez_u = pso_jags(pasi_jags, filename = "JAGS/fe_rez_u.jags", effects = "fixed", cutpoints = "random", baseline = "unadjusted"),
@@ -65,12 +90,12 @@ jags_models <- list(
   re_rez_a = pso_jags(pasi_jags, filename = "JAGS/re_rez_a.jags", effects = "random", cutpoints = "random", baseline = "adjusted")
 )
 
-process_jags(jags_models$fe_fez_u)$summary
-compare_jags(jags_models) |> View()
-devplot(jags_models$re_rez_u, jags_models$re_rez_a, output = "plot")
-lapply(jags_models, \(x) {process_jags(x)$DIC}) |> as.data.frame()
+process_jags(j$fe_fez_u)$summary
+compare_jags(j) |> View()
+devplot(j$re_rez_u, j$re_rez_a, output = "plot")
+lapply(j, \(x) {process_jags(x)$DIC}) |> as.data.frame()
 
-jags_models |>
+j |>
   lapply(\(x) {process_jags(x)$summary}) |>
   bind_rows(.id = "id") |>
   filter(!is.na(drug), ! drug %in% c("Phototherapy", "Mirikizumab", "Placebo",
@@ -87,13 +112,13 @@ jags_models |>
   facet_wrap(~ class, scales = "free_y")
 ggsave("output/forest.png", height = 7, width = 10)
 
-drug_rank <- process_jags(jags_models$re_rez_a)$summary |> 
+drug_rank <- process_jags(j$re_rez_a)$summary |> 
   filter(str_starts(param, "prob")) |> 
   mutate(drug = pasi_drugs[as.numeric(str_extract(param, "(?<=,).*?(?=])"))]) |> 
   slice_head(n = 1, by = drug) |> 
   arrange(mean)
 
-process_jags(jags_models$re_rez_a)$summary |> 
+process_jags(j$re_rez_a)$summary |> 
   filter(str_starts(param, "prob")) |> 
   mutate(
     drug = factor(
@@ -119,28 +144,28 @@ process_jags(jags_models$re_rez_a)$summary |>
 ggsave("output/props.png", height = 7, width = 4)
   
 
-results$fe_fez_u <- nma_results(jags_models$fe_fez_u, 
+results$fe_fez_u <- nma_results(j$fe_fez_u, 
                                 effects = "fixed", 
                                 method = "standard")
-results$re_fez_u <- nma_results(jags_models$re_fez_u, 
+results$re_fez_u <- nma_results(j$re_fez_u, 
                                 effects = "random", 
                                 method = "standard")
-results$fe_rez_u <- nma_results(jags_models$fe_rez_u, 
+results$fe_rez_u <- nma_results(j$fe_rez_u, 
                                 effects = "fixed", 
                                 method = "REZ")
-results$re_rez_u <- nma_results(jags_models$re_rez_u, 
+results$re_rez_u <- nma_results(j$re_rez_u, 
                                 effects = "random",
                                 method = "REZ")
-results$fe_fez_a <- nma_results(jags_models$fe_fez_a, 
+results$fe_fez_a <- nma_results(j$fe_fez_a, 
                                 effects = "fixed", 
                                 method = "baseline adjusted")
-results$re_fez_a <- nma_results(jags_models$re_fez_a, 
+results$re_fez_a <- nma_results(j$re_fez_a, 
                                 effects = "random", 
                                 method = "baseline adjusted")
-results$fe_rez_a <- nma_results(jags_models$fe_rez_a, 
+results$fe_rez_a <- nma_results(j$fe_rez_a, 
                                 effects = "fixed", 
                                 method = "REZ, baseline adjusted")
-results$re_rez_a <- nma_results(jags_models$re_rez_a, 
+results$re_rez_a <- nma_results(j$re_rez_a, 
                                 effects = "random", 
                                 method = "REZ, baseline adjusted")
 
