@@ -5,11 +5,15 @@ pso_jags <- function(
     filename = "JAGS/temp.jags",
     effects = c("fixed", "random"),
     cutpoints = c("fixed", "random"), 
-    baseline = c("unadjusted", "adjusted")
+    baseline = c("unadjusted", "adjusted"),
+    class = c("independent", "exchangeable"),
+    consistency = c("consistency", "ume")
 ) {
   effects <- match.arg(effects)
   cutpoints <- match.arg(cutpoints)
   baseline <- match.arg(baseline)
+  class <- match.arg(class)
+  consistency <- match.arg(consistency)
   
   if (baseline == "unadjusted") {
     data$mmu <- NULL
@@ -71,9 +75,23 @@ model {
     resdev[i] <- sum(dev[i, 1:na[i]])                                            # summed residual deviance contribution for this trial
   }"
   
-  delta_fe<- "
+  delta_re_ume <- "
+    for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
+      delta[i, k] ~ dnorm(d[t[i, 1], t[i, k]], tau)
+    }
+    resdev[i] <- sum(dev[i, 1:na[i]])                                            # summed residual deviance contribution for this trial
+  }"
+  
+  delta_fe <- "
     for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
       delta[i, k] <- d[t[i, k]] - d[t[i, 1]]
+    }
+    resdev[i] <- sum(dev[i, 1:na[i]])                                            # summed residual deviance contribution for this trial
+  }"
+  
+  delta_fe_ume <- "
+    for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
+      delta[i, k] <- d[t[i, 1], t[i, k]]
     }
     resdev[i] <- sum(dev[i, 1:na[i]])                                            # summed residual deviance contribution for this trial
   }"
@@ -97,15 +115,34 @@ model {
     }
   }"
   
-  priors <- "
-  totresdev <- sum(resdev[])                                                    # Total Residual Deviance
+  d_priors <- "
   d[1] <- 0                                                                     # treatment effect is zero for reference treatment
   for (k in 2:nt){ d[k] ~ dnorm(0,.0001) }                                      # vague priors for treatment effects
+"
+  d_priors_ume <- "
+  for (k in 1:nt) { d[k,k] <- 0 }                                               # treatment effect is zero for reference treatment
+  for (c in 1:(nt - 1)) {
+    for (k in (c + 1):nt) { d[c, k] ~ dnorm(0, 0.0001) }
+  }
+"
+  d_priors_class <- "
+  d[1] <- 0
+  m[1] <- 0
+  for (k in 2:nt) {
+    d[k] ~ dnorm(m[cl[k]], taucl)
+  }
+  for (p in 2:ncl){ m[p] ~ dnorm(0,.0001) }  
+"
+  
+  priors <- "
+  totresdev <- sum(resdev[])                                                    # Total Residual Deviance
   beta ~ dnorm(0,.0001)
-  sd ~ dunif(0, 5)                                                               # vague prior for between-trial SD
+  sd ~ dunif(0, 5)                                                              # vague prior for between-trial SD
   sdz ~ dunif(0, 5)
+  sdcl ~ dunif(0, 5)
   tau <- pow(sd,-2)   
   tauz <- pow(sdz, -2) # between-trial precision = (1 / between-trial variance)
+  taucl <- pow(sdcl, -2)
   mubar <- mean(mu[])
   
   
@@ -117,14 +154,14 @@ model {
   probs_fez <- "
   for (k in 1:nt) {
     for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + z[j]) }
-  } 
-  # *** PROGRAM ENDS 
-}"
+  }"
   
-probs_rez <- "
+  probs_rez <- "
   for (k in 1:nt) {
     for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + zeta[k, j]) }
-  } 
+  }"
+  
+  end <- "
   # *** PROGRAM ENDS 
 }"
   
@@ -135,10 +172,16 @@ probs_rez <- "
     if (baseline == "unadjusted") "" else baseline_adj,
     deviance,
     phi,
-    if(effects == "fixed") delta_fe else delta_re,
+    switch(paste(effects, consistency),
+           "random consistency" = delta_re,
+           "random ume" = delta_re_ume,
+           "fixed consistency" = delta_fe,
+           "fixed ume" = delta_fe_ume),
     if (cutpoints == "fixed") fez else rez,
+    if (consistency == "consistency") {if (class == "exchangeable") d_priors_class else d_priors} else d_priors_ume,
     priors,
-    if (cutpoints == "fixed") probs_fez else probs_rez
+    if (consistency == "consistency") {if (cutpoints == "fixed") probs_fez else probs_rez} else NULL,
+    end
   )
   
   writeLines(model_code, filename)
@@ -148,17 +191,43 @@ probs_rez <- "
     if (effects == "random") "sd" else NULL,
     if (cutpoints == "random") "sdz" else NULL,
     if (baseline == "adjusted") c("beta", "mubar") else NULL,
+    if (class == "exchangeable") "m" else NULL,
     "totresdev",
     "dev"
   )
   
   message(paste0("Fitting psoriasis NMA for PASI response with ", effects, 
-                 " effects, ", cutpoints, " cutpoints, and ", 
-                 if (baseline == "adjusted") "baseline adjustment" else 
-                   "no baseline adjustment"))
+                 " effects, ", cutpoints, " cutpoints, ", 
+                 if (baseline == "adjusted") "baseline adjustment" else "no baseline adjustment"),
+                 if (class == "exchangeable") ", exchangeable class effects" else NULL)
   
   jags(
     data = data, parameters.to.save = params, inits = NULL, 
-    model.file = filename, n.chains = 2, n.iter = 4000, n.burnin = 2000, n.thin = 1
+    model.file = filename, n.chains = 2, n.iter = 1000, n.burnin = 500, n.thin = 1
   )
 }
+
+
+# source("R/meta-analyse/wide_format.R")
+# source("r/meta-analyse/ma-utils.R")
+# m <- pso_jags(
+#   pasi_jags, 
+#   filename = "JAGS/re_rez_a_class.jags", 
+#   effects = "random", 
+#   cutpoints = "random", 
+#   baseline = "adjusted",
+#   class = "exchangeable"
+# )
+# m0 <- pso_jags(
+#   pasi_jags, 
+#   filename = "JAGS/re_rez_a_class.jags", 
+#   effects = "random", 
+#   cutpoints = "random", 
+#   baseline = "adjusted",
+#   class = "independent"
+# )
+# 
+# process_jags(m)$DIC
+# process_jags(m0)$DIC
+# devplot(m, m0)
+# compare_jags(list(m, m0))
