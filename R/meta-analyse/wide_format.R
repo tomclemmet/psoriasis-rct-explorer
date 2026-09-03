@@ -1,7 +1,7 @@
 library(DBI)
 library(dplyr)
 library(tidyr)
-class_lookup <- read.csv("R/meta-analyse/trt_class.csv")
+drug_class_lookup <- read.csv("R/meta-analyse/trt_class.csv")
 
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 
@@ -21,7 +21,7 @@ nth_non_na <- function(n, ...) {
 }
 
 pasi_wide <- pasi |> 
-  left_join(class_lookup, by = "drug") |> 
+  left_join(drug_class_lookup, by = "drug") |> 
   select(trial, ref_id, arm_no, drug, class, n:pasi100) |> 
   filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
   group_by(ref_id) |> 
@@ -56,8 +56,8 @@ pasi_wide <- pasi |>
   pivot_wider(names_from = arm_no, values_from = t:n5, names_glue = "a{arm_no}{.value}") |> 
   relocate(na, .before = nc)
 
-classes <- pasi |> 
-  left_join(class_lookup, by = "drug") |> 
+pasi_id_lookup <- pasi |> 
+  left_join(drug_class_lookup, by = "drug") |> 
   select(trial, ref_id, arm_no, drug, class, n:pasi100) |> 
   filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
   group_by(ref_id) |> 
@@ -67,17 +67,25 @@ classes <- pasi |>
          cl = as.numeric(factor(class, levels = c("placebo", setdiff(sort(class), "placebo"))))) |> 
   distinct(drug, class, t, cl) |> arrange(t) |> as.data.frame()
 
+row_lookup <- pasi_wide |> 
+  mutate(row = row_number()) |> 
+  select(row, ref_id, a1t, a2t, a3t, a4t, a5t) |> 
+  pivot_longer(a1t:a5t, names_to = "arm_no", values_to = "t") |> 
+  mutate(arm_no = as.numeric(substr(arm_no, 2, 2))) |> 
+  filter(!is.na(t)) |> 
+  mutate(drug = pasi_id_lookup$drug[t]) |> 
+  left_join(distinct(pasi, trial, ref_id), by = "ref_id", relationship = "many-to-one")
 
 pasi_jags <- list(
   ns = nrow(pasi_wide),
-  nt = max(classes$t),
-  ncl = max(classes$cl),
+  nt = max(pasi_id_lookup$t),
+  ncl = max(pasi_id_lookup$cl),
   Cmax = max(pasi_wide$nc),
-  mmu = 0.6,
+  mmu = 0.45,
   na = pasi_wide$na,
   nc = pasi_wide$nc,
   t = select(pasi_wide, a1t:a5t) |> as.matrix(),
-  cl = classes$cl,
+  cl = pasi_id_lookup$cl,
   C = select(pasi_wide, C1:C5) |> as.matrix(),
   r = list(as.matrix(select(pasi_wide, a1r1:a5r1)),
            as.matrix(select(pasi_wide, a1r2:a5r2)),
@@ -92,35 +100,3 @@ pasi_jags <- list(
            as.matrix(select(pasi_wide, a1n5:a5n5))) |> 
     simplify2array()
 )
-
-
-# source("R/meta-analyse/pasi-jags-nma.R")
-# source("R/meta-analyse/ma-utils.R")
-# m <- pso_jags(pasi_jags, filename = "JAGS/re_fez_u.jags", effects = "random", cutpoints = "fixed", baseline = "unadjusted") 
-# process_jags(m)$summary
-
-
-
-pasi |> 
-  left_join(class_lookup, by = "drug") |> 
-  select(trial, ref_id, arm_no, drug, class, n:pasi100) |> 
-  filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
-  group_by(ref_id) |> 
-  mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
-  ungroup() |> 
-  mutate(t = as.numeric(factor(drug, levels = pasi_drugs)), 
-         cl = as.numeric(factor(class, levels = c("placebo", setdiff(class, "placebo")))), 
-         .after = drug) |> 
-  distinct(drug, t) |> arrange(t) |> as.data.frame()
-
-pasi |> 
-  left_join(class_lookup, by = "drug") |> 
-  select(trial, ref_id, arm_no, drug, class, n:pasi100) |> 
-  filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
-  group_by(ref_id) |> 
-  mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
-  ungroup() |> 
-  mutate(t = as.numeric(factor(drug, levels = pasi_drugs)), 
-         cl = as.numeric(factor(class, levels = c("placebo", setdiff(sort(class), "placebo")))), 
-         .after = drug) |> 
-  distinct(class, cl) |> arrange(cl) |> as.data.frame()
