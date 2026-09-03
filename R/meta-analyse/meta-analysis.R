@@ -47,11 +47,7 @@ source("R/meta-analyse/pasi-jags-nma.R")
 pasi_ref <- metaprop(
   event = pasi50,
   n = n,
-  data = filter(data, drug == "Placebo", !is.na(pasi50)),
-  # sm = "PLOGIT",
-  # method = "Inverse",
-  # method.incr = "all",
-  # incr = 0.5
+  data = filter(data, drug == "Placebo", !is.na(pasi50))
 )
 
 settings <- expand.grid(
@@ -70,7 +66,6 @@ for (i in 1:nrow(settings)) {
   message(paste0("Model ", i, " of " , nrow(settings)))
   j[[settings$filename[i]]] <- pso_jags(
     pasi_jags, 
-    filename = paste0("JAGS/", settings$filename[i], ".jags"), 
     effects = settings$effects[i], 
     cutpoints = settings$cutpoints[i], 
     baseline = settings$baseline[i],
@@ -79,11 +74,23 @@ for (i in 1:nrow(settings)) {
   )
 }
 
-mod <- pso_jags(pasi_jags, consistency = "ume")
-process_jags(j$re_rez_a_c_ume)
+j$re_rez_u_c_con <- pso_jags(
+  pasi_jags,
+  filename = "JAGS/re_rez_u_c_con.jags",
+  effects = "random",
+  cutpoints = "random",
+  class = "exchangeable"
+)
 
-compare_jags(j)
-devplot(j$re_rez_u_nc_con, j$re_rez_a_nc_con, output = "plot")
+mod <- pso_jags(pasi_jags, consistency = "ume")
+mod <- j$re_rez_a_nc_con |> process_jags()
+process_jags(j$fe_rez_u_c_con)
+
+compare_jags(j) |> writexl::write_xlsx("output/nma_all.xlsx")
+devplot(j$re_rez_u_nc_con, j$re_rez_u_nc_ume, output = "plot", xlab = "Inconsistency (UME) model", ylab = "Consistency model", filter = "Izokibep") +
+  coord_cartesian(xlim = c(0, 10), ylim = c(0, 10))
+devplot(j$re_rez_u_nc_con, j$re_rez_u_nc_ume, output = "table", filter= "Izokibep") |> View()
+ggsave("output/devdev.png", height = 7, width = 7)
 lapply(j, \(x) {process_jags(x)$DIC}) |> as.data.frame()
 
 j |>
@@ -103,13 +110,13 @@ j |>
   facet_wrap(~ class, scales = "free_y")
 ggsave("output/forest.png", height = 7, width = 10)
 
-drug_rank <- process_jags(j$re_rez_a_c_con)$summary |> 
+drug_rank <- process_jags(j$re_rez_u_c_con)$summary |> 
   filter(str_starts(param, "prob")) |> 
   mutate(drug = pasi_drugs[as.numeric(str_extract(param, "(?<=,).*?(?=])"))]) |> 
   slice_head(n = 1, by = drug) |> 
   arrange(mean)
 
-process_jags(j$re_rez_a_c_con)$summary |> 
+process_jags(j$re_rez_u_c_con)$summary |> 
   filter(str_starts(param, "prob")) |> 
   mutate(
     drug = factor(
@@ -130,9 +137,10 @@ process_jags(j$re_rez_a_c_con)$summary |>
   geom_col(aes(fill = outcome), position = position_stack(reverse = TRUE)) +
   theme_classic() +
   scale_fill_viridis_d() +
-  theme(legend.position = "bottom") +
-  labs(title = "RE REZ with baseline adjustment")
-ggsave("output/props.png", height = 7, width = 4)
+  theme(legend.position = "right", axis.title.y = element_blank(), legend.title = element_blank(),
+        plot.title = element_text(face = "bold")) +
+  labs(title = "Predicted PASI Response", x = "Proportion")
+ggsave("output/props.svg", height = 5, width = 6)
   
 
 results$fe_fez_u <- nma_results(j$fe_fez_u_nc_con, 
@@ -490,10 +498,6 @@ for (i in 1:length(bin_outcomes)) {
   bin_ref <- metaprop(
     event = placebo_data[[bin_outcomes[i]]],
     n = n,
-    # sm = "PLOGIT",
-    # method = "Inverse",
-    # method.incr = "all",
-    # incr = 0.5,
     data = placebo_data
   )
   
@@ -639,11 +643,7 @@ for (i in 1:length(outcomes)) {
     fit <- metaprop(
       univar[[outcomes[i]]], 
       univar$n, 
-      studylab = univar$ref_id,
-      # sm = "PLOGIT",
-      # method = "Inverse",
-      # method.incr = "all",
-      # incr = 0.5
+      studylab = univar$ref_id
     )
     results[[paste(outcomes[i], drugs[k])]] <- nma_results(
       fit, label = outcomes[i], t = drugs[k]
