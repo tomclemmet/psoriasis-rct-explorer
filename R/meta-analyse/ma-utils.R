@@ -366,21 +366,62 @@ process_jags <- function(mod) {
   param_lookup <- data.frame(
     label = pasi_drugs,
     param = paste0("d[", seq(1:length(pasi_drugs)), "]")
-  ) |> bind_rows(distinct(classes, class, cl) |> 
+  ) |> bind_rows(distinct(pasi_id_lookup, class, cl) |> 
                 mutate(label = class, param = paste0("m[", cl, "]")) |>
                 select(-class, -cl))
   
+  fitted_values <- mod$BUGSoutput$summary |>
+    as_tibble(rownames = "param") |> 
+    as.data.frame() |> 
+    select(param, mean, `2.5%`, `97.5%`, Rhat) |> 
+    filter(str_starts(param, "rhat\\[")) |> 
+    separate_wider_regex(
+      param, 
+      patterns = c(".*\\[", id_row = "\\d+", ",\\s*", id_arm = "\\d+", ",\\s*", 
+                   id_cat = "\\d+", "\\].*")
+    ) |> 
+    mutate(across(starts_with("id_"), as.integer)) |> 
+    rename(fitted = mean) |> 
+    mutate(actual = pasi_jags$r[cbind(id_row, id_arm, id_cat)]) |> 
+    select(starts_with("id"), fitted, actual)
+  
   out <- list(
-    summary = mod$BUGSoutput$summary |> 
+    results = mod$BUGSoutput$summary |>
       as_tibble(rownames = "param") |> 
+      filter(!(str_detect(param, "d\\[") & str_detect(param, ","))) |> 
       left_join(param_lookup, by = "param") |> 
       relocate(label, .after = param) |> 
       as.data.frame(),
+    
     trace = posterior::as_draws_df(mod$BUGSoutput$sims.array),
+    
+    dev_table = mod$BUGSoutput$summary |>
+      as_tibble(rownames = "param") |> 
+      as.data.frame() |> 
+      select(param, mean, `2.5%`, `97.5%`, Rhat) |> 
+      filter(str_starts(param, "dv\\[")) |> 
+      separate_wider_regex(
+        param, 
+        patterns = c(".*\\[", id_row = "\\d+", ",\\s*", id_arm = "\\d+", ",\\s*", 
+                     id_cat = "\\d+", "\\].*")
+      ) |> 
+      mutate(across(starts_with("id_"), as.integer),
+             cat = c("PASI 0-50", "PASI 50-75", "PASI 75-90", "PASI 90-100")[id_cat]) |> 
+      left_join(row_lookup, by = c("id_row" = "row", "id_arm" = "arm_no"),
+                relationship = "many-to-one") |> 
+      arrange(ref_id, id_arm, cat) |> 
+      left_join(fitted_values, by = c("id_row", "id_arm", "id_cat")),
+    
     totresdev = mod$BUGSoutput$mean$totresdev,
+    
     pV = mod$BUGSoutput$pV,
+    
     DIC = as.numeric(mod$BUGSoutput$mean$totresdev + mod$BUGSoutput$pV)
   )
+  
+  out$summary <- out$results |> 
+    filter(!str_detect(param, "prob|dv\\[")) |> 
+    arrange(str_detect(param, "beta|mubar|totresdev|deviance"))
   
   class(out) <- c("jags_nma_fit", class(out))
   
@@ -388,11 +429,9 @@ process_jags <- function(mod) {
 }
 
 print.jags_nma_fit <- function(m) {
-  sum <- m$summary |> 
-    filter(!str_detect(param, "prob|dev")) |> 
-    arrange(str_detect(param, "beta"))
-  print(sum)
-  invisible(sum)
+  message(paste0("pV: ", m$pV, ", DIC: ", m$DIC))
+  print(m$summary)
+  invisible(m$summary)
 }
 
 # Function to compare model outputs given a list of jags models
@@ -406,7 +445,7 @@ compare_jags <- function(mods) {
   
   tab <- data.frame(
     param = process_jags(mods[[which.max(n_params)]])$summary$param,
-    drug = process_jags(mods[[which.max(n_params)]])$summary$drug
+    drug = process_jags(mods[[which.max(n_params)]])$summary$label
   )
   
   for (i in 1:length(mods)) {
@@ -464,38 +503,23 @@ beta_dist_metaprop <- function(mod, effects) {
 }
 
 
-devplot <- function(m1, m2, output = c("plot", "table")) {
+devplot <- function(m1, m2, output = c("plot", "table"), xlab = "Model 1", ylab = "Model 2") {
   output = match.arg(output)
   
-  dev1 <- process_jags(m1)$summary |> 
-    select(param, mean, `2.5%`, `97.5%`) |> 
-    filter(str_starts(param, "dev\\[")) |> 
-    mutate(row = as.numeric(str_extract(param, pattern = "(?<=\\[).*?(?=,)")),
-           arm = as.numeric(str_extract(param, pattern = "(?<=,).*?(?=\\])"))) 
-    # mutate(.by = trial, df = max(as.numeric(str_extract(param, pattern = "(?<=,).*?(?=\\])")))) |> 
-    # rename_with(\(x) paste0(x, "_x"))
-  dev2 <- process_jags(m2)$summary |> 
-    select(param, mean, `2.5%`, `97.5%`) |> 
-    filter(str_starts(param, "dev\\[")) |> 
-    mutate(row = as.numeric(str_extract(param, pattern = "(?<=\\[).*?(?=,)")),
-           arm = as.numeric(str_extract(param, pattern = "(?<=,).*?(?=\\])"))) 
-    # mutate(.by = trial, df = max(as.numeric(str_extract(param, pattern = "(?<=,).*?(?=\\])")))) |> 
-    # rename_with(\(x) paste0(x, "_y"))
-  
-  ids <- pasi_wide |> 
-    select(ref_id) |> 
-    mutate(row = row_number()) |> 
-    right_join(select(pasi, trial, ref_id, arm_no, drug), by = "ref_id")
-  
-  devdev <- full_join(dev1, dev2, by = c("param", "row", "arm")) |> 
-    full_join(ids, by = "row") |> 
-    mutate(.by = ref_id, df = max(arm_no), diff = mean.x - mean.y)
+  devdev <- inner_join(process_jags(m1)$dev_table, process_jags(m2)$dev_table, 
+                       by = c("id_row", "id_arm", "id_cat", "cat", "trial",
+                              "ref_id", "t", "drug")) |> 
+    mutate(.by = ref_id, diff = mean.x - mean.y) |> 
+    select(-starts_with("id"), -t) |> 
+    relocate(ref_id, trial, drug, cat)
   
   if (output == "plot") {
     ggplot(devdev, aes(x = mean.x, y = mean.y)) +
       geom_point(alpha = 0.5) +
       geom_abline(intercept = 0, slope = 1, linetype = 2, colour = "red") +
-      theme_classic()
+      theme_classic() +
+      labs(title = "Deviance-deviance plot", x = xlab, y = ylab) +
+      scale_color_viridis_d()
   } else if (output == "table") {
     devdev
   }
