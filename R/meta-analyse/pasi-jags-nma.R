@@ -2,7 +2,8 @@ library(R2jags)
 
 pso_jags <- function(
     data, 
-    filename = "JAGS/temp.jags",
+    filename = NA,
+    niter = 2000,
     effects = c("fixed", "random"),
     cutpoints = c("fixed", "random"), 
     baseline = c("unadjusted", "adjusted"),
@@ -104,7 +105,7 @@ model {
   }"
   
   rez <- "                                                                    
-  for (i in 1:ns) {zeta[i, 1] <- 0 } # set z50=0
+  for (i in 1:nt) {zeta[i, 1] <- 0 } # set z50=0
   z[1] <- 0
   for (j in 2:(Cmax-1)) {                                                         # Set priors for z, for any number of categories
     z.aux[j] ~ dunif(0,5)                                                       # priors
@@ -184,6 +185,17 @@ model {
     end
   )
   
+  if(is.na(filename)) {
+    filename <- paste0("JAGS/", paste(
+      if_else(effects == "random", "re", "fe"),
+      if_else(cutpoints == "random", "rez", "fez"),
+      if_else(baseline == "adjusted", "a", "u"),
+      if_else(class == "exchangeable", "c", "nc"),
+      if_else(consistency == "ume", "ume", "con"),
+      sep = "_"
+    ), ".jags")
+  }
+  
   writeLines(model_code, filename)
   
   params <- c(
@@ -191,19 +203,19 @@ model {
     if (effects == "random") "sd" else NULL,
     if (cutpoints == "random") "sdz" else NULL,
     if (baseline == "adjusted") c("beta", "mubar") else NULL,
-    if (class == "exchangeable") "m" else NULL,
+    if (class == "exchangeable") c("m", "sdcl") else NULL,
     "totresdev",
-    "dev"
+    "dv", "rhat"
   )
   
-  message(paste0("Fitting psoriasis NMA for PASI response with ", effects, 
+  message(paste0("Fitting ", if_else(consistency == "ume", "UME ", ""), "NMA for PASI response with ", effects, 
                  " effects, ", cutpoints, " cutpoints, ", 
-                 if (baseline == "adjusted") "baseline adjustment" else "no baseline adjustment"),
-                 if (class == "exchangeable") ", exchangeable class effects" else NULL)
+                 if_else(baseline == "adjusted", "baseline adjustment", "no baseline adjustment"),
+                 if (class == "exchangeable") ", exchangeable class effects" else NULL))
   
   jags(
     data = data, parameters.to.save = params, inits = NULL, 
-    model.file = filename, n.chains = 2, n.iter = 1000, n.burnin = 500, n.thin = 1
+    model.file = filename, n.chains = 2, n.iter = niter, n.burnin = niter/2, n.thin = 1
   )
 }
 
