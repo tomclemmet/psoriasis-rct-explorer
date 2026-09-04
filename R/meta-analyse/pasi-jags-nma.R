@@ -155,7 +155,10 @@ model {
   d_priors_ume <- "
   for (k in 1:nt) { d[k,k] <- 0 }                                               # treatment effect is zero for reference treatment
   for (c in 1:(nt - 1)) {
-    for (k in (c + 1):nt) { d[c, k] ~ dnorm(0, 0.0001) }
+    for (k in (c + 1):nt) {
+      d[c, k] ~ dnorm(0, 0.0001)
+      d[k, c] <- -d[c, k]                                                       # allows treatments to be out of order
+    }
   }
 "
   d_priors_class <- "
