@@ -5,7 +5,7 @@ pso_jags <- function(
     filename = NA,
     niter = 2000,
     effects = c("fixed", "random"),
-    cutpoints = c("fixed", "random"), 
+    cutpoints = c("fixed", "treatment", "trial",  "arm"),
     baseline = c("unadjusted", "adjusted"),
     class = c("independent", "exchangeable"),
     consistency = c("consistency", "ume")
@@ -37,13 +37,15 @@ model {
         "
   theta <- "theta[i, k, j] <- mu[i] - delta[i, k] + "
   
-  z_1d <- "z[C[i, j + 1] - 1]"
-  z_2d <- "zeta[t[i, k], C[i, j + 1] - 1]"
+  z <- "z[C[i, j + 1] - 1]"
+  z_tx <- "zeta[t[i, k], C[i, j + 1] - 1]"
+  z_trial <- "zeta[i, C[i, j + 1] - 1]"
+  z_arm <- "zeta[i, k, C[i, j + 1] - 1]"
   
   baseline_adj <- " + beta * (mu[i] - mmu) * (1 - equals(k, 1))"
   
   deviance <- "
-        rhat[i, k, j] <- q[i, k, j] * n[i, k, j]                                  # predicted number events
+        rhat[i, k, j] <- q[i, k, j] * n[i, k, j]                                # predicted number events
         dv[i, k, j] <- 2 * (                                                    # Deviance contribution of each category  
           r[i, k, j] * 
             (log(max(r[i, k, j], 1e-10)) - log(max(rhat[i, k, j], 1e-10))) +            
@@ -73,46 +75,76 @@ model {
       w[i, k] <- (delta[i, k] - d[t[i, k]] + d[t[i, 1]])                        # adjustment, multi-arm RCTs
       sw[i, k] <- sum(w[i, 1:(k-1)]) / (k-1)                                    # cumulative adjustment for multi-arm trials
     }
-    resdev[i] <- sum(dev[i, 1:na[i]])                                            # summed residual deviance contribution for this trial
+    resdev[i] <- sum(dev[i, 1:na[i]])                                           # summed residual deviance contribution for this trial
   }"
   
   delta_re_ume <- "
     for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
       delta[i, k] ~ dnorm(d[t[i, 1], t[i, k]], tau)
     }
-    resdev[i] <- sum(dev[i, 1:na[i]])                                            # summed residual deviance contribution for this trial
+    resdev[i] <- sum(dev[i, 1:na[i]])                                           # summed residual deviance contribution for this trial
   }"
   
   delta_fe <- "
     for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
       delta[i, k] <- d[t[i, k]] - d[t[i, 1]]
     }
-    resdev[i] <- sum(dev[i, 1:na[i]])                                            # summed residual deviance contribution for this trial
+    resdev[i] <- sum(dev[i, 1:na[i]])                                           # summed residual deviance contribution for this trial
   }"
   
   delta_fe_ume <- "
     for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
       delta[i, k] <- d[t[i, 1], t[i, k]]
     }
-    resdev[i] <- sum(dev[i, 1:na[i]])                                            # summed residual deviance contribution for this trial
+    resdev[i] <- sum(dev[i, 1:na[i]])                                           # summed residual deviance contribution for this trial
   }"
   
   fez <- "
   z[1] <- 0                                                                     # set z50=0
-  for (j in 2:(Cmax-1)) {                                                         # Set priors for z, for any number of categories
+  for (j in 2:(Cmax-1)) {                                                       # Set priors for z, for any number of categories
     z.aux[j] ~ dunif(0,5)                                                       # priors
     z[j] <- z[j-1] + z.aux[j]                                                   # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
   }"
   
-  rez <- "                                                                    
+  rez_tx <- "
   for (i in 1:nt) {zeta[i, 1] <- 0 } # set z50=0
   z[1] <- 0
-  for (j in 2:(Cmax-1)) {                                                         # Set priors for z, for any number of categories
+  for (j in 2:(Cmax-1)) {                                                       # Set priors for z, for any number of categories
     z.aux[j] ~ dunif(0,5)                                                       # priors
     z[j] <- z[j - 1] + z.aux[j]
     for (i in 1:nt) {
       zeta.aux[i, j] ~ dnorm(z.aux[j], tauz)
-      zeta[i, j] <- zeta[i, j - 1] + zeta.aux[i, j]                                              # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
+      zeta[i, j] <- zeta[i, j - 1] + zeta.aux[i, j]                             # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
+    }
+  }"
+  
+  rez_trial <- "                                                                    
+  for (i in 1:ns) { zeta[i, 1] <- 0 } # set z50=0
+  z[1] <- 0
+  for (j in 2:(Cmax-1)) {                                                       # Set priors for z, for any number of categories
+    z.aux[j] ~ dunif(0,5)                                                       # priors
+    z[j] <- z[j - 1] + z.aux[j]
+    for (i in 1:ns) {
+      zeta.aux[i, j] ~ dnorm(z.aux[j], tauz)
+      zeta[i, j] <- zeta[i, j - 1] + zeta.aux[i, j]                             # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
+    }
+  }"
+  
+  rez_arm <- "                                                                    
+  for (i in 1:ns) {
+    for (k in 1:na[i]) {
+      zeta[i, k, 1] <- 0 # set z50=0
+    }
+  } 
+  z[1] <- 0
+  for (j in 2:(Cmax-1)) {                                                       # Set priors for z, for any number of categories
+    z.aux[j] ~ dunif(0,5)                                                       # priors
+    z[j] <- z[j - 1] + z.aux[j]
+    for (i in 1:ns) {
+      for (k in 1:na[i]) {
+        zeta.aux[i, k, j] ~ dnorm(z.aux[j], tauz)
+        zeta[i, k, j] <- zeta[i, k, j - 1] + zeta.aux[i, k, j]                  # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
+      }
     }
   }"
   
@@ -157,7 +189,7 @@ model {
     for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + z[j]) }
   }"
   
-  probs_rez <- "
+  probs_rez_tx <- "
   for (k in 1:nt) {
     for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + zeta[k, j]) }
   }"
@@ -169,7 +201,11 @@ model {
   model_code <- paste0(
     setup,
     theta,
-    if (cutpoints == "fixed") z_1d else z_2d,
+    switch(cutpoints,
+           "fixed" = z,
+           "treatment" = z_tx,
+           "trial" = z_trial,
+           "arm" = z_arm),
     if (baseline == "unadjusted") "" else baseline_adj,
     deviance,
     phi,
@@ -178,17 +214,25 @@ model {
            "random ume" = delta_re_ume,
            "fixed consistency" = delta_fe,
            "fixed ume" = delta_fe_ume),
-    if (cutpoints == "fixed") fez else rez,
+    switch(cutpoints,
+           "fixed" = fez,
+           "treatment" = rez_tx,
+           "trial" = rez_trial,
+           "arm" = rez_arm),
     if (consistency == "consistency") {if (class == "exchangeable") d_priors_class else d_priors} else d_priors_ume,
     priors,
-    if (consistency == "consistency") {if (cutpoints == "fixed") probs_fez else probs_rez} else NULL,
+    if (consistency == "consistency") {if (cutpoints != "treatment") probs_fez else probs_rez_tx} else NULL,
     end
   )
   
   if(is.na(filename)) {
     filename <- paste0("JAGS/", paste(
       if_else(effects == "random", "re", "fe"),
-      if_else(cutpoints == "random", "rez", "fez"),
+      switch(cutpoints,
+             "fixed" = "fez",
+             "treatment" = "rezt",
+             "trial" = "rezi",
+             "arm" = "reza"),
       if_else(baseline == "adjusted", "a", "u"),
       if_else(class == "exchangeable", "c", "nc"),
       if_else(consistency == "ume", "ume", "con"),
@@ -201,7 +245,7 @@ model {
   params <- c(
     "d", "z", "prob",
     if (effects == "random") "sd" else NULL,
-    if (cutpoints == "random") "sdz" else NULL,
+    if (cutpoints == "fixed") NULL else "sdz",
     if (baseline == "adjusted") c("beta", "mubar") else NULL,
     if (class == "exchangeable") c("m", "sdcl") else NULL,
     "totresdev",
@@ -209,7 +253,7 @@ model {
   )
   
   message(paste0("Fitting ", if_else(consistency == "ume", "UME ", ""), "NMA for PASI response with ", effects, 
-                 " effects, ", cutpoints, " cutpoints, ", 
+                 " effects, ", cutpoints, if_else(cutpoints == "fixed", "", "-level"), " cutpoints, ", 
                  if_else(baseline == "adjusted", "baseline adjustment", "no baseline adjustment"),
                  if (class == "exchangeable") ", exchangeable class effects" else NULL))
   
@@ -218,28 +262,3 @@ model {
     model.file = filename, n.chains = 2, n.iter = niter, n.burnin = niter/2, n.thin = 1
   )
 }
-
-
-# source("R/meta-analyse/wide_format.R")
-# source("r/meta-analyse/ma-utils.R")
-# m <- pso_jags(
-#   pasi_jags, 
-#   filename = "JAGS/re_rez_a_class.jags", 
-#   effects = "random", 
-#   cutpoints = "random", 
-#   baseline = "adjusted",
-#   class = "exchangeable"
-# )
-# m0 <- pso_jags(
-#   pasi_jags, 
-#   filename = "JAGS/re_rez_a_class.jags", 
-#   effects = "random", 
-#   cutpoints = "random", 
-#   baseline = "adjusted",
-#   class = "independent"
-# )
-# 
-# process_jags(m)$DIC
-# process_jags(m0)$DIC
-# devplot(m, m0)
-# compare_jags(list(m, m0))
