@@ -6,6 +6,7 @@ drug_class_lookup <- read.csv("R/meta-analyse/trt_class.csv")
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 
 pasi <- dbReadTable(con, "v_pasi")
+  # filter(drug %notin% c("Acitretin", "Cyclosporin", "Fumaric acid esters", "Methotrexate", "Phototherapy", "Apremilast", "Roflumilast", "Orismilast", "Deucravacitinib", "Zasocitinib", "Tofacitnib", "Izobibep"))
 dbDisconnect(con)
 
 pasi_drugs <- c("Placebo", setdiff(sort(unique(pasi$drug)), "Placebo"))
@@ -25,6 +26,7 @@ pasi_wide <- pasi |>
   select(trial, ref_id, arm_no, drug, class, n:pasi100) |> 
   filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
   group_by(ref_id) |> 
+  filter(n_distinct(drug) > 1) |> # DRUG-LEVEL ANALYSIS
   mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
   ungroup() |> 
   mutate(t = as.numeric(factor(drug, levels = pasi_drugs)), 
