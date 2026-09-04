@@ -432,7 +432,7 @@ process_jags <- function(mod) {
 print.jags_nma_fit <- function(m) {
   totresdev <- m$results[m$results$param == "totresdev", 3]
   
-  message(paste0("totresdev = ", round(totresdev, 3), " on ", nrow(m$dev_table), " data points, pV = ", round(m$pV, 3), ", DIC = ", round(m$DIC, 3)))
+  message(paste0("totresdev = ", round(totresdev, 1), " on ", nrow(m$dev_table), " data points, pV = ", round(m$pV, 1), ", DIC = ", round(m$DIC, 1)))
   print(m$summary)
   invisible(m$summary)
 }
@@ -516,7 +516,7 @@ devplot <- function(m1, m2, output = c("plot", "table"), xlab = "Model 1", ylab 
   
   if (output == "plot") {
     ggplot(devdev, aes(x = mean.x, y = mean.y)) +
-      geom_point(alpha = 0.5) +
+      geom_point(alpha = 0.5, shape = 16) +
       geom_abline(intercept = 0, slope = 1, linetype = 2, colour = "red") +
       theme_classic() +
       labs(title = "Deviance-deviance plot", x = xlab, y = ylab) +
