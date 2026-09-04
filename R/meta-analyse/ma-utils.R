@@ -405,12 +405,13 @@ process_jags <- function(mod) {
         patterns = c(".*\\[", id_row = "\\d+", ",\\s*", id_arm = "\\d+", ",\\s*", 
                      id_cat = "\\d+", "\\].*")
       ) |> 
-      mutate(across(starts_with("id_"), as.integer),
-             cat = c("PASI 0-50", "PASI 50-75", "PASI 75-90", "PASI 90-100")[id_cat]) |> 
+      mutate(across(starts_with("id_"), as.integer)) |> 
       left_join(row_lookup, by = c("id_row" = "row", "id_arm" = "arm_no"),
                 relationship = "many-to-one") |> 
-      arrange(ref_id, id_arm, cat) |> 
-      left_join(fitted_values, by = c("id_row", "id_arm", "id_cat")),
+      arrange(ref_id, id_arm, id_cat) |> 
+      left_join(fitted_values, by = c("id_row", "id_arm", "id_cat")) |> 
+      relocate(ref_id, trial, drug, id_cat, fitted, actual, mean, `2.5%`, `97.5%`,
+               Rhat, id_row, id_arm, t),
     
     totresdev = mod$BUGSoutput$mean$totresdev,
     
@@ -420,8 +421,8 @@ process_jags <- function(mod) {
   )
   
   out$summary <- out$results |> 
-    filter(!str_detect(param, "prob|dv\\[")) |> 
-    arrange(str_detect(param, "beta|mubar|totresdev|deviance"))
+    filter(!str_detect(param, "prob|rhat|dev|dv\\[")) |> 
+    arrange(str_detect(param, "beta|mubar"))
   
   class(out) <- c("jags_nma_fit", class(out))
   
@@ -429,7 +430,9 @@ process_jags <- function(mod) {
 }
 
 print.jags_nma_fit <- function(m) {
-  message(paste0("pV: ", m$pV, ", DIC: ", m$DIC))
+  totresdev <- m$results[m$results$param == "totresdev", 3]
+  
+  message(paste0("totresdev = ", round(totresdev, 3), " on ", nrow(m$dev_table), " data points, pV = ", round(m$pV, 3), ", DIC = ", round(m$DIC, 3)))
   print(m$summary)
   invisible(m$summary)
 }
@@ -507,11 +510,9 @@ devplot <- function(m1, m2, output = c("plot", "table"), xlab = "Model 1", ylab 
   output = match.arg(output)
   
   devdev <- inner_join(process_jags(m1)$dev_table, process_jags(m2)$dev_table, 
-                       by = c("id_row", "id_arm", "id_cat", "cat", "trial",
+                       by = c("id_row", "id_arm", "id_cat", "trial",
                               "ref_id", "t", "drug")) |> 
-    mutate(.by = ref_id, diff = mean.x - mean.y) |> 
-    select(-starts_with("id"), -t) |> 
-    relocate(ref_id, trial, drug, cat)
+    mutate(.by = ref_id, diff = mean.x - mean.y)
   
   if (output == "plot") {
     ggplot(devdev, aes(x = mean.x, y = mean.y)) +
