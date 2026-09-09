@@ -30,10 +30,8 @@ data <- pasi |>
   
 drugs <- unique(data$drug)
 comparisons <- as.data.frame(t(combn(drugs, 2)))
-results <- list()
+# results <- list()
 niter <- 2000
-
-pasi_drugs <- c("Placebo", setdiff(sort(unique(pasi$drug)), "Placebo"))
 
 # Network meta-analyses ========================================================
 source("R/meta-analyse/ma-utils.R")
@@ -50,41 +48,11 @@ pasi_ref <- metaprop(
   data = filter(data, drug == "Placebo", !is.na(pasi50))
 )
 
-settings <- expand.grid(
-  effects = c("fixed", "random"), cutpoints = c("fixed", "random"), 
-  baseline = c("unadjusted", "adjusted"), class = c("independent", "exchangeable"),
-  consistency = c("consistency", "ume"), stringsAsFactors = FALSE) |> 
-  filter(!(class == "exchangeable" & consistency == "ume")) |> 
-  mutate(filename = paste(if_else(effects == "fixed", "fe", "re"),
-                          if_else(cutpoints == "fixed", "fez", "rez"),
-                          if_else(baseline == "unadjusted", "u", "a"),
-                          if_else(class == "independent", "nc", "c"),
-                          if_else(consistency == "consistency", "con", "ume"),
-                          sep = "_"))
 
-for (i in 1:nrow(settings)) {
-  message(paste0("Model ", i, " of " , nrow(settings)))
-  j[[settings$filename[i]]] <- pso_jags(
-    pasi_jags, 
-    effects = settings$effects[i], 
-    cutpoints = settings$cutpoints[i], 
-    baseline = settings$baseline[i],
-    class = settings$class[i],
-    consistency = settings$consistency[i]
-  )
-}
+pmod <- pso_jags(pasi_jags, niter = 4000, effects = "random", cutpoints = "trial")
+results$pasi <- nma_results(pmod, effects = "random", method = "REZ(i)")
 
-j$re_rez_u_c_con <- pso_jags(
-  pasi_jags,
-  filename = "JAGS/re_rez_u_c_con.jags",
-  effects = "random",
-  cutpoints = "random",
-  class = "exchangeable"
-)
 
-mod <- pso_jags(pasi_jags, consistency = "ume")
-mod <- j$re_rez_a_nc_con |> process_jags()
-process_jags(j$fe_rez_u_c_con)
 
 compare_jags(j) |> writexl::write_xlsx("output/nma_all.xlsx")
 devplot(j$re_rez_u_nc_con, j$re_rez_u_nc_ume, output = "plot", xlab = "Inconsistency (UME) model", ylab = "Consistency model", filter = "Izokibep") +
@@ -141,32 +109,6 @@ process_jags(j$re_rez_u_c_con)$summary |>
         plot.title = element_text(face = "bold")) +
   labs(title = "Predicted PASI Response", x = "Proportion")
 ggsave("output/props.svg", height = 5, width = 6)
-  
-
-results$fe_fez_u <- nma_results(j$fe_fez_u_nc_con, 
-                                effects = "fixed", 
-                                method = "standard")
-results$re_fez_u <- nma_results(j$re_fez_u_nc_con, 
-                                effects = "random", 
-                                method = "standard")
-results$fe_rez_u <- nma_results(j$fe_rez_u_nc_con, 
-                                effects = "fixed", 
-                                method = "REZ")
-results$re_rez_u <- nma_results(j$re_rez_u_nc_con, 
-                                effects = "random",
-                                method = "REZ")
-results$fe_fez_a <- nma_results(j$fe_fez_a_nc_con, 
-                                effects = "fixed", 
-                                method = "baseline adjusted")
-results$re_fez_a <- nma_results(j$re_fez_a_nc_con, 
-                                effects = "random", 
-                                method = "baseline adjusted")
-results$fe_rez_a <- nma_results(j$fe_rez_a_nc_con, 
-                                effects = "fixed", 
-                                method = "REZ, baseline adjusted")
-results$re_rez_a <- nma_results(j$re_rez_a_nc_con, 
-                                effects = "random", 
-                                method = "REZ, baseline adjusted")
 
 ## multinma ....................................................................
 # 
@@ -693,10 +635,6 @@ for (k in 1:length(drugs)) {
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 
 exc <- c("Izokibep", "Mirikizumab", "Phototherapy")
-
-results$pasi_fe <- NULL
-results$pasi_re <- NULL
-results$pasi_fe_baseline <- NULL
 
 model_info <- bind_rows(results) |> 
   mutate(endpoint_group = if_else(likelihood == "multinomial" & 
