@@ -20,6 +20,11 @@ pso_jags <- function(
     data$mmu <- NULL
   }
   
+  if (class == "independent") {
+    data$cl <- NULL
+    data$ncl <- NULL
+  }
+  
   setup <- "
 model {
   # *** PROGRAM STARTS
