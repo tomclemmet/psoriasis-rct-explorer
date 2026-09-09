@@ -31,12 +31,33 @@ query_view <- function(table, state) {
   read_db(sprintf("SELECT * FROM %s %s", table, base_order))
 }
 
+# Whether the precomputed meta-analysis view exists yet. It's built by
+# R/meta-analyse/meta-analysis.R, a separate (slow, JAGS-driven) step from
+# trial-estimates.R's v_trial_estimates -- right after reconverting the
+# Access db, trial estimates are often present while this isn't. fetch_ma()
+# and fetch_ma_axis_combos() fall back to a 0-row result in that case so
+# forest plots still render from trial estimates alone, with no diamonds.
+HAS_MA <- {
+  con <- dbConnect(SQLite(), DB_PATH, flags = SQLITE_RO)
+  on.exit(dbDisconnect(con), add = TRUE)
+  "v_meta_analysis" %in% dbListTables(con)
+}
+
+EMPTY_MA_RESULT <- data.frame(
+  endpoint = character(), type = character(), effects = character(),
+  comp_tx = character(), ref_tx = character(), measure = character(),
+  method = character(), likelihood = character(),
+  mean = numeric(), lower = numeric(), upper = numeric(), dic = numeric(),
+  stringsAsFactors = FALSE
+)
+
 # `axes` is a named list filtering "which model produced this row" columns
 # (see MA_DISTINCT_COLUMNS below) — e.g. list(likelihood = "multinomial",
 # method = "class_effects"). Column names are checked against that allowlist
 # since they're interpolated into the SQL (not bind parameters).
 fetch_ma <- function(endpoint, type = NULL, effects = NULL,
                      comp_tx = NULL, ref_tx = NULL, measure = NULL, axes = list()) {
+  if (!HAS_MA) return(EMPTY_MA_RESULT)
   conds  <- "WHERE endpoint = ?"
   params <- list(endpoint)
   if (!is.null(type))    { conds <- paste(conds, "AND type = ?");    params <- c(params, list(type)) }
@@ -82,6 +103,7 @@ MA_DISTINCT_COLUMNS <- c("method", "likelihood")
 # values) — drives dynamic multi-axis discovery in app.R.
 fetch_ma_axis_combos <- function(endpoint, type, columns) {
   stopifnot(all(columns %in% MA_DISTINCT_COLUMNS))
+  if (!HAS_MA) return(as.data.frame(setNames(rep(list(character()), length(columns)), columns)))
   in_list  <- paste(rep("?", length(endpoint)), collapse = ", ")
   cols_sql <- paste(columns, collapse = ", ")
   sql <- sprintf(

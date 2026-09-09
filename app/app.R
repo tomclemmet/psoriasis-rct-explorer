@@ -920,13 +920,15 @@ ma_catalog <- list(
   )
 )
 
-# Single source of truth for whether the MA build step has been run.
-ma_tables_present <- function() {
+# Whether there's anything at all to show in the meta-analysis modal --
+# v_trial_estimates is the minimum (built by trial-estimates.R, right after
+# convert.R). HAS_MA (db.R) tracks the separate, slower meta-analysis step
+# and gates only the pooled diamonds, not the modal itself.
+HAS_TRIALS <- {
   con <- dbConnect(SQLite(), DB_PATH, flags = SQLITE_RO)
   on.exit(dbDisconnect(con), add = TRUE)
-  all(c("v_meta_analysis", "v_trial_estimates") %in% dbListTables(con))
+  "v_trial_estimates" %in% dbListTables(con)
 }
-HAS_MA <- ma_tables_present()
 
 # Columns in meta_analysis/v_meta_analysis treated as independent,
 # discoverable "which model produced this row" axes. A new value written into
@@ -1944,8 +1946,8 @@ server <- function(input, output, session) {
       else
         sprintf("Network meta-analysis, FE + RE — %d drugs", inputs$n_drugs)
     } else {
-      sprintf("%d %s", nrow(inputs$rows),
-              if (is.null(state)) "drugs" else "studies")
+      n_st <- nrow(inputs$rows)
+      sprintf("%d %s", n_st, if (n_st == 1) "study" else "studies")
     }
     svg_html <- forest_svg(inputs$rows, inputs$pooled, scale = eff_scale,
                            axis_label = inputs$axis_label,
@@ -2054,12 +2056,12 @@ server <- function(input, output, session) {
     gid    <- input[[paste0("group_", tab_id)]]
     req(gid)
 
-    if (!HAS_MA) {
+    if (!HAS_TRIALS) {
       showModal(modalDialog(
         title = tagList(modal_close_x(), "Meta-analysis"), easyClose = TRUE,
         footer = NULL, class = "ma-modal",
-        tags$p("No precomputed meta-analysis tables found. Run ",
-               tags$code("Rscript app/meta_analyse.R"),
+        tags$p("No precomputed trial-estimate tables found. Run ",
+               tags$code("Rscript R/meta-analyse/trial-estimates.R"),
                " after ", tags$code("convert.R"),
                " to build them, then reload the app.")
       ))
