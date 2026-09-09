@@ -5,11 +5,14 @@ drug_class_lookup <- read.csv("R/meta-analyse/trt_class.csv")
 
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 
-pasi <- dbReadTable(con, "v_pasi")
-  # filter(drug %notin% c("Acitretin", "Cyclosporin", "Fumaric acid esters", "Methotrexate", "Phototherapy", "Apremilast", "Roflumilast", "Orismilast", "Deucravacitinib", "Zasocitinib", "Tofacitnib", "Izobibep"))
+pasi_condensed <- dbReadTable(con, "v_pasi") |> 
+  filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
+  summarise(.by = c(trial, ref_id, drug), n = sum(n), pasi50 = sum(pasi50), 
+            pasi75 = sum(pasi75), pasi90 = sum(pasi90), pasi100 = sum(pasi100)) 
+  # filter(drug %notin% c("Acitretin", "Cyclosporin", "Fumaric acid esters", "Methotrexate", "Phototherapy"))
 dbDisconnect(con)
 
-pasi_drugs <- c("Placebo", setdiff(sort(unique(pasi$drug)), "Placebo"))
+pasi_drugs <- c("Placebo", setdiff(sort(unique(pasi_condensed$drug)), "Placebo"))
 
 nth_largest <- function(n, ...) {
   vec <- c(...)
@@ -21,10 +24,8 @@ nth_non_na <- function(n, ...) {
   which(!is.na(vec))[n]
 }
 
-pasi_wide <- pasi |> 
+pasi_wide <- pasi_condensed |> 
   left_join(drug_class_lookup, by = "drug") |> 
-  select(trial, ref_id, arm_no, drug, class, n:pasi100) |> 
-  filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
   group_by(ref_id) |> 
   filter(n_distinct(drug) > 1) |> # DRUG-LEVEL ANALYSIS
   mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
@@ -58,9 +59,10 @@ pasi_wide <- pasi |>
   pivot_wider(names_from = arm_no, values_from = t:n5, names_glue = "a{arm_no}{.value}") |> 
   relocate(na, .before = nc)
 
-pasi_id_lookup <- pasi |> 
+pasi_id_lookup <- pasi_condensed |> 
   left_join(drug_class_lookup, by = "drug") |> 
-  select(trial, ref_id, arm_no, drug, class, n:pasi100) |> 
+  select(trial, ref_id, drug, class, n:pasi100) |>
+  mutate(.by = ref_id, arm_no = row_number()) |> 
   filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
   group_by(ref_id) |> 
   mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
@@ -71,12 +73,12 @@ pasi_id_lookup <- pasi |>
 
 row_lookup <- pasi_wide |> 
   mutate(row = row_number()) |> 
-  select(row, ref_id, a1t, a2t, a3t, a4t, a5t) |> 
-  pivot_longer(a1t:a5t, names_to = "arm_no", values_to = "t") |> 
+  select(row, ref_id, a1t, a2t, a3t) |> 
+  pivot_longer(a1t:a3t, names_to = "arm_no", values_to = "t") |> 
   mutate(arm_no = as.numeric(substr(arm_no, 2, 2))) |> 
   filter(!is.na(t)) |> 
   mutate(drug = pasi_id_lookup$drug[t]) |> 
-  left_join(distinct(pasi, trial, ref_id), by = "ref_id", relationship = "many-to-one")
+  left_join(distinct(pasi_condensed, trial, ref_id), by = "ref_id", relationship = "many-to-one")
 
 pasi_jags <- list(
   ns = nrow(pasi_wide),
@@ -86,19 +88,19 @@ pasi_jags <- list(
   mmu = 0.45,
   na = pasi_wide$na,
   nc = pasi_wide$nc,
-  t = select(pasi_wide, a1t:a5t) |> as.matrix(),
+  t = select(pasi_wide, a1t:a3t) |> as.matrix(),
   cl = pasi_id_lookup$cl,
   C = select(pasi_wide, C1:C5) |> as.matrix(),
-  r = list(as.matrix(select(pasi_wide, a1r1:a5r1)),
-           as.matrix(select(pasi_wide, a1r2:a5r2)),
-           as.matrix(select(pasi_wide, a1r3:a5r3)),
-           as.matrix(select(pasi_wide, a1r4:a5r4)),
-           as.matrix(select(pasi_wide, a1r5:a5r5))) |> 
+  r = list(as.matrix(select(pasi_wide, a1r1:a3r1)),
+           as.matrix(select(pasi_wide, a1r2:a3r2)),
+           as.matrix(select(pasi_wide, a1r3:a3r3)),
+           as.matrix(select(pasi_wide, a1r4:a3r4)),
+           as.matrix(select(pasi_wide, a1r5:a3r5))) |> 
     simplify2array(),
-  n = list(as.matrix(select(pasi_wide, a1n1:a5n1)),
-           as.matrix(select(pasi_wide, a1n2:a5n2)),
-           as.matrix(select(pasi_wide, a1n3:a5n3)),
-           as.matrix(select(pasi_wide, a1n4:a5n4)),
-           as.matrix(select(pasi_wide, a1n5:a5n5))) |> 
+  n = list(as.matrix(select(pasi_wide, a1n1:a3n1)),
+           as.matrix(select(pasi_wide, a1n2:a3n2)),
+           as.matrix(select(pasi_wide, a1n3:a3n3)),
+           as.matrix(select(pasi_wide, a1n4:a3n4)),
+           as.matrix(select(pasi_wide, a1n5:a3n5))) |> 
     simplify2array()
 )
