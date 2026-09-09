@@ -381,7 +381,7 @@ process_jags <- function(mod) {
                    id_cat = "\\d+", "\\].*")
     ) |> 
     mutate(across(starts_with("id_"), as.integer)) |> 
-    rename(fitted = mean) |> 
+    rename(fitted = mean) |>
     mutate(actual = pasi_jags$r[cbind(id_row, id_arm, id_cat)]) |> 
     select(starts_with("id"), fitted, actual)
   
@@ -460,16 +460,21 @@ compare_jags <- function(mods) {
     tab <- tab |> left_join(coefs, by = "param")
   }
   
-  dic <- lapply(mods, \(x) {as.character(round(process_jags(x)$DIC, 3))}) |> 
+  totresdev <- lapply(mods, \(x) {as.character(round(process_jags(x)$totresdev, 3))}) |> 
     as.data.frame() |> 
-    mutate(param = "dic")
+    mutate(param = "totresdev")
   pV <- lapply(mods, \(x) {as.character(round(process_jags(x)$pV, 3))}) |> 
     as.data.frame() |> 
     mutate(param = "pV")
+  dic <- lapply(mods, \(x) {as.character(round(process_jags(x)$DIC, 3))}) |> 
+    as.data.frame() |> 
+    mutate(param = "dic")
+
   
   tab |> 
     rename_with(~ names(mods), .cols = starts_with("meansd")) |>
-    bind_rows(dic, pV)
+    bind_rows(totresdev, pV, dic) |> 
+    arrange(desc(param %in% c("totresdev", "pV", "dic")))
 }
 
 # Helper function to produce a beta multinma::distr() object to use as a 
@@ -517,7 +522,8 @@ devplot <- function(m1, m2, output = c("plot", "table"), xlab = "Model 1", ylab 
   if (output == "plot") {
     ggplot(devdev, aes(x = mean.x, y = mean.y)) +
       geom_point(alpha = 0.5, shape = 16) +
-      geom_abline(intercept = 0, slope = 1, linetype = 2, colour = "red") +
+      geom_abline(intercept = 0, slope = 1, linetype = 2, colour = "blue") +
+      geom_abline(intercept = -0.5, slope = 1, linetype = 3, colour = "red") +
       theme_classic() +
       labs(title = "Deviance-deviance plot", x = xlab, y = ylab) +
       scale_color_viridis_d()
