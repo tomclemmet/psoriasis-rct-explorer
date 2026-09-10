@@ -388,7 +388,7 @@ process_jags <- function(mod) {
   out <- list(
     results = mod$BUGSoutput$summary |>
       as_tibble(rownames = "param") |> 
-      filter(!(str_detect(param, "d\\[") & str_detect(param, ","))) |> 
+      # filter(!(str_detect(param, "d\\[") & str_detect(param, ","))) |> 
       left_join(param_lookup, by = "param") |> 
       relocate(label, .after = param) |> 
       as.data.frame(),
@@ -532,8 +532,4 @@ devplot <- function(m1, m2, output = c("plot", "table"), xlab = "Model 1", ylab 
   }
   
 }
-
-
-
-
 
