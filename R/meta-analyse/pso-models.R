@@ -8,81 +8,68 @@ ume <- list()
 # j <- readRDS("R/meta-analyse/jags_fits.rds")
 niter <- 4000
 
-# j$fe_fez_u_nc  <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "fixed")
-# j$re_fez_u_nc  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "fixed")
-# j$fe_rezt_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "treatment")
-# j$re_rezt_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "treatment")
-# j$fe_rezi_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "trial")
-j$re_rezi_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial")
-# j$fe_reza_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "arm")
-# j$re_reza_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "arm")
+distinct(pasi_condensed, ref_id, trial, pop_res) |> 
+  filter(!is.na(pop_res) & pop_res != "null") |> 
+  arrange(pop_res)
 
-# j$fe_fez_a_nc  <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "fixed", baseline = "adjusted")
-# j$re_fez_a_nc  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "fixed", baseline = "adjusted")
-# j$fe_rezt_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "treatment", baseline = "adjusted")
-# j$re_rezt_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "treatment", baseline = "adjusted")
-# j$fe_rezi_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "trial", baseline = "adjusted")
-# j$re_rezi_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", baseline = "adjusted")
-# j$fe_reza_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "arm", baseline = "adjusted")
-# j$re_reza_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "arm", baseline = "adjusted")
-# 
-# j$fe_fez_u_c   <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "fixed", class = "exchangeable")
-# j$re_fez_u_c   <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "fixed", class = "exchangeable")
-# j$fe_rezt_u_c  <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "treatment", class = "exchangeable")
-# j$re_rezt_u_c  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "treatment", class = "exchangeable")
-# j$fe_rezi_u_c  <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "trial", class = "exchangeable")
-# j$re_rezi_u_c  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", class = "exchangeable")
-# j$fe_reza_u_c  <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "arm", class = "exchangeable")
-# j$re_reza_u_c  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "arm", class = "exchangeable")
-# j$fe_fez_a_c   <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "fixed", baseline = "adjusted", class = "exchangeable")
-# j$re_fez_a_c   <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "fixed", baseline = "adjusted", class = "exchangeable")
-# j$fe_rezt_a_c  <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "treatment", baseline = "adjusted", class = "exchangeable")
-# j$re_rezt_a_c  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "treatment", baseline = "adjusted", class = "exchangeable")
-# j$fe_rezi_a_c  <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "trial", baseline = "adjusted", class = "exchangeable")
-# j$re_rezi_a_c  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", baseline = "adjusted", class = "exchangeable")
-# j$fe_reza_a_c  <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "arm", baseline = "adjusted", class = "exchangeable")
-# j$re_reza_a_c  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "arm", baseline = "adjusted", class = "exchangeable")
+j$re_rezi_u_nc <- pso_jags(gen_pasi_jags(), niter = niter, effects = "random", cutpoints = "trial")
+ume$re_rezi_u_nc <- pso_jags(gen_pasi_jags(), niter = niter, effects = "random", cutpoints = "trial", consistency = "ume")
 
-# ume$fe_fez_u_nc  <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "fixed", consistency = "ume")
-# ume$re_fez_u_nc  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "fixed", consistency = "ume")
-# ume$fe_rezt_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "treatment", consistency = "ume")
-# ume$re_rezt_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "treatment", consistency = "ume")
-# ume$fe_rezi_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "trial", consistency = "ume")
-ume$re_rezi_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", consistency = "ume")
-# ume$fe_reza_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "arm", consistency = "ume")
-# ume$re_reza_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "arm", consistency = "ume")
-# ume$fe_fez_a_nc  <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "fixed", baseline = "adjusted", consistency = "ume")
-# ume$re_fez_a_nc  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "fixed", baseline = "adjusted", consistency = "ume")
-# ume$fe_rezt_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "treatment", baseline = "adjusted", consistency = "ume")
-# ume$re_rezt_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "treatment", baseline = "adjusted", consistency = "ume")
-# ume$fe_rezi_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "trial", baseline = "adjusted", consistency = "ume")
-# ume$re_rezi_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", baseline = "adjusted", consistency = "ume")
-# ume$fe_reza_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "arm", baseline = "adjusted", consistency = "ume")
-# ume$re_reza_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "arm", baseline = "adjusted", consistency = "ume")
+m <- process_jags(j$re_rezi_u_nc)
+u <- process_jags(ume$re_rezi_u_nc)
+m
+u
 
-# summ <- compare_jags(j)
-# summ
-# rez_rezi_u_nc is the best in terms of dic and 2nd best in terms of resdev
+m$results |> arrange(desc(Rhat)) |> head(20)
+u$results |> arrange(desc(Rhat)) |> head(20)
 
-process_jags(j$re_rezi_u_nc)$dev_table |> filter(ref_id==85)
-process_jags(ume$re_rezi_u_nc)
-# UME model has slightly lower DIC, though this is driven by pV to a large extent
-# Worth investigating signs of inconsistency
+m$dev_table |> arrange(desc(mean)) |> head(20)
+u$dev_table |> arrange(desc(mean)) |> head(20)
 
-devplot(j$re_rezi_u_nc, ume$re_rezi_u_nc)
-# Several points are significantly away from the line
+devplot(m, u, xlab="Consistency", ylab="Inconsistency")
 
-devplot(j$re_rezi_u_nc, ume$re_rezi_u_nc, "table") |> 
-  filter(diff > 0.5) |> mutate(.by = ref_id, tdiff = mean(diff)) |> arrange(desc(tdiff))
-# 13 / 958 data points have over 0.5 points of inconsistency
-# Fixed error around CCA/NRI in Allah-farani which may help reich
-# Removed khalid for an unapproved dose
-# Need to investigate BROvsGUS loops more, note this includes Reich
-# Pruned dose violations globally which may help
+devplot(m, u, "table") |> 
+  filter(diff > 0.5) |> group_by(ref_id) |> mutate(mdiff = max(diff)) |> arrange(desc(diff)) #|> distinct(trial) |> left_join(pasi_condensed)
 
 
-saveRDS(j, "R/meta-analyse/jags_fits.rds")
+t1 <- "Risankizumab"
+t2 <- "Secukinumab"
 
+direct_data <- gen_pasi_jags(c(t1, t2))
+if (nrow(pasi_wide) == 1) {
+  direct_data <- list(
+    nc = pasi_wide$nc,
+    C = direct_data$C |> as.vector(),
+    r = rbind(
+      select(pasi_wide, starts_with("a1r")) |> as.vector(),
+      select(pasi_wide, starts_with("a2r")) |> as.vector()
+    ),
+    n = rbind(
+      select(pasi_wide, starts_with("a1n")) |> as.vector(),
+      select(pasi_wide, starts_with("a2n")) |> as.vector()
+    )
+  )
+  direct <- jags(
+    data = direct_data,
+    parameters.to.save = "d", inits = NULL, model.file = "JAGS/single_study.jags", 
+    n.chains = 2, n.iter = 100000, n.burnin = 50000
+  )
+  dir <- posterior::as_draws_df(direct$BUGSoutput$sims.array)$d
+} else {
+  direct <- pso_jags(direct_data, effects = "random", cutpoints = "trial")
+  dir <- posterior::as_draws_df(direct$BUGSoutput$sims.array)$`d[2]`
+}
 
+indirect_data <- gen_pasi_jags(c(t1, t2), direct = FALSE)
+indirect <- pso_jags(indirect_data, effects = "random", cutpoints = "trial")
 
+pasi_id_lookup
+
+posterior::as_draws_df(indirect$BUGSoutput$sims.array) |> 
+  mutate(indir = `d[21]` - `d[19]`, dir = dir, .keep = "none") |> 
+  pivot_longer(everything(), names_to = "lab", values_to = "d") |> 
+  ggplot() +
+  geom_density(aes(d, colour = lab, fill = lab), alpha = 0.5)
+
+# The indirect evidence is pulling RIS up and SEC down
 
