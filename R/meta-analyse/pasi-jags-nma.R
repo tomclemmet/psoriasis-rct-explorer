@@ -251,11 +251,12 @@ model {
   writeLines(model_code, filename)
   
   params <- c(
-    "d", "z", "prob",
+    "d", "z", 
     if (effects == "random") "sd" else NULL,
     if (cutpoints == "fixed") NULL else "sdz",
     if (baseline == "adjusted") c("beta", "mubar") else NULL,
     if (class == "exchangeable") c("m", "sdcl") else NULL,
+    if (consistency == "ume") NULL else "prob",
     "totresdev",
     "dv", "rhat"
   )
