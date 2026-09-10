@@ -17,9 +17,14 @@
 #                                                  -- sentinel (0) is kept
 #
 #   Entities
-#     studies(study_id PK, trial, timepoint_unit)
+#     studies(study_id PK, trial, timepoint_unit, pasi_high_rob,
+#             pop_res)
 #         -- Keyed by the *primary* publication's RefID. timepoint_unit is the
 #         -- per-study unit ("wk" almost always) for measurement timepoints.
+#         -- pasi_high_rob flags an overall Cochrane RoB2 "High risk" verdict
+#         -- on PASI 75 or PASI 90, matched in from CD011535-risk-of-bias.csv.
+#         -- pop_res is CatID 60's free text, NULL unless the
+#         -- trial restricts to some subpopulation.
 #     publications(publication_id PK, study_id FK, is_primary, doi, title,
 #                  authors, year, journal, volume, issue, page_start, page_end,
 #                  notes)
@@ -167,7 +172,13 @@ CREATE TABLE subgroups (
 CREATE TABLE studies (
   study_id        INTEGER PRIMARY KEY,   -- = primary publication's RefID
   trial           TEXT,                  -- Cochrane Study ID (CatID 49)
-  timepoint_unit  TEXT                   -- per-study timepoint unit ('wk' etc.)
+  timepoint_unit  TEXT,                  -- per-study timepoint unit ('wk' etc.)
+  pasi_high_rob   INTEGER NOT NULL DEFAULT 0,
+                                         -- Cochrane RoB2: overall \"High risk\"
+                                         -- verdict on PASI 75 or PASI 90
+  pop_res TEXT           -- free text (CatID 60); NULL for most
+                                         -- studies, populated where the trial
+                                         -- restricts to a specific population
 );
 CREATE TABLE publications (
   publication_id  INTEGER PRIMARY KEY,         -- = tblRefs.ID
@@ -312,6 +323,12 @@ all_ref_ids <- sort(intersect(primary_ids, data_ref_ids))
 trial_rows <- chars[chars$CatID == 49 & (is.na(chars$ArmNo) | chars$ArmNo == 0), ]
 trial_of   <- setNames(trial_rows$TextVal, as.character(trial_rows$RefID))
 
+# Significant population restriction (CatID 60): free-text study-level note,
+# only present for studies that restrict to some subpopulation (e.g. "Weight
+# >= 90 kg", "Nail psoriasis"). Most studies have no row here.
+restriction_rows <- chars[chars$CatID == 60 & (is.na(chars$ArmNo) | chars$ArmNo == 0), ]
+restriction_of    <- setNames(restriction_rows$TextVal, as.character(restriction_rows$RefID))
+
 # Per-study timepoint unit: MIN(strUnit) across every outcome present in
 # tblLongitudinalDataDefs for the study (deterministic, constant per study
 # here). Defaults to "wk". Used both for the studies.timepoint_unit column and
@@ -333,10 +350,33 @@ studies_df <- data.frame(
   study_id       = all_ref_ids,
   trial          = unname(trial_of[as.character(all_ref_ids)]),
   timepoint_unit = unname(study_tp_unit_name[as.character(all_ref_ids)]),
+  pop_res = unname(restriction_of[as.character(all_ref_ids)]),
   stringsAsFactors = FALSE
 )
-# Blank trial strings -> NA.
+# Blank trial/restriction strings -> NA.
 studies_df$trial[!is.na(studies_df$trial) & !nzchar(studies_df$trial)] <- NA
+studies_df$pop_res[
+  !is.na(studies_df$pop_res) &
+    !nzchar(studies_df$pop_res)] <- NA
+
+# Cochrane RoB2 risk-of-bias assessment (CD011535-risk-of-bias.csv, a loose
+# export kept next to the sqlite db - source review data, not something
+# derived from RevPal). Flag trials with an overall "High risk" verdict on
+# PASI 75 or PASI 90, matched to studies by trial name, so the app's warning
+# banner and any analysis code can read it straight off studies / v_pasi
+# instead of re-parsing the CSV.
+rob_path <- file.path(dirname(sqlite_p), "CD011535-risk-of-bias.csv")
+pasi_high_rob_trials <- character(0)
+if (file.exists(rob_path)) {
+  rob <- read.csv(rob_path, fileEncoding = "UTF-8-BOM", check.names = FALSE,
+                  stringsAsFactors = FALSE)
+  rob_outcome <- trimws(sub("^(Primary|Secondary) outcome[^A-Za-z0-9]*", "", rob$Outcome))
+  is_pasi_high_risk <- rob_outcome %in% c("PASI 75", "PASI 90") &
+    rob[["Domain (judgement): Overall bias"]] == "High risk"
+  pasi_high_rob_trials <- unique(rob$Study[is_pasi_high_risk])
+}
+studies_df$pasi_high_rob <- as.integer(studies_df$trial %in% pasi_high_rob_trials)
+
 dbWriteTable(dst, "studies", studies_df, append = TRUE)
 
 # --- 6b. Publications -----------------------------------------------------

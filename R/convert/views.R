@@ -5,9 +5,13 @@
 # absolute / change-from-baseline columns, so the app reads a single table per
 # tab:
 #   v_pasi   - pasi50/75/90/100 responders, absolute & change-from-baseline
-#              PASI, plus baseline PASI (outcome 11) as an arm-level column.
+#              PASI, baseline PASI (outcome 11) as an arm-level column, and
+#              pasi_high_rob (Cochrane RoB2 high-risk-of-bias flag on PASI
+#              75/90, computed in convert.R from studies.pasi_high_rob).
 #   v_dlqi   - DLQI binary endpoints, absolute & change-from-baseline DLQI.
 #   v_safety - binary safety outcomes.
+# All three also carry pop_res (studies.pop_res:
+# free text, NULL unless the trial restricts to some subpopulation).
 #
 # Each view is per (arm, timepoint). Columns the app expects from arm context:
 # trial, ref_id, arm_no, arm_name, drug, dose, timepoint, timepoint_unit, n.
@@ -35,7 +39,9 @@ WITH arm_ctx AS (
            )
            || ' ' || COALESCE(fr.frequency_name, '')
          )              AS dose,
-         s.timepoint_unit AS timepoint_unit
+         s.timepoint_unit AS timepoint_unit,
+         s.pasi_high_rob  AS pasi_high_rob,
+         s.pop_res AS pop_res
   FROM   arms a
   JOIN   studies s          ON s.study_id = a.study_id
   LEFT   JOIN drugs dr      ON dr.drug_id = a.drug_id
@@ -132,7 +138,8 @@ build_views <- function(dst) {
       WHERE  outcome_id = 11 AND subgroup_id = 0
       GROUP  BY arm_id
     ) bp ON bp.arm_id = pivot.arm_id",
-    extra_select = c("bp.baseline_pasi_mean", "bp.baseline_pasi_sd")
+    extra_select = c("bp.baseline_pasi_mean", "bp.baseline_pasi_sd",
+                     "ctx.pasi_high_rob", "ctx.pop_res")
   )
 
   # v_dlqi - DLQI binary + continuous endpoints.
@@ -161,7 +168,8 @@ build_views <- function(dst) {
                     "pivot.abs_dlqi_lo_iqr","pivot.abs_dlqi_hi_iqr",
                     "pivot.abs_dlqi_change_mean","pivot.abs_dlqi_change_sd",
                     "pivot.abs_dlqi_change_median",
-                    "pivot.abs_dlqi_change_lo_iqr","pivot.abs_dlqi_change_hi_iqr")
+                    "pivot.abs_dlqi_change_lo_iqr","pivot.abs_dlqi_change_hi_iqr"),
+    extra_select = c("ctx.pop_res")
   )
 
   # v_safety - binary safety outcomes.
@@ -179,6 +187,7 @@ build_views <- function(dst) {
                    .case_k("malignancy_non_nmsc", "malignancy_non_nmsc")),
     select_cols = c("pivot.sae","pivot.disc_any","pivot.disc_ae",
                     "pivot.serious_infection","pivot.injection_site_rxn",
-                    "pivot.malignancy","pivot.nmsc","pivot.malignancy_non_nmsc")
+                    "pivot.malignancy","pivot.nmsc","pivot.malignancy_non_nmsc"),
+    extra_select = c("ctx.pop_res")
   )
 }
