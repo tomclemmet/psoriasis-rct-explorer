@@ -15,14 +15,13 @@ gen_pasi_jags <- function(drugs = pasi_drugs, direct = TRUE) {
   con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
   
   pasi_condensed <<- dbReadTable(con, "v_pasi") |> 
-    group_by(ref_id) |> 
-    ungroup() |> 
     filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
     summarise(.by = c(trial, ref_id, drug, pasi_high_rob, pop_res), n = sum(n), pasi50 = sum(pasi50), 
-              pasi75 = sum(pasi75), pasi90 = sum(pasi90), pasi100 = sum(pasi100)) |> 
+              pasi75 = sum(pasi75), pasi90 = sum(pasi90), pasi100 = sum(pasi100)) |>
+    group_by(ref_id) |> filter(n() > 1) |> ungroup() |> 
     filter(pop_res %notin% c("Comorbidity restrictions", "Cormorbidity restrictions", "Systemic-naïve", "Inadequate response to ustekinumab",
-                             "Nail psoriasis", "Psoriatic arthritis", "Scalp psoriasis")) |> 
-    filter(pasi_high_rob == 0)
+                             "Nail psoriasis", "Psoriatic arthritis", "Scalp psoriasis"))
+    # filter(pasi_high_rob == 0)
   dbDisconnect(con)
   
   if (direct == TRUE) {
