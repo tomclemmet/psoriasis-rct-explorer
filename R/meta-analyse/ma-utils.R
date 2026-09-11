@@ -388,7 +388,6 @@ process_jags <- function(mod) {
   out <- list(
     results = mod$BUGSoutput$summary |>
       as_tibble(rownames = "param") |> 
-      # filter(!(str_detect(param, "d\\[") & str_detect(param, ","))) |> 
       left_join(param_lookup, by = "param") |> 
       relocate(label, .after = param) |> 
       as.data.frame(),
@@ -422,6 +421,7 @@ process_jags <- function(mod) {
   
   out$summary <- out$results |> 
     filter(!str_detect(param, "prob|rhat|dev|dv\\[")) |> 
+    filter(!(str_detect(param, "d\\[") & str_detect(param, ","))) |> 
     arrange(str_detect(param, "beta|mubar"))
   
   class(out) <- c("jags_nma_fit", class(out))
@@ -533,3 +533,15 @@ devplot <- function(m1, m2, output = c("plot", "table"), xlab = "Model 1", ylab 
   
 }
 
+forest <- function(m) {
+  df <- m$summary |> 
+    filter(label %notin% c("Placebo", "Mirikizumab", "Phototherapy", "Netakimab", "Roflumilast", "Icotrokinra", "Tofacitinib"), Rhat < 1.1) |> 
+    mutate(group = substr(param, 1, 1), group = if_else(group == "s", "sd", group), label = if_else(is.na(label), param, label), rank = if_else(group == "d", mean, NA)) |> 
+    group_by(group) |> 
+    arrange(desc(rank), .by_group = TRUE)
+  df$label <- factor(df$label, levels = rev(df$label))
+  ggplot(df, aes(y = label, x = mean)) +
+    geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`), shape = 15) +
+    facet_grid(group ~ ., scales = "free", space = "free") +
+    theme_bw()
+}
