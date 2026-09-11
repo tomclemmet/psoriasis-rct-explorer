@@ -55,7 +55,9 @@ suppressPackageStartupMessages({
 })
 
 # Drop measurements beyond this many week-equivalent weeks.
-MAX_TIMEPOINT_WK <- 24
+MAX_TIMEPOINT_WK <- 16
+# Study RefIDs to exclude from the sqlite entirely (e.g. known bad extractions).
+EXCLUDE_STUDY_IDS <- c(29, 36, 85, 112, 240, 314, 387, 391, 392, 398, 413, 464, 497, 499)
 # Baseline PASI is a "Psoriasis characteristics" outcome; always kept (the app
 # uses it as the Absolute-PASI baseline) even though it has no view `code`.
 BASELINE_PASI_OUTCOME_ID <- 11L
@@ -137,6 +139,7 @@ excluded_study_ids <- studefs$RefID[
   (is.na(studefs$ParentID) | studefs$ParentID == 0) &
   !is.na(studefs$IncExc) & studefs$IncExc %in% c(2L, 3L, 4L)
 ]
+excluded_study_ids <- union(excluded_study_ids, EXCLUDE_STUDY_IDS)
 
 # --- 3. Create destination schema -----------------------------------------
 ddl <- "
