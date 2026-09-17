@@ -57,7 +57,8 @@ suppressPackageStartupMessages({
 # Drop measurements beyond this many week-equivalent weeks.
 MAX_TIMEPOINT_WK <- 16
 # Study RefIDs to exclude from the sqlite entirely (e.g. known bad extractions).
-EXCLUDE_STUDY_IDS <- c(29, 36, 85, 112, 240, 314, 387, 391, 392, 398, 413, 464, 497, 499)
+EXCLUDE_STUDY_IDS <- c(6, 16, 30, 85, 115, 116, 117, 128, 183, 233, 291, 305, 314, 387, 392, 398, 400, 409, 413, 464, 470)
+
 # Baseline PASI is a "Psoriasis characteristics" outcome; always kept (the app
 # uses it as the Absolute-PASI baseline) even though it has no view `code`.
 BASELINE_PASI_OUTCOME_ID <- 11L
@@ -499,11 +500,15 @@ m$subgroup_id <- 0L
 
 # Week-equivalent timepoint cutoff. Convert the raw timepoint to weeks using the
 # study's unit before comparing. Rows with no timepoint or an unknown unit are
-# kept (no timepoint = not "beyond N weeks").
+# kept (no timepoint = not "beyond N weeks"). A 4-month follow-up (~17.3
+# week-equivalent weeks) is kept as an explicit exception rather than raising
+# MAX_TIMEPOINT_WK for everyone.
 wk_per_unit  <- c(wk = 1, d = 1/7, mo = 52/12, min = 1/(7*24*60))
-factor_for_m <- unname(wk_per_unit[unname(study_tp_unit_name[as.character(m$RefID)])])
+tp_unit_for_m <- unname(study_tp_unit_name[as.character(m$RefID)])
+factor_for_m <- unname(wk_per_unit[tp_unit_for_m])
 wk_equiv     <- m$TimePeriod * factor_for_m
-keep_tp <- is.na(m$TimePeriod) | is.na(factor_for_m) | wk_equiv <= MAX_TIMEPOINT_WK
+is_4mo  <- !is.na(tp_unit_for_m) & tp_unit_for_m == "mo" & m$TimePeriod == 4
+keep_tp <- is.na(m$TimePeriod) | is.na(factor_for_m) | wk_equiv <= MAX_TIMEPOINT_WK | is_4mo
 m <- m[keep_tp, ]
 
 m$arm_id <- unname(arm_id_of[key(m$RefID, m$ArmNo)])
