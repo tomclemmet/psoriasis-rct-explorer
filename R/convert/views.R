@@ -4,17 +4,23 @@
 # One view per tab. Each carries its tab's binary responder columns AND any
 # absolute / change-from-baseline columns, so the app reads a single table per
 # tab:
-#   v_pasi   - pasi50/75/90/100 responders, absolute & change-from-baseline
-#              PASI, baseline PASI (outcome 11) as an arm-level column, and
-#              pasi_high_rob (Cochrane RoB2 high-risk-of-bias flag on PASI
-#              75/90, computed in convert.R from studies.pasi_high_rob).
-#   v_dlqi   - DLQI binary endpoints, absolute & change-from-baseline DLQI.
-#   v_safety - binary safety outcomes.
-# All three also carry pop_res (studies.pop_res:
+#   v_pasi     - pasi50/75/90/100 responders, absolute & change-from-baseline
+#                PASI, baseline PASI (outcome 11) as an arm-level column, and
+#                pasi_high_rob (Cochrane RoB2 high-risk-of-bias flag on PASI
+#                75/90, computed in convert.R from studies.pasi_high_rob).
+#   v_dlqi     - DLQI binary endpoints, absolute & change-from-baseline DLQI.
+#   v_safety   - binary safety outcomes.
+#   v_baseline - arm-level baseline characteristics (demographics, disease
+#                characteristics, comorbidity, prior therapy), long format:
+#                one row per (arm, characteristic) rather than pivoted columns,
+#                since the set of characteristics varies by trial and isn't
+#                fixed like the endpoint outcomes above.
+# All four also carry pop_res (studies.pop_res:
 # free text, NULL unless the trial restricts to some subpopulation).
 #
-# Each view is per (arm, timepoint). Columns the app expects from arm context:
-# trial, ref_id, arm_no, arm_name, drug, dose, timepoint, timepoint_unit, n.
+# v_pasi/v_dlqi/v_safety are each per (arm, timepoint). Columns the app
+# expects from arm context: trial, ref_id, arm_no, arm_name, drug, dose,
+# timepoint, timepoint_unit, n.
 
 # Common arm/study context CTE. Dose is rebuilt as "<amount> <unit> <frequency>"
 # (integer-valued amounts render without a trailing .0; frequency is omitted
@@ -87,6 +93,48 @@ WITH arm_ctx AS (
     JOIN   arm_ctx ctx ON ctx.arm_id = pivot.arm_id
     %s
   ", name, .arm_ctx_cte, pivots, in_list, selects, extra_join)
+
+  dbExecute(dst, sql)
+  n_rows <- dbGetQuery(dst, sprintf("SELECT COUNT(*) AS n FROM %s", name))$n
+  cat(sprintf("  %s rows: %d\n", name, n_rows))
+}
+
+# Long-format view: one row per (arm, characteristic), unlike .build_view's
+# per-(arm, timepoint) pivot. Baseline characteristics are arm-level
+# (timepoint 0/NULL, subgroup_id 0 always) and their set varies by trial, so
+# pivoting them into fixed columns would mean editing this file every time a
+# new characteristic shows up in the source data.
+.build_baseline_view <- function(dst, name, subcategories) {
+  cat(sprintf("Building view %s ...\n", name))
+  in_list <- paste(sprintf("'%s'", subcategories), collapse = ", ")
+
+  sql <- sprintf("
+    CREATE VIEW %s AS
+    %s
+    SELECT ctx.trial,
+           ctx.ref_id,
+           ctx.arm_no,
+           ctx.arm_name,
+           ctx.drug,
+           ctx.dose,
+           o.subcategory   AS subcategory,
+           o.label         AS characteristic,
+           dt.name         AS data_type,
+           m.k             AS k,
+           m.n             AS n,
+           m.mean          AS mean,
+           m.sd            AS sd,
+           m.median        AS median,
+           m.lo_iqr        AS lo_iqr,
+           m.hi_iqr        AS hi_iqr,
+           ctx.pop_res     AS pop_res
+    FROM   measurements m
+    JOIN   outcomes o         ON o.outcome_id = m.outcome_id
+    JOIN   arm_ctx ctx        ON ctx.arm_id = m.arm_id
+    LEFT   JOIN data_types dt ON dt.data_type_id = o.data_type_id
+    WHERE  o.subcategory IN (%s)
+      AND  m.subgroup_id = 0
+  ", name, .arm_ctx_cte, in_list)
 
   dbExecute(dst, sql)
   n_rows <- dbGetQuery(dst, sprintf("SELECT COUNT(*) AS n FROM %s", name))$n
@@ -189,5 +237,12 @@ build_views <- function(dst) {
                     "pivot.serious_infection","pivot.injection_site_rxn",
                     "pivot.malignancy","pivot.nmsc","pivot.malignancy_non_nmsc"),
     extra_select = c("ctx.pop_res")
+  )
+
+  # v_baseline - arm-level baseline characteristics, long format.
+  .build_baseline_view(
+    dst, "v_baseline",
+    subcategories = c("Demographics", "Psoriasis characteristics",
+                      "Comorbidity", "Previous therapy")
   )
 }
