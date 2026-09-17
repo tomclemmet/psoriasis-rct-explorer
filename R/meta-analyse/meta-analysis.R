@@ -78,13 +78,13 @@ j |>
   facet_wrap(~ class, scales = "free_y")
 ggsave("output/forest.png", height = 7, width = 10)
 
-drug_rank <- process_jags(j$re_rez_u_c_con)$summary |> 
+drug_rank <- s$base$results |> 
   filter(str_starts(param, "prob")) |> 
   mutate(drug = pasi_drugs[as.numeric(str_extract(param, "(?<=,).*?(?=])"))]) |> 
   slice_head(n = 1, by = drug) |> 
   arrange(mean)
 
-process_jags(j$re_rez_u_c_con)$summary |> 
+s$base$results |> 
   filter(str_starts(param, "prob")) |> 
   mutate(
     drug = factor(
@@ -100,7 +100,10 @@ process_jags(j$re_rez_u_c_con)$summary |>
   arrange(drug, desc(outcome)) |> 
   mutate(.by = drug, mean = mean - lag(mean, default = 0), .after = mean) |> 
   mutate(outcome = forcats::fct_rev(outcome)) |> 
-  filter(drug %notin% exc) |> 
+  filter(drug %notin% c(
+    "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast", 
+    "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab")
+  ) |> 
   ggplot(aes(x = mean, y = drug)) +
   geom_col(aes(fill = outcome), position = position_stack(reverse = TRUE)) +
   theme_classic() +
