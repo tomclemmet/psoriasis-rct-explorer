@@ -2,26 +2,21 @@ library(DBI)
 library(dplyr)
 library(tidyr)
 drug_class_lookup <- read.csv("R/meta-analyse/trt_class.csv")
-pasi_drugs <- c(
-  "Adalimumab", "Apremilast", "Bimekizumab", "Brodalumab", "Certolizumab", "Cyclosporin",
-  "Deucravacitinib", "Etanercept", "Fumaric acid esters", "Guselkumab", "Icotrokinra", "Infliximab",
-  "Ixekizumab", "Izokibep", "Methotrexate", "Mirikizumab", "Netakimab", "Placebo",
-  "Risankizumab", "Roflumilast", "Secukinumab", "Sonelokimab", "Tildrakizumab", "Tofacitinib",
-  "Ustekinumab"
-)
+con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+pasi_drugs <- dbReadTable(con, "v_pasi") |> 
+  distinct(drug) |> 
+  filter(drug != "Izokibep") |>  # CHANGE WHEN PhIII trial included
+  pull(drug)
 
 gen_pasi_jags <- function(drugs = pasi_drugs, direct = TRUE) {
-  
-  con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
   
   pasi_condensed <<- dbReadTable(con, "v_pasi") |> 
     filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |> 
     summarise(.by = c(trial, ref_id, drug, pasi_high_rob, pop_res), n = sum(n), pasi50 = sum(pasi50), 
               pasi75 = sum(pasi75), pasi90 = sum(pasi90), pasi100 = sum(pasi100)) |>
-    group_by(ref_id) |> filter(n() > 1) |> ungroup() |> 
-    filter(pop_res %notin% c("Comorbidity restrictions", "Cormorbidity restrictions", "Systemic-naïve", "Inadequate response to ustekinumab",
-                             "Nail psoriasis", "Psoriatic arthritis", "Scalp psoriasis"))
-    # filter(pasi_high_rob == 0)
+    group_by(ref_id) |> filter(n() > 1) |> ungroup() |>
+    filter(pop_res %notin% c("Inadequate response to ustekinumab")) 
+
   dbDisconnect(con)
   
   if (direct == TRUE) {
@@ -108,7 +103,7 @@ gen_pasi_jags <- function(drugs = pasi_drugs, direct = TRUE) {
     nt = max(pasi_id_lookup$t),
     ncl = max(pasi_id_lookup$cl),
     Cmax = 5,
-    mmu = 0.45,
+    mmu = 0.7,
     na = pasi_wide$na,
     nc = pasi_wide$nc,
     t = select(pasi_wide, starts_with("a") & ends_with("t")) |> as.matrix(),
