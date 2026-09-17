@@ -8,7 +8,7 @@
 *.RDS
 *.RData
 *.png
-#*.csv
+*.csv
 output/
 R/meta-analyse/*.csv
 
