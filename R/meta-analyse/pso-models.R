@@ -32,20 +32,40 @@ saveRDS(j, "R/meta-analyse/jags_fits.rds")
 compare_jags(j) |> write.csv("results1.csv")
 
 # STEP 2: Check consistency using UME model
-ume$re_rezi_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", consistency = "ume", baseline = "adjusted")
 
-m <- j$re_rezi_a_nc
-u <- ume$re_rezi_a_nc
-m
-u
-forest(m)
+ume <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", consistency = "ume", baseline = "adjusted")
+j$re_rezi_a_nc
+ume
 
-m$dev_table |> arrange(desc(mean))
+devplot(j$re_rezi_a_nc, ume, "Consistency", "Inconsistency")
 
-devplot(m, u, "Consistency", "Inconsistency")
+# STEP 3: Check class effects model
 
-devplot(m, u, output = "table") |> 
-  filter(diff > 0.5) |> group_by(ref_id) |> mutate(mdiff = max(diff)) |> arrange(mdiff) |> View()
+class <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", consistency = "ume", baseline = "adjusted", class = "exchangeable")
+j$re_rezi_a_nc
+class
 
-distinct(pasi_condensed, ref_id, trial) |> write.csv("temp.csv")
+# STEP 4: Sensitivity analysis
+s <- list()
 
+source("R/meta-analyse/wide_format.R")
+s$base <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", baseline = "adjusted")
+
+bios <- gen_pasi_jags(c("Placebo", "Adalimumab", "Bimekizumab", "Brodalumab", "Certolizumab",
+                        "Etanercept", "Guselkumab", "Infliximab", "Ixekizumab", "Risankizumab", "Secukinumab", "Sonelokimab",
+                        "Tildrakizumab", "Ustekinumab", "Xeligekimab", "Netakimab", "Mirikizumab"))
+s$bio <- pso_jags(bios, niter = niter, effects = "random", cutpoints = "trial", baseline = "adjusted")
+
+source("R/meta-analyse/wide_format.R")
+approved <- gen_pasi_jags(setdiff(pasi_drugs, c(
+  "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast", 
+  "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab")
+  ))
+s$app <- pso_jags(approved, niter = niter, effects = "random", cutpoints = "trial", baseline = "adjusted")
+
+source("R/meta-analyse/wide_format.R")
+s$low_rob <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", baseline = "adjusted")
+
+forests(s$base, s$bio, s$app, s$low_rob) +
+  scale_colour_viridis_d(labels = c("1" = "base case", "2" = "biologics", "3" = "approved", "4" = "low RoB"), end = 0.8)
+ggsave("output/sa_forest.png", height = 18, width = 16, units = "cm")
