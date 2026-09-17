@@ -50,7 +50,9 @@ model {
   for (k in 2:nt){ d[k] ~ dnorm(0,.0001) }                                      # vague priors for treatment effects
 
   totresdev <- sum(resdev[])                                                    # Total Residual Deviance
-  beta ~ dnorm(0,.0001)
+  beta[1] <- 0
+  for (k in 2:nt) { beta[k] <- B}
+  B ~ dnorm(0,.0001)
   sd ~ dunif(0, 5)                                                              # vague prior for between-trial SD
   sdz ~ dunif(0, 5)
   sdcl ~ dunif(0, 5)
