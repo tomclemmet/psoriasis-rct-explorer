@@ -2,6 +2,7 @@ library(stringr)
 library(posterior)
 library(multinma)
 library(ggplot2)
+library(bayesplot)
 
 nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, label=NA, t=NA, reft=NA) {
   
@@ -392,7 +393,8 @@ process_jags <- function(mod) {
       relocate(label, .after = param) |> 
       as.data.frame(),
     
-    trace = posterior::as_draws_df(mod$BUGSoutput$sims.array),
+    trace = posterior::as_draws_df(mod$BUGSoutput$sims.array) |> 
+      select(starts_with("."), starts_with(c("d[", "z[", "sd", "B"))),
     
     dev_table = mod$BUGSoutput$summary |>
       as_tibble(rownames = "param") |> 
@@ -422,7 +424,7 @@ process_jags <- function(mod) {
   out$summary <- out$results |> 
     filter(!str_detect(param, "prob|rhat|dev|dv\\[")) |> 
     filter(!(str_detect(param, "d\\[") & str_detect(param, ","))) |> 
-    arrange(str_detect(param, "beta|mubar"))
+    arrange(str_detect(param, "B|mubar"))
   
   class(out) <- c("jags_nma_fit", class(out))
   
@@ -511,19 +513,20 @@ beta_dist_metaprop <- function(mod, effects) {
 }
 
 
-devplot <- function(m1, m2, output = c("plot", "table"), xlab = "Model 1", ylab = "Model 2") {
+devplot <- function(m1, m2, xlab = "Model 1", ylab = "Model 2", output = c("plot", "table")) {
   output = match.arg(output)
   
   devdev <- inner_join(process_jags(m1)$dev_table, process_jags(m2)$dev_table, 
                        by = c("id_row", "id_arm", "id_cat", "trial",
                               "ref_id", "t", "drug")) |> 
-    mutate(.by = ref_id, diff = mean.x - mean.y)
+    mutate(.by = ref_id, diff = mean.x - mean.y, .after = id_cat)
   
   if (output == "plot") {
     ggplot(devdev, aes(x = mean.x, y = mean.y)) +
       geom_point(alpha = 0.5, shape = 16) +
       geom_abline(intercept = 0, slope = 1, linetype = 2, colour = "blue") +
       geom_abline(intercept = -0.5, slope = 1, linetype = 3, colour = "red") +
+      geom_abline(intercept = -1, slope = 1, linetype = 3, colour = "red") +
       theme_classic() +
       labs(title = "Deviance-deviance plot", x = xlab, y = ylab) +
       scale_color_viridis_d()
@@ -535,8 +538,8 @@ devplot <- function(m1, m2, output = c("plot", "table"), xlab = "Model 1", ylab 
 
 forest <- function(m) {
   df <- m$summary |> 
-    filter(label %notin% c("Placebo", "Mirikizumab", "Phototherapy", "Netakimab", "Roflumilast", "Icotrokinra", "Tofacitinib"), Rhat < 1.1) |> 
-    mutate(group = substr(param, 1, 1), group = if_else(group == "s", "sd", group), label = if_else(is.na(label), param, label), rank = if_else(group == "d", mean, NA)) |> 
+    filter(label %notin% c("Mirikizumab", "Phototherapy", "Netakimab", "Roflumilast", "Icotrokinra", "Tofacitinib"), param != "mubar") |> 
+    mutate(group = substr(param, 1, 1), group = factor(if_else(group == "s", "sd", group), levels = c("d", "z", "sd", "B")), label = if_else(is.na(label), param, label), rank = if_else(group == "d", mean, NA)) |> 
     group_by(group) |> 
     arrange(desc(rank), .by_group = TRUE)
   df$label <- factor(df$label, levels = rev(df$label))
