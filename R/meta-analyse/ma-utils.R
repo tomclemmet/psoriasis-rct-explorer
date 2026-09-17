@@ -10,7 +10,7 @@ nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, labe
   thresholds <- c("pasi50", "pasi75", "pasi90", "pasi100")
   
   if (any(class(m) == "rjags")) {
-    # CURRENTLY IGNORES BASE DIST HARD CODED
+    
     dic <- process_jags(m)$DIC
     
     # Generate MCMC traces for response rates
@@ -19,7 +19,7 @@ nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, labe
       # Convert to long format
       pivot_longer(starts_with("prob"), names_to = "param", values_to = "trace") |> 
       # Extract drug name
-      mutate(drug = pasi_drugs[as.numeric(str_extract(param, pattern = "(?<=,\\s?)\\d+(?=\\])"))],
+      mutate(drug = pasi_id_lookup$drug[as.numeric(str_extract(param, pattern = "(?<=,\\s?)\\d+(?=\\])"))],
              endpoint = thresholds[as.numeric(str_extract(param, pattern = "(?<=prob\\[)\\d+(?=,)"))]) |> 
       suppressWarnings() 
     
@@ -365,8 +365,8 @@ process_jags <- function(mod) {
   if (inherits(mod, "jags_nma_fit")) return(mod)
   
   param_lookup <- data.frame(
-    label = pasi_drugs,
-    param = paste0("d[", seq(1:length(pasi_drugs)), "]")
+    label = pasi_id_lookup$drug,
+    param = paste0("d[", seq(1:length(pasi_id_lookup$drug)), "]")
   ) |> bind_rows(distinct(pasi_id_lookup, class, cl) |> 
                 mutate(label = class, param = paste0("m[", cl, "]")) |>
                 select(-class, -cl))
@@ -538,13 +538,35 @@ devplot <- function(m1, m2, xlab = "Model 1", ylab = "Model 2", output = c("plot
 
 forest <- function(m) {
   df <- m$summary |> 
-    filter(label %notin% c("Mirikizumab", "Phototherapy", "Netakimab", "Roflumilast", "Icotrokinra", "Tofacitinib"), param != "mubar") |> 
+    filter(label %notin% c("Mirikizumab", "Phototherapy", "Xeligekimab", "Netakimab", "Roflumilast", "Icotrokinra", "Tofacitinib"), param != "mubar") |> 
     mutate(group = substr(param, 1, 1), group = factor(if_else(group == "s", "sd", group), levels = c("d", "z", "sd", "B")), label = if_else(is.na(label), param, label), rank = if_else(group == "d", mean, NA)) |> 
     group_by(group) |> 
     arrange(desc(rank), .by_group = TRUE)
   df$label <- factor(df$label, levels = rev(df$label))
   ggplot(df, aes(y = label, x = mean)) +
     geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`), shape = 15) +
+    facet_grid(group ~ ., scales = "free", space = "free") +
+    theme_bw()
+}
+
+forests <- function(...) {
+  mods <- list(...)
+  df <- list()
+  
+  for (i in 1:length(mods)) {
+    df[[i]] <- mods[[i]]$summary |> 
+      filter(label %notin% c(
+        "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast", 
+        "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab"
+      ), param != "mubar") |> 
+      mutate(group = substr(param, 1, 1), group = factor(if_else(group == "s", "sd", group), levels = c("d", "z", "sd", "B")), label = if_else(is.na(label), param, label), rank = if_else(group == "d", mean, NA)) |> 
+      group_by(group) |> 
+      arrange(desc(rank), .by_group = TRUE)
+    df[[i]]$label <- factor(df[[i]]$label, levels = rev(df[[i]]$label))
+  }
+  
+  ggplot(bind_rows(df, .id = "model"), aes(y = label, x = mean)) +
+    geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model), shape = 124, position = position_dodge(0.5)) +
     facet_grid(group ~ ., scales = "free", space = "free") +
     theme_bw()
 }
