@@ -8,13 +8,15 @@ pso_jags <- function(
     cutpoints = c("fixed", "treatment", "trial",  "arm"),
     baseline = c("unadjusted", "adjusted"),
     class = c("independent", "exchangeable"),
-    consistency = c("consistency", "ume")
+    consistency = c("consistency", "ume"),
+    output = c("processed", "jags")
 ) {
   effects <- match.arg(effects)
   cutpoints <- match.arg(cutpoints)
   baseline <- match.arg(baseline)
   class <- match.arg(class)
   consistency <- match.arg(consistency)
+  output <- match.arg(output)
   
   if (baseline == "unadjusted") {
     data$mmu <- NULL
@@ -47,7 +49,7 @@ model {
   z_trial <- "zeta[i, C[i, j + 1] - 1]"
   z_arm <- "zeta[i, k, C[i, j + 1] - 1]"
   
-  baseline_adj <- " + beta * (mu[i] - mmu) * (1 - equals(k, 1))"
+  baseline_adj <- " + (beta[t[i, k]] - beta[t[i, 1]]) * (mu[i] - mmu)"
   
   deviance <- "
         rhat[i, k, j] <- q[i, k, j] * n[i, k, j]                                # predicted number events
@@ -169,15 +171,15 @@ model {
   d_priors_class <- "
   d[1] <- 0
   m[1] <- 0
-  for (k in 2:nt) {
-    d[k] ~ dnorm(m[cl[k]], taucl)
-  }
+  for (k in 2:nt) { d[k] ~ dnorm(m[cl[k]], taucl) }
   for (p in 2:ncl){ m[p] ~ dnorm(0,.0001) }  
 "
   
   priors <- "
   totresdev <- sum(resdev[])                                                    # Total Residual Deviance
-  beta ~ dnorm(0,.0001)
+  beta[1] <- 0
+  for (k in 2:nt) { beta[k] <- B}
+  B ~ dnorm(0,.01)
   sd ~ dunif(0, 5)                                                              # vague prior for between-trial SD
   sdz ~ dunif(0, 5)
   sdcl ~ dunif(0, 5)
@@ -254,7 +256,7 @@ model {
     "d", "z", 
     if (effects == "random") "sd" else NULL,
     if (cutpoints == "fixed") NULL else "sdz",
-    if (baseline == "adjusted") c("beta", "mubar") else NULL,
+    if (baseline == "adjusted") c("B", "mubar") else NULL,
     if (class == "exchangeable") c("m", "sdcl") else NULL,
     if (consistency == "ume") NULL else "prob",
     "totresdev",
@@ -266,8 +268,10 @@ model {
                  if_else(baseline == "adjusted", "baseline adjustment", "no baseline adjustment"),
                  if (class == "exchangeable") ", exchangeable class effects" else NULL))
   
-  jags(
+  fit <- jags(
     data = data, parameters.to.save = params, inits = NULL, 
     model.file = filename, n.chains = 2, n.iter = niter, n.burnin = niter/2, n.thin = 1
   )
+  
+  if (output == "processed") process_jags(fit) else fit
 }

@@ -12,7 +12,7 @@ model {
         q.raw[i, k, j] <- 1 - (p[i, k, C[i, j + 1]] /                           # conditional probabilities
         max(p[i, k, C[i, j]], 1e-14)) 
         q[i, k, j] <- max(1e-12, min(1 - 1e-12, q.raw[i, k, j]))
-        theta[i, k, j] <- mu[i] - delta[i, k] + zeta[i, C[i, j + 1] - 1] + beta * (mu[i] - mmu) * (1 - equals(k, 1))
+        theta[i, k, j] <- mu[i] - delta[i, k] + zeta[i, C[i, j + 1] - 1] + (beta[t[i, k]] - beta[t[i, 1]]) * (mu[i] - mmu)
         rhat[i, k, j] <- q[i, k, j] * n[i, k, j]                                # predicted number events
         dv[i, k, j] <- 2 * (                                                    # Deviance contribution of each category  
           r[i, k, j] * 
@@ -53,13 +53,13 @@ model {
   }
   d[1] <- 0
   m[1] <- 0
-  for (k in 2:nt) {
-    d[k] ~ dnorm(m[cl[k]], taucl)
-  }
+  for (k in 2:nt) { d[k] ~ dnorm(m[cl[k]], taucl) }
   for (p in 2:ncl){ m[p] ~ dnorm(0,.0001) }  
 
   totresdev <- sum(resdev[])                                                    # Total Residual Deviance
-  beta ~ dnorm(0,.0001)
+  beta[1] <- 0
+  for (k in 2:nt) { beta[k] <- B}
+  B ~ dnorm(0,.0001)
   sd ~ dunif(0, 5)                                                              # vague prior for between-trial SD
   sdz ~ dunif(0, 5)
   sdcl ~ dunif(0, 5)
