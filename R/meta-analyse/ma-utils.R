@@ -551,13 +551,16 @@ forest <- function(m) {
 
 forests <- function(...) {
   mods <- list(...)
+  if (length(mods) == 1 && is.list(mods[[1]])) {
+    mods <- mods[[1]]
+  }
   df <- list()
   
   for (i in 1:length(mods)) {
     df[[i]] <- mods[[i]]$summary |> 
       filter(label %notin% c(
         "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast", 
-        "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab"
+        "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab", "Zasocitinib"
       ), param != "mubar") |> 
       mutate(group = substr(param, 1, 1), group = factor(if_else(group == "s", "sd", group), levels = c("d", "z", "sd", "B")), label = if_else(is.na(label), param, label), rank = if_else(group == "d", mean, NA)) |> 
       group_by(group) |> 
@@ -566,7 +569,7 @@ forests <- function(...) {
   }
   
   ggplot(bind_rows(df, .id = "model"), aes(y = label, x = mean)) +
-    geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model), shape = 124, position = position_dodge(0.5)) +
+    geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model), shape = 15, size = 0.2, position = position_dodge(0.5)) +
     facet_grid(group ~ ., scales = "free", space = "free") +
     theme_bw()
 }
