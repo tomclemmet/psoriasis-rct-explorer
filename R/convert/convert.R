@@ -57,7 +57,10 @@ suppressPackageStartupMessages({
 # Drop measurements beyond this many week-equivalent weeks.
 MAX_TIMEPOINT_WK <- 16
 # Study RefIDs to exclude from the sqlite entirely (e.g. known bad extractions).
-EXCLUDE_STUDY_IDS <- c(6, 16, 30, 85, 115, 116, 117, 128, 183, 233, 291, 305, 314, 387, 392, 398, 400, 409, 413, 464, 470)
+EXCLUDE_STUDY_IDS <- c(
+  30, 115, 116, 117, 233, 314,                  # Single-drug trials
+  112                                           # Population with inadequate response to ustekinumab
+)
 
 # Baseline PASI is a "Psoriasis characteristics" outcome; always kept (the app
 # uses it as the Absolute-PASI baseline) even though it has no view `code`.
