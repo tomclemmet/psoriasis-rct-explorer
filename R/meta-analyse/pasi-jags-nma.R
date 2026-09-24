@@ -33,7 +33,7 @@ model {
   for(i in 1:ns){                                                               # LOOP THROUGH STUDIES
     w[i, 1] <- 0                                                                # adjustment for multi-arm trials is zero for control arm
     delta[i, 1] <- 0                                                            # treatment effect is zero for control arm
-    mu[i] ~ dnorm(0, .0001)                                                     # vague priors for all trial baselines
+    mu[i] ~ dnorm(0, .25)                                                       # vague priors for all trial baselines
     for (k in 1:na[i]) {                                                        # LOOP THROUGH ARMS
       p[i, k, 1] <- 1                                                           # Pr(PASI >0)
       for (j in 1:(nc[i] - 1)) {                                                # LOOP THROUGH CATEGORIES
@@ -253,7 +253,7 @@ model {
   writeLines(model_code, filename)
   
   params <- c(
-    "d", "z", 
+    "d", "z", "mu",
     if (effects == "random") "sd" else NULL,
     if (cutpoints == "fixed") NULL else "sdz",
     if (baseline == "adjusted") c("B", "mubar") else NULL,
@@ -263,15 +263,60 @@ model {
     "dv", "rhat"
   )
   
+  inits <- list(
+    list(
+      d = c(NA, rep(0, data$nt - 1)), 
+      mu = rep(0, data$ns),
+      z.aux = c(NA, rep(0.5, 3))
+    ),
+    list(
+      d = c(NA, rep(1, data$nt - 1)), 
+      mu = rep(0, data$ns),
+      z.aux = c(NA, rep(1, 3))
+    )
+  )
+  if (effects == "random") {
+    inits[[1]]$sd <- 1
+    inits[[2]]$sd <- 0.5
+  }
+  if (cutpoints != "fixed") {
+    inits[[1]]$sdz <- 1
+    inits[[2]]$sdz <- 0.5
+  }
+  if (class == "exchangeable") {
+    inits[[1]]$m <- c(NA, rep(0, ncl - 1))
+    inits[[1]]$sdcl <- 1
+    inits[[2]]$m <- c(NA, rep(1, ncl - 1))
+    inits[[2]]$sdcl <- 0.5
+  }
+  if (baseline == "adjusted") {
+    inits[[1]]$B <- 0
+    inits[[1]]$B <- -1
+  }
+  if (consistency == "ume") {
+    inits[[1]]$d <- NULL
+    inits[[2]]$d <- NULL
+  }
+  
   message(paste0("Fitting ", if_else(consistency == "ume", "UME ", ""), "NMA for PASI response with ", effects, 
                  " effects, ", cutpoints, if_else(cutpoints == "fixed", "", "-level"), " cutpoints, ", 
                  if_else(baseline == "adjusted", "baseline adjustment", "no baseline adjustment"),
                  if (class == "exchangeable") ", exchangeable class effects" else NULL))
   
+  set.seed(123)
   fit <- jags(
-    data = data, parameters.to.save = params, inits = NULL, 
+    data = data, parameters.to.save = params, inits = inits, 
     model.file = filename, n.chains = 2, n.iter = niter, n.burnin = niter/2, n.thin = 1
   )
+  
+  Rhat <- fit$BUGSoutput$summary[, "Rhat"]
+
+  if (any(Rhat > 1.1)) {
+    warning(paste0(
+      "WARNING: The following parameters have an Rhat greater than 1.1: ",
+      paste(paste0(names(Rhat)[Rhat > 1.1], "(", round(Rhat[Rhat > 1.1], 3), ")"), collapse = ", ")
+    ))
+  }
   
   if (output == "processed") process_jags(fit) else fit
 }
