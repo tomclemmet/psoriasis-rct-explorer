@@ -394,7 +394,7 @@ process_jags <- function(mod) {
       as.data.frame(),
     
     trace = posterior::as_draws_df(mod$BUGSoutput$sims.array) |> 
-      select(starts_with("."), starts_with(c("d[", "z[", "sd", "B", "mu"))),
+      select(starts_with("."), starts_with(c("d[", "z[", "sd", "B", "mu", "totresdev"))),
     
     dev_table = mod$BUGSoutput$summary |>
       as_tibble(rownames = "param") |> 
@@ -579,3 +579,17 @@ forests <- function(..., lab = NA) {
     facet_grid(group ~ ., scales = "free", space = "free") +
     theme_bw()
 }
+
+converge <- function(m, param, xmin = 0) {
+  
+  m$trace |> 
+    select(starts_with("."), all_of(param)) |> 
+    group_by(.chain) |> 
+    mutate(cummean = cumsum(.data[[param]]) / .iteration) |> 
+    filter(.iteration >= xmin) |> 
+    ggplot() +
+    geom_line(aes(x = .iteration, y = cummean, colour = factor(.chain))) +
+    theme_bw()
+  
+}
+
