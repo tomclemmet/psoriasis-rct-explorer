@@ -8,38 +8,50 @@ theme_set(theme_classic())
 bayesplot::color_scheme_set("viridis")
 j <- list()
 ume <- list()
-# j <- readRDS("R/meta-analyse/jags_fits.rds")
+j <- readRDS("R/meta-analyse/jags_fits.rds")
 niter <- 10000
 
-# STEP 1: Compare random and fixed effects models, with and without baseline adjustment
-j$fe_fez_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "fixed")
-j$re_fez_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "fixed")
-j$fe_rezt_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "treatment")
-j$re_rezt_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "treatment")
-j$fe_rezi_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "trial")
-j$re_rezi_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial")
-j$fe_reza_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "arm")
-j$re_reza_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "arm")
-j$fe_fez_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "fixed", baseline = "adjusted")
-j$re_fez_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "fixed", baseline = "adjusted")
-j$fe_rezt_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "treatment", baseline = "adjusted")
-j$re_rezt_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "treatment", baseline = "adjusted")
-j$fe_rezi_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "trial", baseline = "adjusted")
-j$re_rezi_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", baseline = "adjusted")
-j$fe_reza_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed", cutpoints = "arm", baseline = "adjusted")
-j$re_reza_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "arm", baseline = "adjusted")
-saveRDS(j, "R/meta-analyse/jags_fits.rds")
 
+# STEP 1: Compare model fits ----------------------------------------------
+
+# j$fe_fez_u_nc  <- pso_jags(pasi_jags, niter = niter, effects = "fixed",  cutpoints = "fixed")
+# j$re_fez_u_nc  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "fixed")
+j$fe_rezt_u_nc <- pso_jags(pasi_jags, niter = 30000, effects = "fixed",  cutpoints = "treatment")
+j$re_rezt_u_nc <- pso_jags(pasi_jags, niter = 30000, effects = "random", cutpoints = "treatment")
+j$fe_rezi_u_nc <- pso_jags(pasi_jags, niter = 30000, effects = "fixed",  cutpoints = "trial")
+j$re_rezi_u_nc <- pso_jags(pasi_jags, niter = 30000, effects = "random", cutpoints = "trial")
+# j$fe_reza_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed",  cutpoints = "arm")
+# j$re_reza_u_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "arm")
+# j$fe_fez_a_nc  <- pso_jags(pasi_jags, niter = niter, effects = "fixed",  cutpoints = "fixed",     baseline = "adjusted")
+# j$re_fez_a_nc  <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "fixed",     baseline = "adjusted")
+j$fe_rezt_a_nc <- pso_jags(pasi_jags, niter = 30000, effects = "fixed",  cutpoints = "treatment", baseline = "adjusted")
+j$re_rezt_a_nc <- pso_jags(pasi_jags, niter = 30000, effects = "random", cutpoints = "treatment", baseline = "adjusted")
+j$fe_rezi_a_nc <- pso_jags(pasi_jags, niter = 30000, effects = "fixed",  cutpoints = "trial",     baseline = "adjusted")
+j$re_rezi_a_nc <- pso_jags(pasi_jags, niter = 30000, effects = "random", cutpoints = "trial",     baseline = "adjusted")
+# j$fe_reza_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "fixed",  cutpoints = "arm",       baseline = "adjusted")
+# j$re_reza_a_nc <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "arm",       baseline = "adjusted")
+saveRDS(j, "R/meta-analyse/jags_fits.rds")
+lapply(j, \(x) x$DIC)
 compare_jags(j) |> write.csv("results1.csv")
 
-# STEP 2: Check consistency using UME model
+j$fe_rezt_u_nc$results |> filter(param=="totresdev")
 
-ume <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", consistency = "ume", baseline = "adjusted")
-j$re_rezi_a_nc
+# Best model is re_rezt_a_nc by DIC
+j$re_rezt_a_nc
+
+# STEP 2: Check consistency -----------------------------------------------
+
+ume <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "treatment", baseline = "adjusted", consistency = "ume")
+
 ume
+j$re_rezt_a_nc
 
-devplot(j$re_rezi_a_nc, ume, "Consistency", "Inconsistency")
+devplot(j$re_rezt_a_nc, j$re_rezi_a_nc, "Treatment-level", "Trial-level")
 
+devplot(j$re_rezt_a_nc, ume, "Consistency", "Inconsistency")
+ggsave("output/devdev.png", height = 5, width = 5)
+devplot(j$re_rezt_a_nc, ume, output="table") |> arrange(-diff)
+devplot(j$re_rezt_a_nc, ume, output="table") |> arrange(-mean.x)
 # STEP 3: Check class effects model
 
 class <- pso_jags(pasi_jags, niter = niter, effects = "random", cutpoints = "trial", consistency = "ume", baseline = "adjusted", class = "exchangeable")
