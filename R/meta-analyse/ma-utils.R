@@ -394,7 +394,7 @@ process_jags <- function(mod) {
       as.data.frame(),
     
     trace = posterior::as_draws_df(mod$BUGSoutput$sims.array) |> 
-      select(starts_with("."), starts_with(c("d[", "z[", "sd", "B"))),
+      select(starts_with("."), starts_with(c("d[", "z[", "sd", "B", "mu"))),
     
     dev_table = mod$BUGSoutput$summary |>
       as_tibble(rownames = "param") |> 
@@ -422,7 +422,7 @@ process_jags <- function(mod) {
   )
   
   out$summary <- out$results |> 
-    filter(!str_detect(param, "prob|rhat|dev|dv\\[")) |> 
+    filter(!str_detect(param, "mu|prob|rhat|dev|dv\\[") | param == "mubar") |> 
     filter(!(str_detect(param, "d\\[") & str_detect(param, ","))) |> 
     arrange(str_detect(param, "B|mubar"))
   
@@ -455,7 +455,7 @@ compare_jags <- function(mods) {
   
   for (i in 1:length(mods)) {
     coefs <- process_jags(mods[[i]])$summary |> 
-      mutate(meansd = paste0(round(mean, 3), " (", round(sd, 3), ")")) |> 
+      mutate(meansd = paste0(round(mean, 3), " (", round(sd, 3), "; ", round(Rhat, 3), ")")) |> 
       select(param, meansd)
       
     
@@ -549,7 +549,7 @@ forest <- function(m) {
     theme_bw()
 }
 
-forests <- function(...) {
+forests <- function(..., lab = NA) {
   mods <- list(...)
   if (length(mods) == 1 && is.list(mods[[1]])) {
     mods <- mods[[1]]
@@ -557,7 +557,7 @@ forests <- function(...) {
   df <- list()
   
   for (i in 1:length(mods)) {
-    df[[i]] <- mods[[i]]$summary |> 
+    df[[names(mods)[i]]] <- mods[[i]]$summary |> 
       filter(label %notin% c(
         "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast", 
         "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab", "Zasocitinib"
@@ -565,10 +565,16 @@ forests <- function(...) {
       mutate(group = substr(param, 1, 1), group = factor(if_else(group == "s", "sd", group), levels = c("d", "z", "sd", "B")), label = if_else(is.na(label), param, label), rank = if_else(group == "d", mean, NA)) |> 
       group_by(group) |> 
       arrange(desc(rank), .by_group = TRUE)
-    df[[i]]$label <- factor(df[[i]]$label, levels = rev(df[[i]]$label))
+    df[[names(mods)[i]]]$label <- factor(df[[names(mods)[i]]]$label, levels = rev(df[[names(mods)[i]]]$label))
   }
   
-  ggplot(bind_rows(df, .id = "model"), aes(y = label, x = mean)) +
+  if (!is.na(lab)) {
+    df <- bind_rows(df, .id = "model") |> filter(label %in% lab)
+  } else {
+    df <- bind_rows(df, .id = "model")
+  }
+  
+  ggplot(df, aes(y = label, x = mean)) +
     geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model), shape = 15, size = 0.2, position = position_dodge(0.5)) +
     facet_grid(group ~ ., scales = "free", space = "free") +
     theme_bw()
