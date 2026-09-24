@@ -1,0 +1,32 @@
+drug,class
+Acitretin,conventional
+Cyclosporin,conventional
+Fumaric acid esters,conventional
+Methotrexate,conventional
+Topical,topical
+Phototherapy,phototherapy
+Apremilast,targeted small molecule
+Deucravacitinib,targeted small molecule
+Orismilast,targeted small molecule
+Tofacitinib,targeted small molecule
+Zasocitinib,targeted small molecule
+Roflumilast,targeted small molecule
+Guselkumab,il23
+Icotrokinra,il23
+Risankizumab,il23
+Tildrakizumab,il23
+Mirikizumab,il23
+Bimekizumab,il17
+Brodalumab,il17
+Ixekizumab,il17
+Izokibep,il17
+Netakimab,il17
+Secukinumab,il17
+Sonelokimab,il17
+Xeligekimab,il17
+Adalimumab,tnf
+Certolizumab,tnf
+Etanercept,tnf
+Infliximab,tnf
+Ustekinumab,il12_23
+Placebo,placebo
