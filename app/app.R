@@ -72,6 +72,12 @@ MA_EXCLUDED_DRUGS <- c(
   "Phototherapy" = "it is not an approved or investigational systemic therapy for psoriasis"
 )
 
+# Drugs to hide entirely from the network diagram - no node, no edges, and
+# their trial arms don't count toward other drugs' patient/trial totals.
+# Unlike MA_EXCLUDED_DRUGS, these don't appear at all (not even as a node
+# you can click).
+NETWORK_EXCLUDED_DRUGS <- c()
+
 CLASS_ARC_ORDER <- c("il17", "il23", "il12_23", "tnf",
                      "targeted small molecule", "conventional")
 
@@ -126,6 +132,7 @@ lighten <- function(hex, amount = 0.45) {
 
 build_network_data <- function(td, ref_max_n = NA_real_) {
   td <- td[!is.na(td$drug) & nzchar(td$drug) & !is.na(td$trial), , drop = FALSE]
+  td <- td[!(td$drug %in% NETWORK_EXCLUDED_DRUGS), , drop = FALSE]
   # One row per (trial, arm) keeps the patient count from being multi-counted
   # if the same arm produced several rows in the source view.
   td <- unique(td[, c("trial", "ref_id", "arm_no", "drug", "n_arm"),
