@@ -9,6 +9,7 @@
 *.RData
 *.png
 output/
+*.jags
 
 # R
 .Rhistory
