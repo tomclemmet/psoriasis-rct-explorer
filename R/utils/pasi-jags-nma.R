@@ -1,5 +1,9 @@
+# Multinomial ordered NMA code
 library(R2jags)
+source("R/utils/jags-process.R")
 
+# Function to write and save JAGS code according to chosen arguments and run
+# the analysis
 pso_jags <- function(
     data, 
     filename = NA,
@@ -18,15 +22,16 @@ pso_jags <- function(
   consistency <- match.arg(consistency)
   output <- match.arg(output)
   
+  # Remove redundant data based on arguments, avoiding JAGS warning
   if (baseline == "unadjusted") {
     data$mmu <- NULL
   }
-  
   if (class == "independent") {
     data$cl <- NULL
     data$ncl <- NULL
   }
   
+  # Generic code setting up the conditional binomial likelihood
   setup <- "
 model {
   # *** PROGRAM STARTS
@@ -42,15 +47,20 @@ model {
         max(p[i, k, C[i, j]], 1e-14)) 
         q[i, k, j] <- max(1e-12, min(1 - 1e-12, q.raw[i, k, j]))
         "
+  
+  # Linear predictor theta with trial-specific baseline and treatment effect
   theta <- "theta[i, k, j] <- mu[i] - delta[i, k] + "
   
+  # Term for cutpoints depends on chosen model
   z <- "z[C[i, j + 1] - 1]"
   z_tx <- "zeta[t[i, k], C[i, j + 1] - 1]"
   z_trial <- "zeta[i, C[i, j + 1] - 1]"
   z_arm <- "zeta[i, k, C[i, j + 1] - 1]"
   
+  # Adds baseline adjustment terms if selected
   baseline_adj <- " + (beta[t[i, k]] - beta[t[i, 1]]) * (mu[i] - mmu)"
   
+  # Generic deviance calculations
   deviance <- "
         rhat[i, k, j] <- q[i, k, j] * n[i, k, j]                                # predicted number events
         dv[i, k, j] <- 2 * (                                                    # Deviance contribution of each category  
@@ -63,6 +73,7 @@ model {
       }
       dev[i, k] <- sum(dv[i, k, 1:(nc[i] - 1)])                                 # deviance contribution of each arm"
   
+  # Generic code linking theta to predicted probability of response
   phi <- "
       for (j in 2:nc[i]) {                                                      # LOOP THROUGH CATEGORIES
         p[i, k, C[i, j]] <- 1 - phi.adj[i, k, j]                                # link function
@@ -74,6 +85,7 @@ model {
       }
     }"
   
+  # Trial-specific delta terms for random effects model
   delta_re <- "
     for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
       delta[i, k] ~ dnorm(md[i, k], taud[i, k])
@@ -85,6 +97,7 @@ model {
     resdev[i] <- sum(dev[i, 1:na[i]])                                           # summed residual deviance contribution for this trial
   }"
   
+  # Trial-specific delta terms with no indirect evidence for UME model
   delta_re_ume <- "
     for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
       delta[i, k] ~ dnorm(d[t[i, 1], t[i, k]], tau)
@@ -92,6 +105,7 @@ model {
     resdev[i] <- sum(dev[i, 1:na[i]])                                           # summed residual deviance contribution for this trial
   }"
   
+  # Fixed delta terms for fixed effects model
   delta_fe <- "
     for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
       delta[i, k] <- d[t[i, k]] - d[t[i, 1]]
@@ -99,6 +113,7 @@ model {
     resdev[i] <- sum(dev[i, 1:na[i]])                                           # summed residual deviance contribution for this trial
   }"
   
+  # Fixed delta terms with no indirect evidence for UME model
   delta_fe_ume <- "
     for (k in 2:na[i]) {                                                        # LOOP THROUGH ARMS
       delta[i, k] <- d[t[i, 1], t[i, k]]
@@ -106,13 +121,13 @@ model {
     resdev[i] <- sum(dev[i, 1:na[i]])                                           # summed residual deviance contribution for this trial
   }"
   
+  # Priors for different types of cutpoints
   fez <- "
   z[1] <- 0                                                                     # set z50=0
   for (j in 2:(Cmax-1)) {                                                       # Set priors for z, for any number of categories
     z.aux[j] ~ dunif(0,5)                                                       # priors
     z[j] <- z[j-1] + z.aux[j]                                                   # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
   }"
-  
   rez_tx <- "
   for (i in 1:nt) {zeta[i, 1] <- 0 } # set z50=0
   z[1] <- 0
@@ -124,7 +139,6 @@ model {
       zeta[i, j] <- zeta[i, j - 1] + zeta.aux[i, j]                             # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
     }
   }"
-  
   rez_trial <- "                                                                    
   for (i in 1:ns) { zeta[i, 1] <- 0 } # set z50=0
   z[1] <- 0
@@ -136,7 +150,6 @@ model {
       zeta[i, j] <- zeta[i, j - 1] + zeta.aux[i, j]                             # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
     }
   }"
-  
   rez_arm <- "                                                                    
   for (i in 1:ns) {
     for (k in 1:na[i]) {
@@ -155,10 +168,13 @@ model {
     }
   }"
   
+  # Treatment effect priors
   d_priors <- "
   d[1] <- 0                                                                     # treatment effect is zero for reference treatment
   for (k in 2:nt){ d[k] ~ dnorm(0,.0001) }                                      # vague priors for treatment effects
 "
+  
+  # Treatment effect priors for all comparisons in UME model
   d_priors_ume <- "
   for (k in 1:nt) { d[k,k] <- 0 }                                               # treatment effect is zero for reference treatment
   for (c in 1:(nt - 1)) {
@@ -168,6 +184,7 @@ model {
     }
   }
 "
+  # Class- and treatment-effect priors
   d_priors_class <- "
   d[1] <- 0
   m[1] <- 0
@@ -175,6 +192,7 @@ model {
   for (p in 2:ncl){ m[p] ~ dnorm(0,.0001) }  
 "
   
+  # Other priors (some may not be used, depending on model)
   priors <- "
   totresdev <- sum(resdev[])                                                    # Total Residual Deviance
   beta[1] <- 0
@@ -194,20 +212,24 @@ model {
   A <- probit(1 - p0)
   # calculate prob of achieving PASI 50/75/90/100 on treatment k"
 
+  # Probability calculations for fixed or random trial/arm-level cutpoints
   probs_fez <- "
   for (k in 1:nt) {
     for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + z[j]) }
   }"
   
+  # Probability calculations for random treatment-level cutpoints
   probs_rez_tx <- "
   for (k in 1:nt) {
     for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + zeta[k, j]) }
   }"
   
+  # End of file
   end <- "
   # *** PROGRAM ENDS 
 }"
   
+  # Combine relevant code segments into a single string
   model_code <- paste0(
     setup,
     theta,
@@ -235,6 +257,7 @@ model {
     end
   )
   
+  # Choose filename based on arguments
   if(is.na(filename)) {
     filename <- paste0("JAGS/", paste(
       if_else(effects == "random", "re", "fe"),
@@ -250,8 +273,10 @@ model {
     ), ".jags")
   }
   
+  # Write model code to file
   writeLines(model_code, filename)
   
+  # Choose parameters of interest for JAGS to track
   params <- c(
     "d", "z", "mu",
     if (effects == "random") "sd" else NULL,
@@ -263,6 +288,7 @@ model {
     "dv", "rhat"
   )
   
+  # Specify reasonable initial values for each chain
   inits <- list(
     list(
       d = c(NA, rep(0, data$nt - 1)), 
@@ -298,19 +324,21 @@ model {
     inits[[2]]$d <- NULL
   }
   
+  # Send message with current model type
   message(paste0("Fitting ", if_else(consistency == "ume", "UME ", ""), "NMA for PASI response with ", effects, 
                  " effects, ", cutpoints, if_else(cutpoints == "fixed", "", "-level"), " cutpoints, ", 
                  if_else(baseline == "adjusted", "baseline adjustment", "no baseline adjustment"),
                  if (class == "exchangeable") ", exchangeable class effects" else NULL))
   
+  # Run model
   set.seed(123)
   fit <- jags(
     data = data, parameters.to.save = params, inits = inits, 
     model.file = filename, n.chains = 2, n.iter = niter, n.burnin = niter/2, n.thin = 1
   )
   
+  # Send informative warning if any parameters have failed to converge
   Rhat <- fit$BUGSoutput$summary[, "Rhat"]
-
   if (any(Rhat > 1.1)) {
     warning(paste0(
       "WARNING: The following parameters have an Rhat greater than 1.1: ",
@@ -318,5 +346,6 @@ model {
     ))
   }
   
+  # Process output (saving memory from unwanted chains)
   if (output == "processed") process_jags(fit) else fit
 }

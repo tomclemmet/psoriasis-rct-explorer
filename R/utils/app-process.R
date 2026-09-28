@@ -2,8 +2,9 @@ library(stringr)
 library(posterior)
 library(multinma)
 library(ggplot2)
-library(bayesplot)
 
+# Function taking raw meta-analysis output and producing estimates for every 
+# comparison to display in the R Shiny app
 nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, label=NA, t=NA, reft=NA) {
   
   results <- list()
