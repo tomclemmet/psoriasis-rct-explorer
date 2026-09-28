@@ -33,7 +33,7 @@ model {
   for(i in 1:ns){                                                               # LOOP THROUGH STUDIES
     w[i, 1] <- 0                                                                # adjustment for multi-arm trials is zero for control arm
     delta[i, 1] <- 0                                                            # treatment effect is zero for control arm
-    mu[i] ~ dnorm(0, .25)                                                       # vague priors for all trial baselines
+    mu[i] ~ dnorm(0, .01)                                                        # vague priors for all trial baselines
     for (k in 1:na[i]) {                                                        # LOOP THROUGH ARMS
       p[i, k, 1] <- 1                                                           # Pr(PASI >0)
       for (j in 1:(nc[i] - 1)) {                                                # LOOP THROUGH CATEGORIES
@@ -284,14 +284,14 @@ model {
     inits[[2]]$sdz <- 0.5
   }
   if (class == "exchangeable") {
-    inits[[1]]$m <- c(NA, rep(0, ncl - 1))
+    inits[[1]]$m <- c(NA, rep(0, data$ncl - 1))
     inits[[1]]$sdcl <- 1
-    inits[[2]]$m <- c(NA, rep(1, ncl - 1))
+    inits[[2]]$m <- c(NA, rep(1, data$ncl - 1))
     inits[[2]]$sdcl <- 0.5
   }
   if (baseline == "adjusted") {
     inits[[1]]$B <- 0
-    inits[[1]]$B <- -1
+    inits[[1]]$B <- -0.5
   }
   if (consistency == "ume") {
     inits[[1]]$d <- NULL

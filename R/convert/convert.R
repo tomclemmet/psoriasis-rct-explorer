@@ -55,10 +55,10 @@ suppressPackageStartupMessages({
 })
 
 # Drop measurements beyond this many week-equivalent weeks.
-MAX_TIMEPOINT_WK <- 16
+MAX_TIMEPOINT_WK <- 24
 # Study RefIDs to exclude from the sqlite entirely (e.g. known bad extractions).
 EXCLUDE_STUDY_IDS <- c(
-  30, 115, 116, 117, 233, 314,                  # Single-drug trials
+  30, 115, 116, 117, 233, 314, 392, 400,             # Single drug trials
   112                                           # Population with inadequate response to ustekinumab
 )
 

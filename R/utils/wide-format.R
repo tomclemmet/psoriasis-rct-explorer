@@ -5,22 +5,59 @@ drug_class_lookup <- read.csv("R/meta-analyse/trt_class.csv")
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 pasi_drugs <- dbReadTable(con, "v_pasi") |> 
   distinct(drug) |> 
-  filter(drug != "Izokibep") |> # CHANGE WHEN PhIII trial included
+  # filter(drug != "Izokibep") |> # CHANGE WHEN PhIII trial included
   mutate(drug = c("Placebo", sort(setdiff(drug, "Placebo")))) |> 
   pull(drug)
 
 
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
   
-pasi_condensed <<- dbReadTable(con, "v_pasi") |> 
-  filter(!if_all(pasi50:pasi100, \(x) is.na(x)), drug %in% pasi_drugs) |> 
-  summarise(.by = c(trial, ref_id, drug, pasi_high_rob, pop_res), n = sum(n), pasi50 = sum(pasi50), 
-            pasi75 = sum(pasi75), pasi90 = sum(pasi90), pasi100 = sum(pasi100)) |>
-  group_by(ref_id) |> filter(n() > 1) |> ungroup()
+pasi_condensed <- dbReadTable(con, "v_pasi") |> 
+  filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |>
+  mutate(timepoint = if_else(timepoint == 4 & timepoint_unit == "mo", 16, timepoint),
+         pop_res = na_if(pop_res, "null")) |> 
+  select(trial, ref_id, drug, arm_no, pasi_high_rob, pop_res, timepoint, n, pasi50:pasi100)
+  # summarise(.by = c(trial, ref_id, drug, pasi_high_rob, pop_res, timepoint), n = sum(n), pasi50 = sum(pasi50), 
+            # pasi75 = sum(pasi75), pasi90 = sum(pasi90), pasi100 = sum(pasi100))
   # filter(pop_res %notin% c("Inadequate response to ustekinumab")) |> 
-  #filter(pasi_high_rob == 0)
+  # filter(pasi_high_rob == 0)
+
+chars <- dbReadTable(con, "v_baseline") |> 
+  select(trial, ref_id, drug, arm_no, characteristic, data_type, k, n, mean, sd) |> 
+  filter(characteristic %in% c(
+    "Age", "Sex (n male)", "Ethnicity (n white)", "Weight", "BMI", 
+    "Duration of psoriasis", "PASI", "Psoriatic arthritis", 
+    "Systemic agent", "Biologic agents"
+  ))
 
 dbDisconnect(con)
+
+# char_data <- list()
+# characteristics <- unique(chars$characteristic)
+# char_lookup <- 
+# for (i in 1:length(chars)) {
+#   lookup <- distinct(chars, characteristics, data_type)
+#   
+#   chars |> 
+#     filter(
+#       characteristic == characteristics[i],
+#       data_type == "Continuous" & !is.na(mean) |
+#         data_type == "Dichotomous" & !is.na(k)
+#     ) |> 
+#     select(ref_id, arm_no, )
+#     
+# }
+
+
+pasi_condensed |> 
+  summarise(
+    .by = timepoint, 
+    n_pat = sum(n),
+    n_arm = n(),
+    n_trial = n_distinct(ref_id),
+    n_drug = n_distinct(drug)
+  ) |> 
+  arrange(timepoint)
 
 
 nth_largest <- function(n, ...) {
@@ -33,7 +70,7 @@ nth_non_na <- function(n, ...) {
   which(!is.na(vec))[n]
 }
 
-pasi_wide <<- pasi_condensed |> 
+pasi_wide <- pasi_condensed |> 
   left_join(drug_class_lookup, by = "drug") |> 
   group_by(ref_id) |> 
   mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
@@ -62,12 +99,12 @@ pasi_wide <<- pasi_condensed |>
     C5 = nth_non_na(4, pasi50, pasi75, pasi90, pasi100) + 1,
     nc = sum(!is.na(c(C1, C2, C3, C4, C5)))
   ) |> ungroup() |> relocate(C1:nc, .before = t) |> 
-  select(-c(drug, class, trial, pasi_high_rob, pop_res, n, pasi50:pasi100)) |> 
+  select(-c(drug, class, trial, pasi_high_rob, pop_res, arm_no, timepoint, n, pasi50:pasi100)) |> 
   mutate(.by = ref_id, na = n(), arm_no = row_number(t)) |> arrange(ref_id, t) |> 
   pivot_wider(names_from = arm_no, values_from = t:n5, names_glue = "a{arm_no}{.value}") |> 
   relocate(na, .before = nc)
 
-pasi_id_lookup <<- pasi_condensed |> 
+pasi_id_lookup <- pasi_condensed |> 
   left_join(drug_class_lookup, by = "drug") |> 
   select(trial, ref_id, drug, class, n:pasi100) |>
   mutate(.by = ref_id, arm_no = row_number()) |> 
@@ -79,7 +116,7 @@ pasi_id_lookup <<- pasi_condensed |>
          cl = as.numeric(factor(class, levels = c("placebo", setdiff(sort(class), "placebo"))))) |> 
   distinct(drug, class, t, cl) |> arrange(t) |> as.data.frame()
 
-row_lookup <<- pasi_wide |> 
+row_lookup <- pasi_wide |> 
   mutate(row = row_number()) |> 
   select(row, ref_id, starts_with("a") & ends_with("t")) |> 
   pivot_longer(starts_with("a") & ends_with("t"), names_to = "arm_no", values_to = "t") |> 
@@ -110,5 +147,7 @@ pasi_jags <- list(
            as.matrix(select(pasi_wide, ends_with("n3"))),
            as.matrix(select(pasi_wide, ends_with("n4"))),
            as.matrix(select(pasi_wide, ends_with("n5")))) |> 
-    simplify2array()
+    simplify2array(),
+  timepoint = distinct(pasi_condensed, ref_id, timepoint)$timepoint
 )
+
