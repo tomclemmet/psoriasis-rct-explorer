@@ -6,26 +6,23 @@ source("R/utils/jags-process.R")
 # the analysis
 pso_jags <- function(
     data, 
-    filename = NA,
+    filename = "temp.jags",
     niter = 2000,
     effects = c("fixed", "random"),
     cutpoints = c("fixed", "treatment", "trial",  "arm"),
-    baseline = c("unadjusted", "adjusted"),
     class = c("independent", "exchangeable"),
     consistency = c("consistency", "ume"),
+    reg = c(),
+    reg_mean = c(),
     output = c("processed", "jags")
 ) {
   effects <- match.arg(effects)
   cutpoints <- match.arg(cutpoints)
-  baseline <- match.arg(baseline)
   class <- match.arg(class)
   consistency <- match.arg(consistency)
   output <- match.arg(output)
   
   # Remove redundant data based on arguments, avoiding JAGS warning
-  if (baseline == "unadjusted") {
-    data$mmu <- NULL
-  }
   if (class == "independent") {
     data$cl <- NULL
     data$ncl <- NULL
@@ -57,8 +54,18 @@ model {
   z_trial <- "zeta[i, C[i, j + 1] - 1]"
   z_arm <- "zeta[i, k, C[i, j + 1] - 1]"
   
-  # Adds baseline adjustment terms if selected
-  baseline_adj <- " + (beta[t[i, k]] - beta[t[i, 1]]) * (mu[i] - mmu)"
+  # Terms for meta-regression data and coefficients
+  if (length(reg) > 0) {
+    metareg <- c()
+    for (i in 1:length(reg)) {
+      metareg[i] <- paste0(
+        "+ (beta_", reg[i], "[t[i, k]] - beta_", reg[i], "[t[i, 1]])",
+        " * (", 
+        reg[i], if(reg[i] %in% c("mu", "timepoint")) "[i]" else "[i, k]", " - ", reg_mean[i], ")"
+      )
+    }
+    metareg <- paste0(metareg, collapse = " ")
+  }
   
   # Generic deviance calculations
   deviance <- "
@@ -191,13 +198,23 @@ model {
   for (k in 2:nt) { d[k] ~ dnorm(m[cl[k]], taucl) }
   for (p in 2:ncl){ m[p] ~ dnorm(0,.0001) }  
 "
+  if (length(reg) > 0) {
+    reg_priors <- c()
+    for (i in 1:length(reg)) {
+      reg_priors[i] <- paste(
+        paste0("\n  beta_", reg[i], "[1] <- 0"),
+        paste0("for (k in 2:nt) { beta_", reg[i], "[k] <- B_", reg[i], "}"),
+        paste0("B_", reg[i], "  ~ dnorm(0,.01)"),
+        sep = "\n  "
+      )
+    }
+    reg_priors <- paste0(reg_priors, collapse = "")
+  }
   
   # Other priors (some may not be used, depending on model)
   priors <- "
-  totresdev <- sum(resdev[])                                                    # Total Residual Deviance
-  beta[1] <- 0
-  for (k in 2:nt) { beta[k] <- B}
-  B ~ dnorm(0,.01)
+  totresdev <- sum(resdev[1:ns])                                                    # Total Residual Deviance
+
   sd ~ dunif(0, 5)                                                              # vague prior for between-trial SD
   sdz ~ dunif(0, 5)
   sdcl ~ dunif(0, 5)
@@ -238,7 +255,7 @@ model {
            "treatment" = z_tx,
            "trial" = z_trial,
            "arm" = z_arm),
-    if (baseline == "unadjusted") "" else baseline_adj,
+    if (length(reg) > 0) metareg,
     deviance,
     phi,
     switch(paste(effects, consistency),
@@ -252,51 +269,52 @@ model {
            "trial" = rez_trial,
            "arm" = rez_arm),
     if (consistency == "consistency") {if (class == "exchangeable") d_priors_class else d_priors} else d_priors_ume,
+    if (length(reg) > 0) reg_priors,
     priors,
     if (consistency == "consistency") {if (cutpoints != "treatment") probs_fez else probs_rez_tx} else NULL,
     end
   )
   
-  # Choose filename based on arguments
-  if(is.na(filename)) {
-    filename <- paste0("JAGS/", paste(
-      if_else(effects == "random", "re", "fe"),
-      switch(cutpoints,
-             "fixed" = "fez",
-             "treatment" = "rezt",
-             "trial" = "rezi",
-             "arm" = "reza"),
-      if_else(baseline == "adjusted", "a", "u"),
-      if_else(class == "exchangeable", "c", "nc"),
-      if_else(consistency == "ume", "ume", "con"),
-      sep = "_"
-    ), ".jags")
-  }
+  # # Choose filename based on arguments
+  # if(is.na(filename)) {
+  #   filename <- paste0("JAGS/", paste(
+  #     if_else(effects == "random", "re", "fe"),
+  #     switch(cutpoints,
+  #            "fixed" = "fez",
+  #            "treatment" = "rezt",
+  #            "trial" = "rezi",
+  #            "arm" = "reza"),
+  #     if_else(length(reg) > 0, "a", "u"),
+  #     if_else(class == "exchangeable", "c", "nc"),
+  #     if_else(consistency == "ume", "ume", "con"),
+  #     sep = "_"
+  #   ), ".jags")
+  # }
   
   # Write model code to file
   writeLines(model_code, filename)
-  
+
   # Choose parameters of interest for JAGS to track
   params <- c(
     "d", "z", "mu",
     if (effects == "random") "sd" else NULL,
     if (cutpoints == "fixed") NULL else "sdz",
-    if (baseline == "adjusted") c("B", "mubar") else NULL,
+    if (length(reg) > 0) c(paste0("B_", reg), "mubar") else NULL,
     if (class == "exchangeable") c("m", "sdcl") else NULL,
     if (consistency == "ume") NULL else "prob",
     "totresdev",
     "dv", "rhat"
   )
-  
+
   # Specify reasonable initial values for each chain
   inits <- list(
     list(
-      d = c(NA, rep(0, data$nt - 1)), 
+      d = c(NA, rep(0, data$nt - 1)),
       mu = rep(0, data$ns),
       z.aux = c(NA, rep(0.5, 3))
     ),
     list(
-      d = c(NA, rep(1, data$nt - 1)), 
+      d = c(NA, rep(1, data$nt - 1)),
       mu = rep(0, data$ns),
       z.aux = c(NA, rep(1, 3))
     )
@@ -315,28 +333,24 @@ model {
     inits[[2]]$m <- c(NA, rep(1, data$ncl - 1))
     inits[[2]]$sdcl <- 0.5
   }
-  if (baseline == "adjusted") {
-    inits[[1]]$B <- 0
-    inits[[1]]$B <- -0.5
-  }
   if (consistency == "ume") {
     inits[[1]]$d <- NULL
     inits[[2]]$d <- NULL
   }
-  
+
   # Send message with current model type
-  message(paste0("Fitting ", if_else(consistency == "ume", "UME ", ""), "NMA for PASI response with ", effects, 
-                 " effects, ", cutpoints, if_else(cutpoints == "fixed", "", "-level"), " cutpoints, ", 
-                 if_else(baseline == "adjusted", "baseline adjustment", "no baseline adjustment"),
+  message(paste0("Fitting ", if_else(consistency == "ume", "UME ", ""), "NMA for PASI response with ", effects,
+                 " effects, ", cutpoints, if_else(cutpoints == "fixed", "", "-level"), " cutpoints, ",
+                 if (length(reg) > 0) paste0("meta-regression on ", paste(reg, collapse = ", ")),
                  if (class == "exchangeable") ", exchangeable class effects" else NULL))
-  
+
   # Run model
   set.seed(123)
   fit <- jags(
-    data = data, parameters.to.save = params, inits = inits, 
+    data = data, parameters.to.save = params, inits = inits,
     model.file = filename, n.chains = 2, n.iter = niter, n.burnin = niter/2, n.thin = 1
   )
-  
+
   # Send informative warning if any parameters have failed to converge
   Rhat <- fit$BUGSoutput$summary[, "Rhat"]
   if (any(Rhat > 1.1)) {
@@ -345,7 +359,6 @@ model {
       paste(paste0(names(Rhat)[Rhat > 1.1], "(", round(Rhat[Rhat > 1.1], 3), ")"), collapse = ", ")
     ))
   }
-  
-  # Process output (saving memory from unwanted chains)
-  if (output == "processed") process_jags(fit) else fit
+
+  fit
 }
