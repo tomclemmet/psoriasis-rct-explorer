@@ -14,7 +14,12 @@
 #                characteristics, comorbidity, prior therapy), long format:
 #                one row per (arm, characteristic) rather than pivoted columns,
 #                since the set of characteristics varies by trial and isn't
-#                fixed like the endpoint outcomes above.
+#                fixed like the endpoint outcomes above. Also carries
+#                parent_arm_no/parent_arm_name (arms.parent_arm_no): where set,
+#                this arm is a child split off the parent arm (same patients),
+#                so its own baseline rows are typically absent/duplicated and
+#                should be resolved against the parent - left as a manual rule
+#                rather than resolved here.
 # All four also carry pop_res (studies.pop_res:
 # free text, NULL unless the trial restricts to some subpopulation).
 #
@@ -47,12 +52,16 @@ WITH arm_ctx AS (
          )              AS dose,
          s.timepoint_unit AS timepoint_unit,
          s.pasi_high_rob  AS pasi_high_rob,
-         s.pop_res AS pop_res
+         s.pop_res AS pop_res,
+         a.parent_arm_no  AS parent_arm_no,
+         pa.arm_name      AS parent_arm_name
   FROM   arms a
   JOIN   studies s          ON s.study_id = a.study_id
   LEFT   JOIN drugs dr      ON dr.drug_id = a.drug_id
   LEFT   JOIN dose_units du ON du.unit_id = a.dose_unit_id
   LEFT   JOIN frequencies fr ON fr.frequency_id = a.frequency_id
+  LEFT   JOIN arms pa       ON pa.study_id = a.study_id
+                           AND pa.arm_no = a.parent_arm_no
 )"
 
 # Build one view. `pivot_cols` is a vector of pivot expressions (see case_*);
@@ -127,7 +136,9 @@ WITH arm_ctx AS (
            m.median        AS median,
            m.lo_iqr        AS lo_iqr,
            m.hi_iqr        AS hi_iqr,
-           ctx.pop_res     AS pop_res
+           ctx.pop_res     AS pop_res,
+           ctx.parent_arm_no   AS parent_arm_no,
+           ctx.parent_arm_name AS parent_arm_name
     FROM   measurements m
     JOIN   outcomes o         ON o.outcome_id = m.outcome_id
     JOIN   arm_ctx ctx        ON ctx.arm_id = m.arm_id
@@ -187,7 +198,8 @@ build_views <- function(dst) {
       GROUP  BY arm_id
     ) bp ON bp.arm_id = pivot.arm_id",
     extra_select = c("bp.baseline_pasi_mean", "bp.baseline_pasi_sd",
-                     "ctx.pasi_high_rob", "ctx.pop_res")
+                     "ctx.pasi_high_rob", "ctx.pop_res",
+                     "ctx.parent_arm_no", "ctx.parent_arm_name")
   )
 
   # v_dlqi - DLQI binary + continuous endpoints.
@@ -217,7 +229,7 @@ build_views <- function(dst) {
                     "pivot.abs_dlqi_change_mean","pivot.abs_dlqi_change_sd",
                     "pivot.abs_dlqi_change_median",
                     "pivot.abs_dlqi_change_lo_iqr","pivot.abs_dlqi_change_hi_iqr"),
-    extra_select = c("ctx.pop_res")
+    extra_select = c("ctx.pop_res", "ctx.parent_arm_no", "ctx.parent_arm_name")
   )
 
   # v_safety - binary safety outcomes.
@@ -236,7 +248,7 @@ build_views <- function(dst) {
     select_cols = c("pivot.sae","pivot.disc_any","pivot.disc_ae",
                     "pivot.serious_infection","pivot.injection_site_rxn",
                     "pivot.malignancy","pivot.nmsc","pivot.malignancy_non_nmsc"),
-    extra_select = c("ctx.pop_res")
+    extra_select = c("ctx.pop_res", "ctx.parent_arm_no", "ctx.parent_arm_name")
   )
 
   # v_baseline - arm-level baseline characteristics, long format.
