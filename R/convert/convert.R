@@ -29,9 +29,15 @@
 #                  authors, year, journal, volume, issue, page_start, page_end,
 #                  notes)
 #     arms(arm_id PK, study_id FK, arm_no, arm_name,
-#          drug_id FK, dose_amount, dose_unit_id FK, frequency_id FK)
+#          drug_id FK, dose_amount, dose_unit_id FK, frequency_id FK,
+#          parent_arm_no)
 #         -- frequency_id is only set where the source distinguishes arms by
 #         -- dosing frequency (e.g. "30 mg QW" vs "30 mg Q2W").
+#         -- parent_arm_no (from tblArms.ParentArmNo) flags an arm as a child
+#         -- of another arm in the same study (e.g. a re-randomisation split,
+#         -- or a dose switch partway through) - same patients as the parent,
+#         -- so baseline characteristics are typically only extracted on the
+#         -- parent. NULL for ordinary (non-split) arms.
 #
 #   Facts
 #     measurements(measurement_id PK, arm_id FK, outcome_id FK,
@@ -58,8 +64,9 @@ suppressPackageStartupMessages({
 MAX_TIMEPOINT_WK <- 24
 # Study RefIDs to exclude from the sqlite entirely (e.g. known bad extractions).
 EXCLUDE_STUDY_IDS <- c(
-  30, 115, 116, 117, 233, 314, 392, 400,             # Single drug trials
-  112                                           # Population with inadequate response to ustekinumab
+  30, 115, 116, 117, 233, 314, 392, 400,            # Single drug trials
+  112,                                              # Population with inadequate response to ustekinumab
+  8                                                 # Izokibep trial (include when Ph3 added)
 )
 
 # Baseline PASI is a "Psoriasis characteristics" outcome; always kept (the app
@@ -212,6 +219,9 @@ CREATE TABLE arms (
   dose_amount   REAL,
   dose_unit_id  INTEGER REFERENCES dose_units(unit_id),
   frequency_id  INTEGER REFERENCES frequencies(frequency_id),
+  parent_arm_no INTEGER,        -- this study's arm_no of the parent arm this
+                                -- arm was split from (tblArms.ParentArmNo,
+                                -- 0 -> NULL); same patients as the parent
   UNIQUE (study_id, arm_no)
 );
 CREATE TABLE measurements (
@@ -440,6 +450,10 @@ key <- function(r, a) paste(r, a, sep = "|")
 
 arm_name_of <- setNames(arms_x$ArmName, key(arms_x$RefID, arms_x$ArmNo))
 
+# ParentArmNo marks an arm as a child split off another arm in the same
+# study (re-randomisation, dose switch, etc.); 0 means "no parent".
+parent_arm_no_of <- setNames(arms_x$ParentArmNo, key(arms_x$RefID, arms_x$ArmNo))
+
 drug_rows <- chars[chars$CatID == 57 & chars$ArmNo > 0, ]
 drug_lkp  <- lookups[lookups$CatID == 57, c("AnsID", "AnsText")]
 drug_name_per_arm <- setNames(
@@ -466,6 +480,7 @@ freq_name_per_arm <- setNames(
 )
 
 k <- key(arm_keys$RefID, arm_keys$ArmNo)
+parent_arm_no_raw <- unname(parent_arm_no_of[k])
 arms_df <- data.frame(
   arm_id       = arm_keys$arm_id,
   study_id     = arm_keys$RefID,
@@ -475,6 +490,8 @@ arms_df <- data.frame(
   dose_amount  = unname(dose_amt_per_arm[k]),
   dose_unit_id = unname(dose_unit_id_of[unname(unit_name_per_arm[k])]),
   frequency_id = unname(frequency_id_of[unname(freq_name_per_arm[k])]),
+  parent_arm_no = ifelse(is.na(parent_arm_no_raw) | parent_arm_no_raw == 0,
+                         NA_integer_, as.integer(parent_arm_no_raw)),
   stringsAsFactors = FALSE
 )
 dbWriteTable(dst, "arms", arms_df, append = TRUE)
