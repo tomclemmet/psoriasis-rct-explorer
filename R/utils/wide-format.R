@@ -6,18 +6,27 @@ drug_class_lookup <- read.csv("R/trt_class.csv")
 # Load data
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 
+# List drugs for analysis (allows filtering)
 pasi_drugs <- dbReadTable(con, "v_pasi") |> 
   distinct(drug) |> 
   # filter(drug != "Izokibep") |> # CHANGE WHEN PhIII trial included
   mutate(drug = c("Placebo", sort(setdiff(drug, "Placebo")))) |> 
   pull(drug)
 
-pasi_condensed <- dbReadTable(con, "v_pasi") |> 
+# Extract PASI response data in long format
+pasi_long <- dbReadTable(con, "v_pasi") |> 
   filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |>
+  mutate(arm_no = if_else(!is.na(parent_arm_no), parent_arm_no, arm_no)) |> 
+  summarise(
+    .by = c(trial, ref_id, drug, arm_no, pop_res, pasi_high_rob, timepoint, timepoint_unit),
+    n = sum(n), pasi50 = sum(pasi50), pasi75 = sum(pasi75), 
+    pasi90 = sum(pasi90), pasi100 = sum(pasi100)
+  ) |> 
+  mutate(arm_no = dense_rank(arm_no), .by = ref_id) |> 
   mutate(timepoint = if_else(timepoint == 4 & timepoint_unit == "mo", 16, timepoint),
-         pop_res = na_if(pop_res, "null")) |> 
-  select(trial, ref_id, drug, arm_no, pasi_high_rob, pop_res, timepoint, n, pasi50:pasi100)# |>
-  # filter(ref_id %in% reg_ids)
+         pop_res = na_if(pop_res, "null")) |>
+  select(-timepoint_unit) |> 
+  filter(ref_id %in% reg_ids)
   # summarise(.by = c(trial, ref_id, drug, pasi_high_rob, pop_res, timepoint), n = sum(n), pasi50 = sum(pasi50), 
             # pasi75 = sum(pasi75), pasi90 = sum(pasi90), pasi100 = sum(pasi100))
   # filter(pop_res %notin% c("Inadequate response to ustekinumab")) |> 
@@ -26,7 +35,7 @@ pasi_condensed <- dbReadTable(con, "v_pasi") |>
 dbDisconnect(con)
 
 # List timepoints
-pasi_condensed |> 
+pasi_long |> 
   summarise(
     .by = timepoint, 
     n_pat = sum(n),
@@ -49,12 +58,12 @@ nth_non_na <- function(n, ...) {
 }
 
 # Produce wide-format data frame suitable for JAGS models
-pasi_wide <- pasi_condensed |> 
+pasi_wide <- pasi_long |> 
   left_join(drug_class_lookup, by = "drug") |> # Add drug classes
   group_by(ref_id) |> # Align trials where the arms report results for different cutpoints
   mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
   ungroup() |> 
-  mutate(t = as.numeric(factor(drug, levels = pasi_drugs)), 
+  mutate(t = as.numeric(factor(drug, levels = c("Placebo", setdiff(sort(drug), "Placebo")))), 
          cl = as.numeric(factor(class, levels = c("placebo", setdiff(sort(class), "placebo")))), 
          .after = drug) |> # Assign treatment and class ids
   rowwise() |> mutate( # Calculate conditional counts
@@ -78,13 +87,13 @@ pasi_wide <- pasi_condensed |>
     C5 = nth_non_na(4, pasi50, pasi75, pasi90, pasi100) + 1,
     nc = sum(!is.na(c(C1, C2, C3, C4, C5)))
   ) |> ungroup() |> relocate(C1:nc, .before = t) |> # Move/drop non-pivot columns
-  select(-c(drug, class, trial, pasi_high_rob, pop_res, arm_no, timepoint, n, pasi50:pasi100)) |> 
-  mutate(.by = ref_id, na = n(), arm_no = row_number(t)) |> arrange(ref_id, t) |> # Add arm info
+  select(-c(drug, class, trial, pasi_high_rob, pop_res, timepoint, n, pasi50:pasi100)) |> 
+  mutate(.by = ref_id, na = n()) |> arrange(ref_id, arm_no) |> # Add arm info
   pivot_wider(names_from = arm_no, values_from = t:n5, names_glue = "a{arm_no}{.value}") |> # Pivot to wide format
   relocate(na, .before = nc)
 
 # Treatment and class IDs
-pasi_id_lookup <- pasi_condensed |> 
+pasi_id_lookup <- pasi_long |> 
   left_join(drug_class_lookup, by = "drug") |> 
   select(trial, ref_id, drug, class, n:pasi100) |>
   mutate(.by = ref_id, arm_no = row_number()) |> 
@@ -92,7 +101,7 @@ pasi_id_lookup <- pasi_condensed |>
   group_by(ref_id) |> 
   mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
   ungroup() |> 
-  mutate(t = as.numeric(factor(drug, levels = pasi_drugs)), 
+  mutate(t = as.numeric(factor(drug, levels = c("Placebo", setdiff(sort(drug), "Placebo")))), 
          cl = as.numeric(factor(class, levels = c("placebo", setdiff(sort(class), "placebo"))))) |> 
   distinct(drug, class, t, cl) |> arrange(t) |> as.data.frame()
 
@@ -104,7 +113,7 @@ row_lookup <- pasi_wide |>
   mutate(arm_no = as.numeric(substr(arm_no, 2, 2))) |> 
   filter(!is.na(t)) |> 
   mutate(drug = pasi_id_lookup$drug[t]) |> 
-  left_join(distinct(pasi_condensed, trial, ref_id), by = "ref_id", relationship = "many-to-one")
+  left_join(distinct(pasi_long, trial, ref_id), by = "ref_id", relationship = "many-to-one")
 
 # Collect data in JAGS format
 pasi_jags <- list(
@@ -129,6 +138,6 @@ pasi_jags <- list(
            as.matrix(select(pasi_wide, ends_with("n4"))),
            as.matrix(select(pasi_wide, ends_with("n5")))) |> 
     simplify2array(),
-  timepoint = distinct(pasi_condensed, ref_id, timepoint)$timepoint
+  timepoint = distinct(pasi_long, ref_id, timepoint)$timepoint
 )
 
