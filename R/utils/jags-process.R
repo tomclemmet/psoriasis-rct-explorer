@@ -59,8 +59,7 @@ process_jags <- function(mod) {
   )
   
   out$summary <- out$results |> 
-    filter(!str_detect(param, "mu|prob|rhat|dev|dv\\[") | param == "mubar") |> 
-    filter(!(str_detect(param, "d\\[") & str_detect(param, ","))) |> 
+    filter(str_starts(param, "d\\[|sd|m\\[|z|B_|mubar"), !str_detect(param, ",")) |> 
     arrange(str_detect(param, "B|mubar"))
   
   class(out) <- c("jags_nma_fit", class(out))
