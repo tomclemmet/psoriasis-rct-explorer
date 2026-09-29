@@ -1,7 +1,7 @@
 library(DBI)
 library(dplyr)
 library(tidyr)
-drug_class_lookup <- read.csv("R/meta-analyse/trt_class.csv")
+drug_class_lookup <- read.csv("R/trt_class.csv")
 
 # Load data
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
@@ -16,7 +16,8 @@ pasi_condensed <- dbReadTable(con, "v_pasi") |>
   filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |>
   mutate(timepoint = if_else(timepoint == 4 & timepoint_unit == "mo", 16, timepoint),
          pop_res = na_if(pop_res, "null")) |> 
-  select(trial, ref_id, drug, arm_no, pasi_high_rob, pop_res, timepoint, n, pasi50:pasi100)
+  select(trial, ref_id, drug, arm_no, pasi_high_rob, pop_res, timepoint, n, pasi50:pasi100)# |>
+  # filter(ref_id %in% reg_ids)
   # summarise(.by = c(trial, ref_id, drug, pasi_high_rob, pop_res, timepoint), n = sum(n), pasi50 = sum(pasi50), 
             # pasi75 = sum(pasi75), pasi90 = sum(pasi90), pasi100 = sum(pasi100))
   # filter(pop_res %notin% c("Inadequate response to ustekinumab")) |> 
@@ -50,6 +51,9 @@ nth_non_na <- function(n, ...) {
 # Produce wide-format data frame suitable for JAGS models
 pasi_wide <- pasi_condensed |> 
   left_join(drug_class_lookup, by = "drug") |> # Add drug classes
+  group_by(ref_id) |> # Align trials where the arms report results for different cutpoints
+  mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
+  ungroup() |> 
   mutate(t = as.numeric(factor(drug, levels = pasi_drugs)), 
          cl = as.numeric(factor(class, levels = c("placebo", setdiff(sort(class), "placebo")))), 
          .after = drug) |> # Assign treatment and class ids
@@ -108,7 +112,6 @@ pasi_jags <- list(
   nt = max(pasi_id_lookup$t),
   ncl = max(pasi_id_lookup$cl),
   Cmax = 5,
-  mmu = 0.7,
   na = pasi_wide$na,
   nc = pasi_wide$nc,
   t = select(pasi_wide, starts_with("a") & ends_with("t")) |> as.matrix(),
