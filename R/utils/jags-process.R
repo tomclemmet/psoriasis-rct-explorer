@@ -1,3 +1,7 @@
+library(dplyr)
+library(stringr)
+
+
 process_jags <- function(mod) {
   if (inherits(mod, "jags_nma_fit")) return(mod)
   
@@ -10,7 +14,6 @@ process_jags <- function(mod) {
   
   fitted_values <- mod$BUGSoutput$summary |>
     as_tibble(rownames = "param") |> 
-    as.data.frame() |> 
     select(param, mean, `2.5%`, `97.5%`, Rhat) |> 
     filter(str_starts(param, "rhat\\[")) |> 
     separate_wider_regex(
@@ -19,7 +22,7 @@ process_jags <- function(mod) {
                    id_cat = "\\d+", "\\].*")
     ) |> 
     mutate(across(starts_with("id_"), as.integer)) |> 
-    rename(fitted = mean) |>
+    rename(fitted = mean) |> 
     mutate(actual = pasi_jags$r[cbind(id_row, id_arm, id_cat)]) |> 
     select(starts_with("id"), fitted, actual)
   
