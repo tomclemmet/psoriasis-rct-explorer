@@ -6,7 +6,7 @@ source("R/utils/jags-process.R")
 # the analysis
 pso_jags <- function(
     data, 
-    filename = "temp.jags",
+    filename = "JAGS/temp.jags",
     niter = 2000,
     effects = c("fixed", "random"),
     cutpoints = c("fixed", "treatment", "trial",  "arm"),
@@ -49,10 +49,10 @@ model {
   theta <- "theta[i, k, j] <- mu[i] - delta[i, k] + "
   
   # Term for cutpoints depends on chosen model
-  z <- "z[C[i, j + 1] - 1]"
-  z_tx <- "zeta[t[i, k], C[i, j + 1] - 1]"
-  z_trial <- "zeta[i, C[i, j + 1] - 1]"
-  z_arm <- "zeta[i, k, C[i, j + 1] - 1]"
+  z <- "z[C[i, j + 1] - 1] "
+  z_tx <- "zeta[t[i, k], C[i, j + 1] - 1] "
+  z_trial <- "zeta[i, C[i, j + 1] - 1] "
+  z_arm <- "zeta[i, k, C[i, j + 1] - 1] "
   
   # Terms for meta-regression data and coefficients
   if (length(reg) > 0) {
@@ -336,6 +336,12 @@ model {
   if (consistency == "ume") {
     inits[[1]]$d <- NULL
     inits[[2]]$d <- NULL
+  }
+  if (length(reg) > 0) {
+    for (i in 1:length(reg)) {
+      inits[[1]][[paste0("B_", reg[i])]] <- 0
+      inits[[2]][[paste0("B_", reg[i])]] <- 0
+    }
   }
 
   # Send message with current model type
