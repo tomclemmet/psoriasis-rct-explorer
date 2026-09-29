@@ -1,6 +1,7 @@
 # Functions to produce plots for processed NMA results
 library(dplyr)
 library(stringr)
+library(ggplot2)
 source("R/utils/jags-process.R")
 
 
@@ -34,9 +35,11 @@ devplot <- function(m1, m2, xlab = "Model 1", ylab = "Model 2", output = c("plot
 # Simple forest plot for key parameters
 forest <- function(m) {
   
+  m <- process_jags(m)
+  
   # Filter unwanted drugs, then group and order parameters for plotting
   df <- m$summary |> 
-    filter(label %notin% c("Mirikizumab", "Phototherapy", "Xeligekimab", "Netakimab", "Roflumilast", "Icotrokinra", "Tofacitinib"), param != "mubar") |> 
+    filter(label %notin% c("Mirikizumab", "Phototherapy", "Xeligekimab", "Netakimab", "Roflumilast", "Icotrokinra", "Tofacitinib", "Izokibep"), param != "mubar") |> 
     mutate(group = substr(param, 1, 1), group = factor(if_else(group == "s", "sd", group), levels = c("d", "z", "sd", "B")), label = if_else(is.na(label), param, label), rank = if_else(group == "d", mean, NA)) |> 
     group_by(group) |> 
     arrange(desc(rank), .by_group = TRUE)
