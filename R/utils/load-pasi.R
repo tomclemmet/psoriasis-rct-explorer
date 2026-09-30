@@ -18,15 +18,13 @@ pasi_long <- dbReadTable(con, "v_pasi") |>
   filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |>
   mutate(arm_no = if_else(!is.na(parent_arm_no), parent_arm_no, arm_no)) |> 
   summarise(
-    .by = c(trial, ref_id, drug, arm_no, pop_res, pasi_high_rob, timepoint, timepoint_unit),
+    .by = c(trial, ref_id, drug, pop_res, pasi_high_rob, timepoint, timepoint_unit),
     n = sum(n), pasi50 = sum(pasi50), pasi75 = sum(pasi75), 
     pasi90 = sum(pasi90), pasi100 = sum(pasi100)
   ) |> 
-  mutate(arm_no = dense_rank(arm_no), .by = ref_id) |> 
   mutate(timepoint = if_else(timepoint == 4 & timepoint_unit == "mo", 16, timepoint),
          pop_res = na_if(pop_res, "null")) |>
-  select(-timepoint_unit) |> 
-  filter(ref_id %in% reg_ids)
+  select(-timepoint_unit)
   # summarise(.by = c(trial, ref_id, drug, pasi_high_rob, pop_res, timepoint), n = sum(n), pasi50 = sum(pasi50), 
             # pasi75 = sum(pasi75), pasi90 = sum(pasi90), pasi100 = sum(pasi100))
   # filter(pop_res %notin% c("Inadequate response to ustekinumab")) |> 
@@ -88,7 +86,7 @@ pasi_wide <- pasi_long |>
     nc = sum(!is.na(c(C1, C2, C3, C4, C5)))
   ) |> ungroup() |> relocate(C1:nc, .before = t) |> # Move/drop non-pivot columns
   select(-c(drug, class, trial, pasi_high_rob, pop_res, timepoint, n, pasi50:pasi100)) |> 
-  mutate(.by = ref_id, na = n()) |> arrange(ref_id, arm_no) |> # Add arm info
+  mutate(.by = ref_id, na = n(), arm_no = dense_rank(t)) |> arrange(ref_id, arm_no) |> # Add arm info
   pivot_wider(names_from = arm_no, values_from = t:n5, names_glue = "a{arm_no}{.value}") |> # Pivot to wide format
   relocate(na, .before = nc)
 
