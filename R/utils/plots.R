@@ -56,6 +56,12 @@ forest <- function(m) {
 # parameter values and filter for specific parameters
 forests <- function(..., lab = NA, prob = FALSE) {
   mods <- list(...)
+  
+  # Handle case where a single model is passed
+  if (length(mods) == 1 && is.list(mods[[1]])) {
+    mods <- mods[[1]]
+  }
+  
   nms <- names(mods)
   
   # Assign variable names as list labels if passed as separate items
@@ -66,10 +72,8 @@ forests <- function(..., lab = NA, prob = FALSE) {
   }
   names(mods) <- nms
   
-  # Handle case where a single model is passed
-  if (length(mods) == 1 && is.list(mods[[1]])) {
-    mods <- mods[[1]]
-  }
+  mods <- lapply(mods, process_jags)
+  
   df <- list()
   
   if (!prob) {
