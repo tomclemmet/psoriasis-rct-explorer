@@ -76,6 +76,16 @@ print.jags_nma_fit <- function(m) {
   message(paste0("totresdev = ", round(totresdev, 1), " on ", nrow(m$dev_table), " data points, pV = ", round(m$pV, 1), ", DIC = ", round(m$DIC, 1)))
   print(m$summary)
   invisible(m$summary)
+  
+}
+
+# Function to display goodness-of-fit stats for a list of models
+check_fits <- function(mods) {
+  for (i in 1:length(mods)) {
+    m <- process_jags(mods[[i]])
+    totresdev <- m$results[m$results$param == "totresdev", 3]
+    message(paste0(names(mods)[i], ": totresdev = ", round(totresdev, 1), " on ", nrow(m$dev_table), " data points, pV = ", round(m$pV, 1), ", DIC = ", round(m$DIC, 1)))
+  }
 }
 
 # Function to compare model outputs given a list of jags models
