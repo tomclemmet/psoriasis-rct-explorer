@@ -13,8 +13,8 @@
 #     data_types(data_type_id PK, name)            -- from tblDataTypes
 #     outcomes(outcome_id PK, code, label, subcategory,
 #              data_type_id FK, endpoint_group)    -- full Access catalogue
-#     subgroups(subgroup_id PK, subgroup_name)     -- only the "Main analysis"
-#                                                  -- sentinel (0) is kept
+#     subgroups(subgroup_id PK, subgroup_name)     -- from tblSubgroups, plus
+#                                                  -- the "Main analysis" sentinel (0)
 #
 #   Entities
 #     studies(study_id PK, trial, timepoint_unit, pasi_high_rob,
@@ -44,14 +44,14 @@
 #                  subgroup_id FK, timepoint, k, n, mean, sd, median,
 #                  lo_iqr, hi_iqr)
 #         -- The 21 wide-view outcomes plus baseline PASI (outcome 11), main
-#         -- analysis only, timepoints within 24 week-equivalent weeks.
+#         -- analysis (subgroup_id 0) and subgroups, timepoints within 24
+#         -- week-equivalent weeks.
 #
 #   Views (views.R): v_pasi, v_dlqi, v_safety. Each carries its tab's binary
 #   responder columns plus any absolute / change-from-baseline columns.
 #
 # The Access file is the source of truth and is never modified. This script is
-# slimmed to exactly what the app reads now: no subgroup rows/tables, no
-# demographic/baseline-characteristic rows (except baseline PASI), no
+# slimmed to exactly what the app reads now: no demographic/baseline-characteristic rows (except baseline PASI), no
 # descriptive trial-info columns, and timepoints capped at 24 weeks.
 
 suppressPackageStartupMessages({
@@ -133,6 +133,7 @@ lunits  <- dbReadTable(src, "tblLongitudinalUnitDefs")
 odefs   <- dbReadTable(src, "tblOutcomeDefs")    # full outcomes catalogue
 dtypes  <- dbReadTable(src, "tblDataTypes")      # DataTypeID -> name
 studefs <- dbReadTable(src, "tblStudyDefs")      # RefID, ParentID, IncExc, ...
+sgdefs  <- dbReadTable(src, "tblSubgroups")      # SubgroupID -> SubgroupName
 dbDisconnect(src)
 
 # --- 2b. Curator exclusion flags ------------------------------------------
@@ -270,12 +271,15 @@ outcomes_df <- outcomes_df[, c("outcome_id","code","label","subcategory",
 outcomes_df <- outcomes_df[order(outcomes_df$outcome_id), ]
 dbWriteTable(dst, "outcomes", outcomes_df, append = TRUE)
 
-# Subgroups: only the main-analysis sentinel (0). Every measurement carries
-# subgroup_id = 0.
-dbWriteTable(dst, "subgroups",
-             data.frame(subgroup_id = 0L, subgroup_name = "Main analysis",
-                        stringsAsFactors = FALSE),
-             append = TRUE)
+# Subgroups: the main-analysis sentinel (0) plus every subgroup in tblSubgroups.
+subgroups_df <- rbind(
+  data.frame(subgroup_id = 0L, subgroup_name = "Main analysis",
+             stringsAsFactors = FALSE),
+  data.frame(subgroup_id = sgdefs$SubgroupID,
+             subgroup_name = sgdefs$SubgroupName,
+             stringsAsFactors = FALSE)
+)
+dbWriteTable(dst, "subgroups", subgroups_df, append = TRUE)
 
 # --- 5. Lookup population -------------------------------------------------
 # Drugs: distinct lookup labels (CatID = 57) actually referenced by an arm.
@@ -502,7 +506,7 @@ arm_id_of <- setNames(arms_df$arm_id, key(arms_df$study_id, arms_df$arm_no))
 # --- 8. Measurements (long format) ----------------------------------------
 # The 21 wide-view outcomes, baseline PASI, and baseline characteristics
 # (demographics, previous therapy, comorbidity, psoriasis characteristics
-# without a view code). Main analysis only, timepoints within
+# without a view code). Main analysis and subgroups, timepoints within
 # MAX_TIMEPOINT_WK week-equivalent weeks.
 baseline_subcats <- c("Demographics", "Previous therapy",
                       "Comorbidity", "Psoriasis characteristics")
@@ -514,9 +518,8 @@ keep_outcome_ids <- unique(c(wide_outcomes_df$outcome_id,
                              baseline_outcome_ids))
 
 m <- intra[intra$OutcomeID %in% keep_outcome_ids &
-           intra$ArmNo > 0 &
-           (is.na(intra$SubgroupID) | intra$SubgroupID == 0L), ]
-m$subgroup_id <- 0L
+           intra$ArmNo > 0, ]
+m$subgroup_id <- ifelse(is.na(m$SubgroupID), 0L, as.integer(m$SubgroupID))
 
 # Week-equivalent timepoint cutoff. Convert the raw timepoint to weeks using the
 # study's unit before comparing. Rows with no timepoint or an unknown unit are
