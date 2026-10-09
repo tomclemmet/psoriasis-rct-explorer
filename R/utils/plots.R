@@ -2,6 +2,7 @@
 library(dplyr)
 library(stringr)
 library(ggplot2)
+library(ggrepel)
 source("R/utils/jags-process.R")
 
 
@@ -19,6 +20,10 @@ devplot <- function(m1, m2, xlab = "Model 1", ylab = "Model 2", output = c("plot
     # Produce plot with 45-degree guide lines
     ggplot(devdev, aes(x = mean.x, y = mean.y)) +
       geom_point(alpha = 0.5, shape = 16) +
+      geom_text_repel(data = slice_max(devdev, diff, n = 5), 
+                      aes(label = paste0(trial, " [", ref_id, "]")),
+                      nudge_x = 0.15, nudge_y = -0.15,
+                      hjust = 0, vjust = 1) +
       geom_abline(intercept = 0, slope = 1, linetype = 2, colour = "blue") +
       geom_abline(intercept = -0.5, slope = 1, linetype = 3, colour = "red") +
       geom_abline(intercept = -1, slope = 1, linetype = 3, colour = "red") +
@@ -54,7 +59,7 @@ forest <- function(m) {
 
 # Forest plot for multiple models, option to display predicted probabilities or 
 # parameter values and filter for specific parameters
-forests <- function(..., lab = NA, prob = FALSE) {
+forests <- function(..., lab = NA, grp = NA, prob = FALSE) {
   mods <- list(...)
   
   # Handle case where a single model is passed
@@ -86,23 +91,43 @@ forests <- function(..., lab = NA, prob = FALSE) {
           "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast",
           "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab", "Zasocitinib"
         ), param != "mubar") |>
-        mutate(group = substr(param, 1, 1), group = factor(if_else(group == "s", "sd", group), levels = c("d", "z", "sd", "B")), label = if_else(is.na(label), param, label), rank = if_else(group == "d", mean, NA)) |>
+        mutate(group = factor(case_when(
+          str_detect(param, "d\\[") ~ "Treatment effect",
+          str_detect(param, "m\\[") ~ "Class effect",
+          str_detect(param, "sd") ~ "Heterogeneity",
+          str_detect(param, "z\\[") ~ "Multinomial cutpoint",
+          str_detect(param, "B|beta") ~ "Regression coefficient"
+          ), level = c("Treatment effect", "Class effect", "Heterogeneity", 
+                       "Multinomial cutpoint", "Regression coefficient")),
+          label = if_else(is.na(label), param, label),
+          rank = if_else(group %in% c("Treatment effect", "Class effect"), mean, NA)) |>
         group_by(group) |>
         arrange(desc(rank), .by_group = TRUE)
       df[[names(mods)[i]]]$label <- factor(df[[names(mods)[i]]]$label, levels = rev(df[[names(mods)[i]]]$label))
     }
     
     # Select chosen parameter if specified
-    if (!is.na(lab)) {
+    if (any(!is.na(lab))) {
       df <- bind_rows(df, .id = "model") |> filter(label %in% lab)
     } else {
       df <- bind_rows(df, .id = "model")
     }
     
+    # Define model ordering for plot
+    if (any(df$model == "unadjusted")) {
+      df <- df |> mutate(model = factor(model, levels = c("unadjusted", sort(setdiff(unique(model), "unadjusted")))))
+    }
+      
+    # Select chosen group(s) if specified
+    if (any(!is.na(grp))) {
+      df <- df |> filter(group %in% grp)
+    }
+    
     # Produce plot
     ggplot(df, aes(y = label, x = mean)) +
-      geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model), shape = 15, size = 0.2, position = position_dodge(0.5)) +
-      facet_grid(group ~ ., scales = "free", space = "free") +
+      geom_vline(xintercept = 0, linetype = 2) +
+      geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model), shape = 15, size = 0.2, position = position_dodge(0.5, reverse = TRUE)) +
+      facet_wrap(~ group, scales = "free", space = "free_y") +
       theme_bw()
     
   } else {
@@ -148,7 +173,8 @@ forests <- function(..., lab = NA, prob = FALSE) {
     # Produce plot
     ggplot(df, aes(y = drug, x = mean)) +
       geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = outcome, shape = model), size = 0.2, position = position_dodge(0.5)) +
-      theme_bw()
+      theme_bw() +
+      facet_wrap(~ outcome, scale = "free_x")
     
   }
 }
