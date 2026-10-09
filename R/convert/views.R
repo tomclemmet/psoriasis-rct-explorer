@@ -20,7 +20,10 @@
 #                so its own baseline rows are typically absent/duplicated and
 #                should be resolved against the parent - left as a manual rule
 #                rather than resolved here.
-# All four also carry pop_res (studies.pop_res:
+#   v_subgroups - subgroup (subgroup_id != 0) measurements, long format: one
+#                row per (arm, subgroup, outcome, timepoint), with the
+#                subgroup name and outcome code/label/endpoint_group.
+# All five also carry pop_res (studies.pop_res:
 # free text, NULL unless the trial restricts to some subpopulation).
 #
 # v_pasi/v_dlqi/v_safety are each per (arm, timepoint). Columns the app
@@ -152,6 +155,53 @@ WITH arm_ctx AS (
   cat(sprintf("  %s rows: %d\n", name, n_rows))
 }
 
+# Long-format view of subgroup (subgroup_id != 0) measurements: one row per
+# (arm, subgroup, outcome, timepoint). Long rather than pivoted for the same
+# reason as v_baseline: which outcomes are reported varies by subgroup and trial.
+.build_subgroups_view <- function(dst, name) {
+  cat(sprintf("Building view %s ...\n", name))
+
+  sql <- sprintf("
+    CREATE VIEW %s AS
+    %s
+    SELECT ctx.trial,
+           ctx.ref_id,
+           ctx.arm_no,
+           ctx.arm_name,
+           ctx.drug,
+           ctx.dose,
+           sg.subgroup_id  AS subgroup_id,
+           sg.subgroup_name AS subgroup,
+           o.endpoint_group AS endpoint_group,
+           o.subcategory   AS subcategory,
+           o.code          AS code,
+           o.label         AS outcome,
+           dt.name         AS data_type,
+           m.timepoint     AS timepoint,
+           ctx.timepoint_unit AS timepoint_unit,
+           m.k             AS k,
+           m.n             AS n,
+           m.mean          AS mean,
+           m.sd            AS sd,
+           m.median        AS median,
+           m.lo_iqr        AS lo_iqr,
+           m.hi_iqr        AS hi_iqr,
+           ctx.pop_res     AS pop_res,
+           ctx.parent_arm_no   AS parent_arm_no,
+           ctx.parent_arm_name AS parent_arm_name
+    FROM   measurements m
+    JOIN   subgroups sg       ON sg.subgroup_id = m.subgroup_id
+    JOIN   outcomes o         ON o.outcome_id = m.outcome_id
+    JOIN   arm_ctx ctx        ON ctx.arm_id = m.arm_id
+    LEFT   JOIN data_types dt ON dt.data_type_id = o.data_type_id
+    WHERE  m.subgroup_id != 0
+  ", name, .arm_ctx_cte)
+
+  dbExecute(dst, sql)
+  n_rows <- dbGetQuery(dst, sprintf("SELECT COUNT(*) AS n FROM %s", name))$n
+  cat(sprintf("  %s rows: %d\n", name, n_rows))
+}
+
 # MAX(CASE WHEN ... THEN <field> END) AS <alias> pivot-clause builders.
 .case_k    <- function(code, alias) sprintf("MAX(CASE WHEN o.code = '%s' THEN m.k      END) AS %s", code, alias)
 .case_mean <- function(code, alias) sprintf("MAX(CASE WHEN o.code = '%s' THEN m.mean   END) AS %s", code, alias)
@@ -257,4 +307,7 @@ build_views <- function(dst) {
     subcategories = c("Demographics", "Psoriasis characteristics",
                       "Comorbidity", "Previous therapy")
   )
+
+  # v_subgroups - subgroup measurements, long format.
+  .build_subgroups_view(dst, "v_subgroups")
 }
