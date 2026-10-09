@@ -14,6 +14,9 @@ pso_jags <- function(
     consistency = c("consistency", "ume"),
     reg = c(),
     reg_mean = c(),
+    reg_scale = c(),
+    reg_effects = c(), # common, exchangeable, or independent
+    reg_level = c(), # treatment or class (only relevant for for exchangeable or independent models)
     output = c("processed", "jags")
 ) {
   effects <- match.arg(effects)
@@ -21,11 +24,17 @@ pso_jags <- function(
   class <- match.arg(class)
   consistency <- match.arg(consistency)
   output <- match.arg(output)
-  
+
   # Remove redundant data based on arguments, avoiding JAGS warning
-  if (class == "independent") {
+  if (class == "independent" & !any(reg_level == "class")) {
     data$cl <- NULL
     data$ncl <- NULL
+  }
+  
+  # Set default regression effects model
+  if (length(reg) > 0 && length(reg_effects) == 0) {
+    reg_effects <- rep("common", length(reg))
+    reg_level <- rep("treatment", length(reg))
   }
   
   # Generic code setting up the conditional binomial likelihood
@@ -58,10 +67,12 @@ model {
   if (length(reg) > 0) {
     metareg <- c()
     for (i in 1:length(reg)) {
+      t_index <- if (reg_level[i] == "treatment") "[t[i, k]] " else "[cl[t[i, k]]]"
+      c_index <- if (reg_level[i] == "treatment") "[t[i, 1]]" else "[cl[t[i, 1]]]"
       metareg[i] <- paste0(
-        "+ (beta_", reg[i], "[t[i, k]] - beta_", reg[i], "[t[i, 1]])",
+        "+ (beta_", reg[i], t_index, " - beta_", reg[i], c_index, ")",
         " * (", 
-        reg[i], if(reg[i] %in% c("mu", "timepoint")) "[i]" else "[i, k]", " - ", reg_mean[i], ")"
+        reg[i], if(reg[i] %in% c("mu", "timepoint")) "[i]" else "[i, k]", " - ", reg_mean[i] / reg_scale[i], ")"
       )
     }
     metareg <- paste0(metareg, collapse = " ")
@@ -142,7 +153,7 @@ model {
     z.aux[j] ~ dunif(0,5)                                                       # priors
     z[j] <- z[j - 1] + z.aux[j]
     for (i in 1:nt) {
-      zeta.aux[i, j] ~ dnorm(z.aux[j], tauz)
+      zeta.aux[i, j] ~ dnorm(z.aux[j], tau_z)
       zeta[i, j] <- zeta[i, j - 1] + zeta.aux[i, j]                             # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
     }
   }"
@@ -153,7 +164,7 @@ model {
     z.aux[j] ~ dunif(0,5)                                                       # priors
     z[j] <- z[j - 1] + z.aux[j]
     for (i in 1:ns) {
-      zeta.aux[i, j] ~ dnorm(z.aux[j], tauz)
+      zeta.aux[i, j] ~ dnorm(z.aux[j], tau_z)
       zeta[i, j] <- zeta[i, j - 1] + zeta.aux[i, j]                             # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
     }
   }"
@@ -169,7 +180,7 @@ model {
     z[j] <- z[j - 1] + z.aux[j]
     for (i in 1:ns) {
       for (k in 1:na[i]) {
-        zeta.aux[i, k, j] ~ dnorm(z.aux[j], tauz)
+        zeta.aux[i, k, j] ~ dnorm(z.aux[j], tau_z)
         zeta[i, k, j] <- zeta[i, k, j - 1] + zeta.aux[i, k, j]                  # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
       }
     }
@@ -195,15 +206,25 @@ model {
   d_priors_class <- "
   d[1] <- 0
   m[1] <- 0
-  for (k in 2:nt) { d[k] ~ dnorm(m[cl[k]], taucl) }
+  for (k in 2:nt) { d[k] ~ dnorm(m[cl[k]], tau_cl) }
   for (p in 2:ncl){ m[p] ~ dnorm(0,.0001) }  
 "
+  
   if (length(reg) > 0) {
     reg_priors <- c()
     for (i in 1:length(reg)) {
+      max <- if (reg_level[i] == "treatment") "nt" else "ncl"
       reg_priors[i] <- paste(
         paste0("\n  beta_", reg[i], "[1] <- 0"),
-        paste0("for (k in 2:nt) { beta_", reg[i], "[k] <- B_", reg[i], "}"),
+        if (reg_effects[i] == "common") {
+          paste0("for (k in 2:", max, ") { beta_", reg[i], "[k] <- B_", reg[i], "}")
+        } else if (reg_effects[i] == "exchangeable") {
+          paste0("for (k in 2:", max, ") { beta_", reg[i], "[k] ~ dnorm(B_", reg[i], ", tau_", reg[i] ,")}
+  sd_", reg[i], " ~ dunif(0, 5)
+  tau_", reg[i], " <- pow(sd_", reg[i], ", -2)")
+        } else if (reg_effects[i] == "independent") {
+          paste0("for (k in 2:", max, ") { beta_", reg[i], "[k] ~ dnorm(0, .01) }")
+        },
         paste0("B_", reg[i], "  ~ dnorm(0,.01)"),
         sep = "\n  "
       )
@@ -216,11 +237,11 @@ model {
   totresdev <- sum(resdev[1:ns])                                                    # Total Residual Deviance
 
   sd ~ dunif(0, 5)                                                              # vague prior for between-trial SD
-  sdz ~ dunif(0, 5)
-  sdcl ~ dunif(0, 5)
+  sd_z ~ dunif(0, 5)
+  sd_cl ~ dunif(0, 5)
   tau <- pow(sd,-2)   
-  tauz <- pow(sdz, -2) # between-trial precision = (1 / between-trial variance)
-  taucl <- pow(sdcl, -2)
+  tau_z <- pow(sd_z, -2) # between-trial precision = (1 / between-trial variance)
+  tau_cl <- pow(sd_cl, -2)
   mubar <- mean(mu[])
   
   
@@ -298,9 +319,10 @@ model {
   params <- c(
     "d", "z", "mu",
     if (effects == "random") "sd" else NULL,
-    if (cutpoints == "fixed") NULL else "sdz",
-    if (length(reg) > 0) c(paste0("B_", reg), "mubar") else NULL,
-    if (class == "exchangeable") c("m", "sdcl") else NULL,
+    if (cutpoints == "fixed") NULL else "sd_z",
+    if (length(reg) > 0 & any(reg_effects != "independent")) c(paste0("B_", reg), "mubar") else NULL,
+    if (any(reg_effects != "common")) paste0("beta_", reg) else NULL,
+    if (class == "exchangeable") c("m", "sd_cl") else NULL,
     if (consistency == "ume") NULL else "prob",
     "totresdev",
     "dv", "rhat"
@@ -324,14 +346,14 @@ model {
     inits[[2]]$sd <- 0.5
   }
   if (cutpoints != "fixed") {
-    inits[[1]]$sdz <- 1
-    inits[[2]]$sdz <- 0.5
+    inits[[1]]$sd_z <- 1
+    inits[[2]]$sd_z <- 0.5
   }
   if (class == "exchangeable") {
     inits[[1]]$m <- c(NA, rep(0, data$ncl - 1))
-    inits[[1]]$sdcl <- 1
+    inits[[1]]$sd_cl <- 1
     inits[[2]]$m <- c(NA, rep(1, data$ncl - 1))
-    inits[[2]]$sdcl <- 0.5
+    inits[[2]]$sd_cl <- 0.5
   }
   if (consistency == "ume") {
     inits[[1]]$d <- NULL
@@ -344,6 +366,13 @@ model {
     }
   }
 
+  # Scale and centre parameters
+  if (length(reg) > 0) {
+    for (i in 1:length(reg)) {
+      data[[reg[i]]] <- data[[reg[i]]] / reg_scale[i]
+    }
+  }
+  
   # Send message with current model type
   message(paste0("Fitting ", if_else(consistency == "ume", "UME ", ""), "NMA for PASI response with ", effects,
                  " effects, ", cutpoints, if_else(cutpoints == "fixed", "", "-level"), " cutpoints, ",
