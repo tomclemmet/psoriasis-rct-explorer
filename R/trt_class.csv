@@ -1,14 +1,11 @@
 drug,class
 Acitretin,conventional
 Cyclosporin,conventional
-Fumaric acid esters,conventional
 Methotrexate,conventional
-Topical,topical
-Phototherapy,phototherapy
+Fumaric acid esters,fae
 Apremilast,targeted small molecule
 Deucravacitinib,targeted small molecule
 Orismilast,targeted small molecule
-Tofacitinib,targeted small molecule
 Zasocitinib,targeted small molecule
 Roflumilast,targeted small molecule
 Guselkumab,il23
