@@ -14,18 +14,20 @@ pasi_drugs <- dbReadTable(con, "v_pasi") |>
   pull(drug)
 
 # Extract PASI response data in long format
-pasi_long <- dbReadTable(con, "v_pasi") |> 
-  filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |>
-  mutate(arm_no = if_else(!is.na(parent_arm_no), parent_arm_no, arm_no)) |> 
+pasi_long <- dbReadTable(con, "v_pasi") |>
+  filter(ref_id %in% reg_ids,
+         !if_all(pasi50:pasi100, \(x) is.na(x))) |>
+  mutate(arm_no = if_else(!is.na(parent_arm_no), parent_arm_no, arm_no),
+         t = as.numeric(factor(drug, levels = c("Placebo", setdiff(sort(drug), "Placebo"))))) |> 
   summarise(
-    .by = c(trial, ref_id, drug, pop_res, pasi_high_rob, timepoint, timepoint_unit),
+    .by = c(trial, ref_id, drug, t, arm_no, pop_res, pasi_high_rob, timepoint, timepoint_unit),
     n = sum(n), pasi50 = sum(pasi50), pasi75 = sum(pasi75), 
     pasi90 = sum(pasi90), pasi100 = sum(pasi100)
   ) |> 
+  arrange(ref_id, t, arm_no) |> mutate(.by = ref_id, arm_no = row_number()) |> 
   mutate(timepoint = if_else(timepoint == 4 & timepoint_unit == "mo", 16, timepoint),
-         pop_res = na_if(pop_res, "null")) |>
-  select(-timepoint_unit)|> 
-  filter(ref_id %in% reg_ids)
+         pop_res = na_if(pop_res, "null")) |> 
+  select(-timepoint_unit)
 # summarise(.by = c(trial, ref_id, drug, pasi_high_rob, pop_res, timepoint), n = sum(n), pasi50 = sum(pasi50), 
 # pasi75 = sum(pasi75), pasi90 = sum(pasi90), pasi100 = sum(pasi100))
 # filter(pop_res %notin% c("Inadequate response to ustekinumab")) |> 
@@ -58,13 +60,7 @@ nth_non_na <- function(n, ...) {
 
 # Produce wide-format data frame suitable for JAGS models
 pasi_wide <- pasi_long |> 
-  left_join(drug_class_lookup, by = "drug") |> # Add drug classes
-  group_by(ref_id) |> # Align trials where the arms report results for different cutpoints
-  mutate(across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |>
-  ungroup() |> 
-  mutate(t = as.numeric(factor(drug, levels = c("Placebo", setdiff(sort(drug), "Placebo")))), 
-         cl = as.numeric(factor(class, levels = c("placebo", setdiff(sort(class), "placebo")))), 
-         .after = drug) |> # Assign treatment and class ids
+  mutate(.by = ref_id, across(pasi50:pasi100, \(x) if (any(is.na(x))) NA else x)) |> # Align trials where the arms report results for different cutpoints
   rowwise() |> mutate( # Calculate conditional counts
     r1 = n - nth_largest(1, pasi50, pasi75, pasi90, pasi100),
     r2 = nth_largest(1, pasi50, pasi75, pasi90, pasi100) - 
@@ -85,9 +81,10 @@ pasi_wide <- pasi_long |>
     C4 = nth_non_na(3, pasi50, pasi75, pasi90, pasi100) + 1,
     C5 = nth_non_na(4, pasi50, pasi75, pasi90, pasi100) + 1,
     nc = sum(!is.na(c(C1, C2, C3, C4, C5)))
-  ) |> ungroup() |> relocate(C1:nc, .before = t) |> # Move/drop non-pivot columns
-  select(-c(drug, class, trial, pasi_high_rob, pop_res, timepoint, n, pasi50:pasi100)) |> 
-  mutate(.by = ref_id, na = n(), arm_no = dense_rank(t)) |> arrange(ref_id, arm_no) |> # Add arm info
+  ) |> ungroup() |> relocate(C1:nc, arm_no, .before = t) |> # Move non-pivot columns to before t
+  select(-c(drug, trial, pasi_high_rob, pop_res, timepoint, n, pasi50:pasi100)) |> # Drop additional columns
+  mutate(.by = ref_id, na = n()) |> # Add number of arms
+  arrange(ref_id, arm_no) |> # Arrange by trial and arm
   pivot_wider(names_from = arm_no, values_from = t:n5, names_glue = "a{arm_no}{.value}") |> # Pivot to wide format
   relocate(na, .before = nc)
 
