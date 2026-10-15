@@ -24,6 +24,7 @@ diagram example/
 todo.txt
 claude.md
 JAGS/temp.jags
+*.docx
 
 # OS / editor
 .DS_Store
