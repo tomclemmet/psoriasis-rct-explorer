@@ -28,9 +28,11 @@ load_chars <- function(my_chars) {
   
   pasi_ids <- dbReadTable(con, "v_pasi") |> 
     filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |>
+    # group_by(ref_id) |> filter(any(drug == "Placebo"), any(drug == "Ustekinumab"), drug %in% c("Ustekinumab", "Placebo")) |> ungroup() |>
     pull(ref_id) |> unique()
 
   chars <- dbReadTable(con, "v_baseline") |> 
+    # group_by(ref_id) |> filter(any(drug == "Placebo"), any(drug == "Ustekinumab"), drug %in% c("Ustekinumab", "Placebo")) |> ungroup() |>
     filter(characteristic %in% char_labs, !is.na(k) | !is.na(mean), ref_id %in% pasi_ids) |>
     mutate(arm_no = if_else(!is.na(parent_arm_no), parent_arm_no, arm_no),
            t = as.numeric(factor(drug, levels = c("Placebo", setdiff(sort(drug), "Placebo"))))) |> 
@@ -67,6 +69,6 @@ load_chars <- function(my_chars) {
   names(char_list) <- my_chars
   source("R/utils/load-pasi-reg.R")
   
-  c(pasi_jags, char_list)
+  c(jags_inputs, char_list)
 }
 

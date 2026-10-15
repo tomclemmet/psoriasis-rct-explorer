@@ -6,9 +6,9 @@ process_jags <- function(mod) {
   if (inherits(mod, "jags_nma_fit")) return(mod)
   
   param_lookup <- data.frame(
-    label = pasi_id_lookup$drug,
-    param = paste0("d[", seq(1:length(pasi_id_lookup$drug)), "]")
-  ) |> bind_rows(distinct(pasi_id_lookup, class, cl) |> 
+    label = id_lookup$drug,
+    param = paste0("d[", seq(1:length(id_lookup$drug)), "]")
+  ) |> bind_rows(distinct(id_lookup, class, cl) |> 
                 mutate(label = class, param = paste0("m[", cl, "]")) |>
                 select(-class, -cl))
   
@@ -23,7 +23,7 @@ process_jags <- function(mod) {
     ) |> 
     mutate(across(starts_with("id_"), as.integer)) |> 
     rename(fitted = mean) |> 
-    mutate(actual = pasi_jags$r[cbind(id_row, id_arm, id_cat)]) |> 
+    mutate(actual = jags_inputs$r[cbind(id_row, id_arm, id_cat)]) |> 
     select(starts_with("id"), fitted, actual)
   
   out <- list(
@@ -72,8 +72,11 @@ process_jags <- function(mod) {
 
 print.jags_nma_fit <- function(m) {
   totresdev <- m$results[m$results$param == "totresdev", 3]
+  sd <- m$results[m$results$param == "sd", 3]
   
-  message(paste0("totresdev = ", round(totresdev, 1), " on ", nrow(m$dev_table), " data points, pV = ", round(m$pV, 1), ", DIC = ", round(m$DIC, 1)))
+  message(paste0("totresdev = ", round(totresdev, 1), " on ", nrow(m$dev_table), 
+                 " data points, pV = ", round(m$pV, 1), ", DIC = ", 
+                 round(m$DIC, 1), ", sd = ", round(sd, 3)))
   print(m$summary)
   invisible(m$summary)
   
@@ -84,7 +87,11 @@ check_fits <- function(mods) {
   for (i in 1:length(mods)) {
     m <- process_jags(mods[[i]])
     totresdev <- m$results[m$results$param == "totresdev", 3]
-    message(paste0(names(mods)[i], ": totresdev = ", round(totresdev, 1), " on ", nrow(m$dev_table), " data points, pV = ", round(m$pV, 1), ", DIC = ", round(m$DIC, 1)))
+    sd <- m$results[m$results$param == "sd", 3]
+    message(paste0(names(mods)[i], ": totresdev = ", round(totresdev, 1), 
+                   " on ", nrow(m$dev_table), " data points, pV = ", 
+                   round(m$pV, 1), ", DIC = ", round(m$DIC, 1), ", sd = ", 
+                   round(sd, 3)))
   }
 }
 

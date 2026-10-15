@@ -10,6 +10,7 @@ con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 pasi_drugs <- dbReadTable(con, "v_pasi") |> 
   distinct(drug) |> 
   # filter(drug != "Izokibep") |> # CHANGE WHEN PhIII trial included
+  # filter(drug %in% c("Ustekinumab", "Placebo")) |>
   mutate(drug = c("Placebo", sort(setdiff(drug, "Placebo")))) |> 
   pull(drug)
 
@@ -17,6 +18,7 @@ pasi_drugs <- dbReadTable(con, "v_pasi") |>
 pasi_long <- dbReadTable(con, "v_pasi") |>
   filter(ref_id %in% reg_ids,
          !if_all(pasi50:pasi100, \(x) is.na(x))) |>
+  # group_by(ref_id) |> filter(any(drug == "Placebo"), any(drug == "Ustekinumab"), drug %in% c("Ustekinumab", "Placebo")) |> ungroup() |>
   mutate(arm_no = if_else(!is.na(parent_arm_no), parent_arm_no, arm_no),
          t = as.numeric(factor(drug, levels = c("Placebo", setdiff(sort(drug), "Placebo"))))) |> 
   summarise(
@@ -89,7 +91,7 @@ pasi_wide <- pasi_long |>
   relocate(na, .before = nc)
 
 # Treatment and class IDs
-pasi_id_lookup <- pasi_long |> 
+id_lookup <- pasi_long |> 
   left_join(drug_class_lookup, by = "drug") |> 
   select(trial, ref_id, drug, class, n:pasi100) |>
   mutate(.by = ref_id, arm_no = row_number()) |> 
@@ -108,19 +110,19 @@ row_lookup <- pasi_wide |>
   pivot_longer(starts_with("a") & ends_with("t"), names_to = "arm_no", values_to = "t") |> 
   mutate(arm_no = as.numeric(substr(arm_no, 2, 2))) |> 
   filter(!is.na(t)) |> 
-  mutate(drug = pasi_id_lookup$drug[t]) |> 
+  mutate(drug = id_lookup$drug[t]) |> 
   left_join(distinct(pasi_long, trial, ref_id), by = "ref_id", relationship = "many-to-one")
 
 # Collect data in JAGS format
-pasi_jags <- list(
+jags_inputs <- list(
   ns = nrow(pasi_wide),
-  nt = max(pasi_id_lookup$t),
-  ncl = max(pasi_id_lookup$cl),
+  nt = max(id_lookup$t),
+  ncl = max(id_lookup$cl),
   Cmax = 5,
   na = pasi_wide$na,
   nc = pasi_wide$nc,
   t = select(pasi_wide, starts_with("a") & ends_with("t")) |> as.matrix(),
-  cl = pasi_id_lookup$cl,
+  cl = id_lookup$cl,
   C = select(pasi_wide, C1:C5) |> as.matrix(),
   r = list(as.matrix(select(pasi_wide, ends_with("r1"))),
            as.matrix(select(pasi_wide, ends_with("r2"))),
