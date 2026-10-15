@@ -2,12 +2,12 @@ drug,class
 Acitretin,conventional
 Cyclosporin,conventional
 Methotrexate,conventional
-Fumaric acid esters,fae
-Apremilast,targeted small molecule
-Deucravacitinib,targeted small molecule
-Orismilast,targeted small molecule
-Zasocitinib,targeted small molecule
-Roflumilast,targeted small molecule
+Fumaric acid esters,conventional
+Apremilast,tsm
+Deucravacitinib,tsm
+Orismilast,tsm
+Zasocitinib,tsm
+Roflumilast,tsm
 Guselkumab,il23
 Icotrokinra,il23
 Risankizumab,il23
