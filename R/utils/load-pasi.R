@@ -88,7 +88,7 @@ pasi_wide <- pasi_long |>
   relocate(na, .before = nc)
 
 # Treatment and class IDs
-pasi_id_lookup <- pasi_long |> 
+id_lookup <- pasi_long |> 
   left_join(drug_class_lookup, by = "drug") |> 
   select(trial, ref_id, drug, class, n:pasi100) |>
   mutate(.by = ref_id, arm_no = row_number()) |> 
@@ -107,19 +107,19 @@ row_lookup <- pasi_wide |>
   pivot_longer(starts_with("a") & ends_with("t"), names_to = "arm_no", values_to = "t") |> 
   mutate(arm_no = as.numeric(substr(arm_no, 2, 2))) |> 
   filter(!is.na(t)) |> 
-  mutate(drug = pasi_id_lookup$drug[t]) |> 
+  mutate(drug = id_lookup$drug[t]) |> 
   left_join(distinct(pasi_long, trial, ref_id), by = "ref_id", relationship = "many-to-one")
 
 # Collect data in JAGS format
-pasi_jags <- list(
+jags_inputs <- list(
   ns = nrow(pasi_wide),
-  nt = max(pasi_id_lookup$t),
-  ncl = max(pasi_id_lookup$cl),
+  nt = max(id_lookup$t),
+  ncl = max(id_lookup$cl),
   Cmax = 5,
   na = pasi_wide$na,
   nc = pasi_wide$nc,
   t = select(pasi_wide, starts_with("a") & ends_with("t")) |> as.matrix(),
-  cl = pasi_id_lookup$cl,
+  cl = id_lookup$cl,
   C = select(pasi_wide, C1:C5) |> as.matrix(),
   r = list(as.matrix(select(pasi_wide, ends_with("r1"))),
            as.matrix(select(pasi_wide, ends_with("r2"))),
