@@ -34,6 +34,8 @@ pso_jags <- function(
   # Set default regression effects model
   if (length(reg) > 0 && length(reg_effects) == 0) {
     reg_effects <- rep("common", length(reg))
+  }
+  if (length(reg) > 0 && length(reg_level) == 0) {
     reg_level <- rep("treatment", length(reg))
   }
   
@@ -70,7 +72,7 @@ model {
       t_index <- if (reg_level[i] == "treatment") "[t[i, k]] " else "[cl[t[i, k]]]"
       c_index <- if (reg_level[i] == "treatment") "[t[i, 1]]" else "[cl[t[i, 1]]]"
       metareg[i] <- paste0(
-        "+ (beta_", reg[i], t_index, " - beta_", reg[i], c_index, ")",
+        "- (beta_", reg[i], t_index, " - beta_", reg[i], c_index, ")",
         " * (", 
         reg[i], if(reg[i] %in% c("mu", "timepoint")) "[i]" else "[i, k]", " - ", reg_mean[i] / reg_scale[i], ")"
       )
@@ -333,12 +335,12 @@ model {
     list(
       d = c(NA, rep(0, data$nt - 1)),
       mu = rep(0, data$ns),
-      z.aux = c(NA, rep(0.5, 3))
+      z.aux = c(NA, rep(1, data$Cmax-2))
     ),
     list(
       d = c(NA, rep(1, data$nt - 1)),
       mu = rep(0, data$ns),
-      z.aux = c(NA, rep(1, 3))
+      z.aux = c(NA, rep(1, data$Cmax-2))
     )
   )
   if (effects == "random") {
