@@ -62,8 +62,8 @@ forest <- function(m) {
 forests <- function(..., lab = NA, grp = NA, prob = FALSE) {
   mods <- list(...)
   
-  # Handle case where a single model is passed
-  if (length(mods) == 1 && is.list(mods[[1]])) {
+  # Handle case where a single list is passed
+  if (length(mods) == 1 && !inherits(mods[[1]], "jags_nma_fit")) {
     mods <- mods[[1]]
   }
   
