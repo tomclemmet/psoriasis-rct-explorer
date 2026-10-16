@@ -8,8 +8,12 @@ process_jags <- function(mod) {
   param_lookup <- data.frame(
     label = id_lookup$drug,
     param = paste0("d[", seq(1:length(id_lookup$drug)), "]")
-  ) |> bind_rows(distinct(id_lookup, class, cl) |> 
+  ) |> 
+    bind_rows(distinct(id_lookup, class, cl) |> 
                 mutate(label = class, param = paste0("m[", cl, "]")) |>
+                select(-class, -cl)) |> 
+    bind_rows(distinct(id_lookup, class, cl) |> 
+                mutate(label = class, param = paste0("beta_timepoint[", cl, "]")) |>
                 select(-class, -cl))
   
   fitted_values <- mod$BUGSoutput$summary |>
