@@ -8,6 +8,7 @@ library(stringr)
 library(R2jags)
 library(ggplot2)
 theme_set(theme_classic())
+classes <- read.csv("R/trt_class.csv")
 
 con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
 
@@ -48,9 +49,16 @@ bivar_data <- full_join(pasi, dlqi, by = c("ref_id", "arm_no", "drug")) |>
   mutate(t = as.numeric(factor(drug, levels = c("Placebo", setdiff(sort(drug), "Placebo")))))
 t_lookup <- distinct(bivar_data, drug, t) |> arrange(t)
   
-ggplot(bivar_data, aes(x = pasi75/n_pasi, y = dlqi_0_1/n_dlqi)) + 
-  geom_point(aes(colour = drug, size = n_pasi)) +
-  scale_colour_viridis_d()
+bivar_data |> 
+  left_join(classes, by = "drug") |> 
+  mutate(drug = toupper(str_sub(drug, 1, 3)), 
+         class = factor(class, levels = c("placebo", "conventional", "tsm", "tnf",
+                                          "il12_23", "il17", "il23"))) |> 
+  ggplot(aes(x = pasi75/n_pasi, y = dlqi_0_1/n_dlqi)) + 
+  geom_point(aes(colour = class, size = n_pasi)) + 
+  scale_colour_viridis_d(direction = -1) +
+  labs(title = "Correlation between PASI 75 and DLQI 0/1 response", size = "n")
+ggsave("output/p75-dlqi.png", height = 13.5, width = 24, units = "cm")
 
 
 row_lookup <- bivar_data |> 
@@ -119,55 +127,76 @@ bivar_jags <- list(
 )
        
 lapply(bivar_jags, head)
+m <- list()
 
-m <- jags(
-  data = bivar_jags, parameters.to.save = c("d", "sd", "rhoB", "sig_t", "rho_t", "beta_t", "psi_t", "eta"),
+# Model 1d: Basic bvNMA model with prior on between-trial correlation
+m$d1 <- jags(
+  data = bivar_jags, parameters.to.save = c("d", "sd", "rhoB"),
+  inits = NULL, model.file = "R/analysis/bivariate-2/bivar1d.jags", n.chains = 2, 
+  n.iter = 20000, n.thin = 1
+)
+
+# Model 2d: bvNMA model correlated priors on d, allowing more predictions
+m$d2 <- jags(
+  data = bivar_jags, parameters.to.save = c("d", "sd", "rhoB", "sig_t", "rho_t"),
   inits = NULL, model.file = "R/analysis/bivariate-2/bivar2d.jags", n.chains = 2, 
   n.iter = 20000, n.thin = 1
 )
-m
 
-m_ind <- jags(
+# Univariate NMA, produced by making networks fully independent
+m$uni <- jags(
   data = bivar_jags, parameters.to.save = c("d", "sd"),
   inits = NULL, model.file = "R/analysis/bivariate-2/bivar2d-uni.jags", n.chains = 2, 
+  n.iter = 10000, n.thin = 1
+)
+
+# Model 2d but with correlation parameters set to zero
+m$uni2d <- jags(
+  data = bivar_jags, parameters.to.save = c("d", "sd"),
+  inits = NULL, model.file = "R/analysis/bivariate-2/bivar2d-nocorr.jags", n.chains = 2, 
   n.iter = 20000, n.thin = 1
 )
 
-s <- m$BUGSoutput$summary |> 
-  as_tibble(rownames = "param") |> 
-  filter(str_starts(param, "d\\[")) |> 
-  mutate(outcome = c("PASI 75", "DLQI")[as.numeric(str_sub(param, 3, 3))],
-         t = as.numeric(str_extract(param, "(?<=,)[^]]+")),
-         drug = if_else(outcome == "PASI 75", t_lookup$drug[t], t_lookup$drug[t]),
-         .before = "param")
+summ <- function(m) {
+  m$BUGSoutput$summary |> 
+    as_tibble(rownames = "param") |> 
+    filter(str_starts(param, "d\\[")) |> 
+    mutate(outcome = c("PASI 75", "DLQI 0/1")[as.numeric(str_sub(param, 3, 3))],
+           t = as.numeric(str_extract(param, "(?<=,)[^]]+")),
+           drug = if_else(outcome == "PASI 75", t_lookup$drug[t], t_lookup$drug[t]),
+           .before = "param") |> 
+    filter(`97.5%` < 10)
+}
 
-s_ind <- m_ind$BUGSoutput$summary |> 
-  as_tibble(rownames = "param") |> 
-  filter(str_starts(param, "d\\[")) |> 
-  mutate(outcome = c("PASI 75", "DLQI")[as.numeric(str_sub(param, 3, 3))],
-         t = as.numeric(str_extract(param, "(?<=,)[^]]+")),
-         drug = if_else(outcome == "PASI 75", t_lookup$drug[t], t_lookup$drug[t]),
-         .before = "param") |> 
-  filter(drug %in% unique(dlqi$drug) | outcome == "PASI 75")
+s <- lapply(m, summ)
 
-order <- s |> 
+
+order <- s$d2 |> 
   filter(outcome == "PASI 75") |> 
   arrange(mean) |> 
   pull(drug) |> 
   unique()
 
-bind_rows(s_ind, s, .id = "model") |> 
+bind_rows(s$uni, s$d1, s$d2, .id = "model") |> 
   mutate(drug = factor(drug, levels = order)) |> 
+  # mutate(across(c(mean, `2.5%`, `97.5%`), exp)) |> 
   ggplot(aes(x = mean, y = drug)) +
   geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model), 
                   position = position_dodge(0.5, reverse = TRUE), 
-                  size = 0.3, shape = 15) +
+                  size = 0.25, shape = 15) +
   facet_wrap(~ outcome, scale = "free_x") +
-  scale_colour_discrete(labels = c("1" = "Univariate", "2" = "Bivariate")) +
+  scale_colour_discrete(labels = c("1" = "Univariate", "2" = "Bivariate (1d)", "3" = "Bivariate (2d)")) +
   theme_bw() +
-  theme(legend.position = "bottom")
-ggsave("output/bivar.png", height = 7, width = 12)
+  theme(legend.position = "bottom") +
+  labs(title = "Bivariate and univariate NMA results", x = "Log odds-ratio vs placebo", y = "")
+ggsave("output/bivar.png", height = 19.05, width = 33.867, units = "cm")
 
+a <- list()
+
+
+
+
+#######################
 bind_rows(s_ind, s, .id = "model") |> 
   filter(drug != "Placebo") |> 
   arrange(outcome, drug, model) |> group_by(outcome, drug) |> 

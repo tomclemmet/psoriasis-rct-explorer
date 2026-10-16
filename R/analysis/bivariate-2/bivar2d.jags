@@ -1,0 +1,97 @@
+model{
+
+  # Likilihood for studies reporting a single outcome (arm level data)
+  for(i in 1:nobs1){
+    omega1[i] <- pow(se[i, oc[i]], -2) # precision
+    y[i, oc[i]] ~ dnorm(mean.y[study[i], arm[i], oc[i]], omega1[i]) # Normal dist.
+  }
+  
+  # Likilihood for studies reporting two outcomea (arm level data )
+  # rhoW ~ dunif(0, 1) # uniform(a,b) prior distr. for within-study corr.
+  rhoW <- 0
+  for(i in (nobs1 + 1):(nobs1 + nobs2)){
+    omega2[i, 1:no, 1:no] <- inverse(cov.mat[i,,])
+    y[i, 1:no] ~ dmnorm(mean.y[study[i], arm[i], 1:no], omega2[i,,]) # mvNorm distr.
+    #Define within-study covariance matrix
+    cov.mat[i,1,1] <- pow(se[i,1],2)
+    cov.mat[i,2,2] <- pow(se[i,2],2)
+    cov.mat[i,1,2] <- se[i,1]*se[i,2] *rhoW
+    cov.mat[i,2,1] <- cov.mat[i,1,2]
+  }
+  
+  # Transform unobserved effects to one-row per study and take contrasts
+  for(j in 1:ns) {
+    for(k in 1:na1[j]) {
+      for(m in 1:no) {
+        mean.y[j,k,m] <- mu[j,m] + delta[j,k,m]
+      }
+    }
+  }
+  
+  # Multivariate random-effects (homogenous variance model)
+  for(j in 1:ns){
+    for(m in 1:no) {
+      delta[j,1,m] <-0 #set delta in treatment 1/baseline to zero
+      w[j,1,m] <-0 #set multi-arm adjustment in trt 1 to zero
+    }
+    for(k in 2:na1[j]){
+      delta[j,k,1:no] ~ dmnorm(md[j,k,1:no],PREC[j,k,1:no,1:no])
+      #Set precision matrix T for multiple outcomes
+      for(m in 1:no) {
+        for(mm in 1:no) {
+          PREC[j,k,m,mm] <- T[m,mm]*2*(k-1)/k
+        }
+      }
+    }
+  }
+  # Consistency relations between basic parameters
+  for(i in 1:(ns*no)) {
+    for(k in 2:na2[i]) {
+      md[s[i],k,o[i,1]] <- (d[o[i,1],t[i,k]] - d[o[i,1],t[i,1]]) *equals(o[i,1],o[i,2])
+        + sw[s[i],k,o[i,1]]
+      w[s[i],k,o[i,1]] <- (delta[s[i],k,o[i,1]] - (d[o[i,1],t[i,k]] - d[o[i,1],t[i,1]]))
+        *equals(o[i,1],o[i,2])
+      sw[s[i],k,o[i,1]] <- sum(w[s[i],1:(k-1),o[i,1]])/(k-1)
+    }
+  }
+### NEW CODE , FOLLOWING MODEL 2D ##############################################
+  
+  # Treatment-level exchangeability (eqs. 17-18), k = 1 (reference) included
+  for (k in 1:nt) {
+    eta[k,1:2] ~ dmnorm(eta.mean[1:2], prec_t[1:2,1:2])
+    for (j in 1:2) { d[j,k] <- eta[k,j] - eta[1,j] }
+  }
+  eta.mean[1] <- 0
+  eta.mean[2] <- 0
+  for (j in 1:2) { sig_t[j] ~ dunif(0, 2) }
+  rho_t.u ~ dbeta(1.5, 1.5)
+  rho_t <- 2 * rho_t.u - 1
+  Cov_t[1,1] <- pow(sig_t[1], 2)
+  Cov_t[2,2] <- pow(sig_t[2], 2)
+  Cov_t[1,2] <- rho_t * sig_t[1] * sig_t[2]
+  Cov_t[2,1] <- Cov_t[1,2]
+  prec_t[1:2,1:2] <- inverse(Cov_t[,])
+  
+
+################################################################################
+  
+  #trt effects exponentiated and prior distributions
+  for(m in 1:no) {
+    sd[m] ~ dunif(0, 5)
+    sigma[m,m] <- pow(sd[m],2)
+  }
+  #Prior distributions and estimated between study correlation matrix
+  for(j in 1:ns){
+    for(m in 1:no) {
+      mu[j, m] ~ dnorm(0,0.0001)
+    }
+  }
+  #Parameterization of the between-studies covariance
+  T[1:no,1:no] <- inverse(sigma[,])
+  sigma[1,2] <- rhoB * sd[1] * sd[2]
+  sigma[2,1] <- sigma[1,2]
+
+  rhoB.u ~ dbeta(1.5, 1.5)
+  rhoB <- 2*rhoB.u - 1
+  
+}
