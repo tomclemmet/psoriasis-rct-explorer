@@ -23,7 +23,7 @@ j$com <- pso_jags(
 )
 j$ex_class<- pso_jags(
   jags_inputs, niter = 20000, effects = "random", cutpoints = "trial",
-  reg = c("timepoint", "mu"), reg_mean = c(16, avg), reg_scale = c(4, sc), 
+  reg = c("timepoint", char), reg_mean = c(16, avg), reg_scale = c(4, sc), 
   reg_effects = c("independent", "exchangeable"), reg_level = c("class", "class")
 )
 j$ind_class <- pso_jags(
