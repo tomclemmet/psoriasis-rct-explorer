@@ -1,0 +1,8 @@
+source("R/analysis/metaregression/age.R")
+source("R/analysis/metaregression/sex.R")
+source("R/analysis/metaregression/weight.R")
+source("R/analysis/metaregression/ethnicity.R")
+source("R/analysis/metaregression/psa.R")
+source("R/analysis/metaregression/duration.R")
+source("R/analysis/metaregression/pasi.R")
+source("R/analysis/metaregression/bio.R")
