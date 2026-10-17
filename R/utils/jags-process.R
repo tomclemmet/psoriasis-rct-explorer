@@ -4,6 +4,7 @@ library(stringr)
 
 process_jags <- function(mod) {
   if (inherits(mod, "jags_nma_fit")) return(mod)
+  classes <- distinct(id_lookup, class, cl) |> arrange(cl)
   
   param_lookup <- data.frame(
     label = id_lookup$drug,
@@ -11,9 +12,6 @@ process_jags <- function(mod) {
   ) |> 
     bind_rows(distinct(id_lookup, class, cl) |> 
                 mutate(label = class, param = paste0("m[", cl, "]")) |>
-                select(-class, -cl)) |> 
-    bind_rows(distinct(id_lookup, class, cl) |> 
-                mutate(label = class, param = paste0("beta_timepoint[", cl, "]")) |>
                 select(-class, -cl))
   
   fitted_values <- mod$BUGSoutput$summary |>
@@ -34,6 +32,17 @@ process_jags <- function(mod) {
     results = mod$BUGSoutput$summary |>
       as_tibble(rownames = "param") |> 
       left_join(param_lookup, by = "param") |> 
+      mutate(
+        cl = if_else(
+          str_starts(param, "beta_"),
+          suppressWarnings(as.numeric(str_sub(param, -2, -2))), NA
+        ),
+        label = if_else(
+          str_starts(param, "beta_"), 
+          paste0(str_sub(param, 6, -3), classes$class[cl], "]"), label
+        )
+      ) |> select(-cl) |> 
+      filter(`97.5%` < 10) |> 
       relocate(label, .after = param) |> 
       as.data.frame(),
     
