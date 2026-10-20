@@ -6,30 +6,72 @@ source("R/utils/plots.R")
 source("R/utils/load-chars.R")
 
 j <- list()
-char <- "mu"
-avg <- 0.7
-sc <- 11
-source("R/utils/load-pasi.R")
+jc <- list()
+n_iter = 150000
 
-j$base <- pso_jags(
-  jags_inputs, niter = 20000, effects = "random", cutpoints = "trial",
-  reg = "timepoint", reg_mean = 16, reg_scale = 4, reg_effects = "independent",
-  reg_level = "class"
+jags_inputs <- load_chars("age")
+j$age <- pso_jags(
+  jags_inputs, niter = n_iter, effects = "random", cutpoints = "trial",
+  reg = c("timepoint", "mu"), reg_mean = c(16, 0.7), reg_scale = c(4, 1), 
+  reg_effects = c("independent", "common"), 
+  reg_level = c("class", "common")
 )
-j$com <- pso_jags(
-  jags_inputs, niter = 20000, effects = "random", cutpoints = "trial",
-  reg = c("timepoint", char), reg_mean = c(16, avg), reg_scale = c(4, sc), 
-  reg_effects = c("independent", "common"), reg_level = c("class", "common")
+jc$age <- process_jags(j$age)
+jags_inputs <- load_chars("male")
+j$male <- pso_jags(
+  jags_inputs, niter = n_iter, effects = "random", cutpoints = "trial",
+  reg = c("timepoint", "mu"), reg_mean = c(16, 0.7), reg_scale = c(4, 1), 
+  reg_effects = c("independent", "common"), 
+  reg_level = c("class", "common")
 )
-j$ex_class<- pso_jags(
-  jags_inputs, niter = 20000, effects = "random", cutpoints = "trial",
-  reg = c("timepoint", char), reg_mean = c(16, avg), reg_scale = c(4, sc), 
-  reg_effects = c("independent", "exchangeable"), reg_level = c("class", "class")
+jc$male <- process_jags(j$male)
+jags_inputs <- load_chars("white")
+j$white <- pso_jags(
+  jags_inputs, niter = n_iter, effects = "random", cutpoints = "trial",
+  reg = c("timepoint", "mu"), reg_mean = c(16, 0.7), reg_scale = c(4, 1), 
+  reg_effects = c("independent", "common"), 
+  reg_level = c("class", "common")
 )
-j$ind_class <- pso_jags(
-  jags_inputs, niter = 20000, effects = "random", cutpoints = "trial",
-  reg = c("timepoint", char), reg_mean = c(16, avg), reg_scale = c(4, sc), 
-  reg_effects = c("independent", "independent"), reg_level = c("class", "class")
+jc$white <- process_jags(j$white)
+jags_inputs <- load_chars("weight")
+j$weight <- pso_jags(
+  jags_inputs, niter = n_iter, effects = "random", cutpoints = "trial",
+  reg = c("timepoint", "mu"), reg_mean = c(16, 0.7), reg_scale = c(4, 1), 
+  reg_effects = c("independent", "common"), 
+  reg_level = c("class", "common")
 )
+jc$weight <- process_jags(j$weight)
+jags_inputs <- load_chars("psa")
+j$psa <- pso_jags(
+  jags_inputs, niter = n_iter, effects = "random", cutpoints = "trial",
+  reg = c("timepoint", "mu"), reg_mean = c(16, 0.7), reg_scale = c(4, 1), 
+  reg_effects = c("independent", "common"), 
+  reg_level = c("class", "common")
+)
+jc$psa <- process_jags(j$psa)
+jags_inputs <- load_chars("duration")
+j$duration <- pso_jags(
+  jags_inputs, niter = n_iter, effects = "random", cutpoints = "trial",
+  reg = c("timepoint", "mu"), reg_mean = c(16, 0.7), reg_scale = c(4, 1), 
+  reg_effects = c("independent", "common"), 
+  reg_level = c("class", "common")
+)
+jc$duration <- process_jags(j$duration)
+jags_inputs <- load_chars("pasi")
+j$pasi <- pso_jags(
+  jags_inputs, niter = n_iter, effects = "random", cutpoints = "trial",
+  reg = c("timepoint", "mu"), reg_mean = c(16, 0.7), reg_scale = c(4, 1), 
+  reg_effects = c("independent", "common"), 
+  reg_level = c("class", "common")
+)
+jc$pasi <- process_jags(j$pasi)
+jags_inputs <- load_chars("bio")
+j$bio <- pso_jags(
+  jags_inputs, niter = n_iter, effects = "random", cutpoints = "trial",
+  reg = c("timepoint", "mu"), reg_mean = c(16, 0.7), reg_scale = c(4, 1), 
+  reg_effects = c("independent", "common"), 
+  reg_level = c("class", "common")
+)
+jc$bio <- process_jags(j$bio)
 
-saveRDS(lapply(j, process_jags), paste0("output/metareg/", char, ".rds"))
+saveRDS(jc, "output/metareg/mu.rds")
