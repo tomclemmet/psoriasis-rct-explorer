@@ -42,7 +42,6 @@ process_jags <- function(mod) {
           paste0(str_sub(param, 6, -3), classes$class[cl], "]"), label
         )
       ) |> select(-cl) |> 
-      filter(`97.5%` < 10) |> 
       relocate(label, .after = param) |> 
       as.data.frame(),
     
