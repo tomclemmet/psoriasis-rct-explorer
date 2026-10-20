@@ -91,16 +91,21 @@ forests <- function(..., lab = NA, grp = NA, prob = FALSE) {
           "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast",
           "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab", "Zasocitinib"
         ), param != "mubar") |>
-        mutate(group = factor(case_when(
-          str_detect(param, "d\\[") ~ "Treatment effect",
-          str_detect(param, "m\\[") ~ "Class effect",
-          str_detect(param, "sd") ~ "Heterogeneity",
-          str_detect(param, "z\\[") ~ "Multinomial cutpoint",
-          str_detect(param, "B|beta") ~ "Regression coefficient"
-          ), level = c("Treatment effect", "Class effect", "Heterogeneity", 
-                       "Multinomial cutpoint", "Regression coefficient")),
+        mutate(
+          group = factor(case_when(
+            str_detect(param, "d\\[") ~ "Treatment effect",
+            str_detect(param, "m\\[") ~ "Class effect",
+            str_detect(param, "sd") ~ "Heterogeneity",
+            str_detect(param, "z\\[") ~ "Multinomial cutpoint",
+            str_detect(param, "B|beta") ~ "Regression coefficient"
+            ), level = c("Treatment effect", "Class effect", "Heterogeneity", 
+                         "Multinomial cutpoint", "Regression coefficient")),
           label = if_else(is.na(label), param, label),
-          rank = if_else(group %in% c("Treatment effect", "Class effect"), mean, NA)) |>
+          rank = if_else(group %in% c("Treatment effect", "Class effect"), mean, NA),
+          converged = Rhat < 1.1,
+          `2.5%` = if_else(!converged, NA, `2.5%`),
+          `97.5%` = if_else(!converged, NA, `97.5%`)
+        ) |>
         group_by(group) |>
         arrange(desc(rank), .by_group = TRUE)
       df[[names(mods)[i]]]$label <- factor(df[[names(mods)[i]]]$label, levels = rev(df[[names(mods)[i]]]$label))
@@ -126,9 +131,10 @@ forests <- function(..., lab = NA, grp = NA, prob = FALSE) {
     # Produce plot
     ggplot(df, aes(y = label, x = mean)) +
       geom_vline(xintercept = 0, linetype = 2) +
-      geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model), shape = 15, size = 0.2, position = position_dodge(0.5, reverse = TRUE)) +
+      geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model, shape = converged), size = 0.2, position = position_dodge(0.5, reverse = TRUE)) +
       facet_wrap(~ group, scales = "free", space = "free_y") +
-      theme_bw()
+      theme_bw() +
+      scale_shape_manual(values = c("TRUE" = 15, "FALSE" = 4))
     
   } else {
     # If probabilities chosen for plotting...
