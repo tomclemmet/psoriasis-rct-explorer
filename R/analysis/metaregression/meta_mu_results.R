@@ -1,13 +1,28 @@
 source("R/utils/plots.R")
 source("R/utils/load-chars.R")
 
-chars <- c("age", "male", "white", "weight", "duration", "psa", "pasi", "bio")
+chars <- c("age", "male", "white", "weight", "psa", "duration", "pasi", "bio")
 
-mu <- readRDS("R/saved-results/metareg/meta_mu.rds")
-bio_mu <- readRDS("R/saved-results/metareg/bio_mu.rds")
+unadjusted <- readRDS("R/saved-results/metareg/unadjusted.rds")
+mu <- readRDS("R/saved-results/metareg/mu.rds")
+metamu <- readRDS("R/saved-results/metareg/meta_mu.rds")
+
+for (i in 1:length(unadjusted)) {
+  mu[[i]]$summary <- mu[[i]]$summary |> 
+    filter(!str_starts(param, "beta_") | str_starts(param, "beta_timepoint"), param != "B_timepoint")
+  metamu[[i]]$summary <- metamu[[i]]$summary |> 
+    filter(!str_starts(param, "beta_") | str_starts(param, "beta_timepoint"), param != "B_timepoint")
+}
+
+
+check_fits(list(unadjusted$age, mu$age))
+
+devplot(unadjusted$age, mu$age, output="table") |> 
+  arrange(-diff)
+
+mu$age$results |> filter(str_starts(param, "mu")) |> slice(72)
+
 mods <- list()
-
-mu[["bio"]] <- bio_mu$com
 
 for (i in 1:length(chars)) {
   message(chars[i])

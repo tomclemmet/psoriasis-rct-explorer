@@ -39,14 +39,14 @@ process_jags <- function(mod) {
         ),
         label = if_else(
           str_starts(param, "beta_"), 
-          paste0(str_sub(param, 6, -3), classes$class[cl], "]"), label
+          paste0(str_sub(param, 1, -3), classes$class[cl], "]"), label
         )
       ) |> select(-cl) |> 
       relocate(label, .after = param) |> 
       as.data.frame(),
     
     trace = posterior::as_draws_df(mod$BUGSoutput$sims.array) |> 
-      select(starts_with("."), starts_with(c("d[", "z[", "sd", "B", "mu", "totresdev"))),
+      select(starts_with("."), starts_with(c("d[", "z[", "sd", "B", "beta", "totresdev"))),
     
     dev_table = mod$BUGSoutput$summary |>
       as_tibble(rownames = "param") |> 
