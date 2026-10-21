@@ -57,7 +57,7 @@ model {
         "
   
   # Linear predictor theta with trial-specific baseline and treatment effect
-  theta <- "theta[i, k, j] <- mu[i] - delta[i, k] + "
+  theta <- "theta[i, k, j] <- mu[i] + delta[i, k] + "
   
   # Term for cutpoints depends on chosen model
   z <- "z[C[i, j + 1] - 1] "
@@ -72,7 +72,7 @@ model {
       t_index <- if (reg_level[i] == "treatment") "[t[i, k]] " else "[cl[t[i, k]]]"
       c_index <- if (reg_level[i] == "treatment") "[t[i, 1]]" else "[cl[t[i, 1]]]"
       metareg[i] <- paste0(
-        "- (beta_", reg[i], t_index, " - beta_", reg[i], c_index, ")",
+        "+ (beta_", reg[i], t_index, " - beta_", reg[i], c_index, ")",
         " * (", 
         reg[i], if(reg[i] %in% c("mu", "timepoint")) "[i]" else "[i, k]", " - ", reg_mean[i] / reg_scale[i], ")"
       )
@@ -96,7 +96,7 @@ model {
   # Generic code linking theta to predicted probability of response
   phi <- "
       for (j in 2:nc[i]) {                                                      # LOOP THROUGH CATEGORIES
-        p[i, k, C[i, j]] <- 1 - phi.adj[i, k, j]                                # link function
+        p[i, k, C[i, j]] <- phi.adj[i, k, j]                                    # link function
         # adjust link function phi(x) for extreme values that can give numerical errors
         # when x< -8, phi(x)=0, when x> 8, phi(x)=1
         phi.adj[i, k, j] <- step(8 + theta[i, k, j - 1]) * 
@@ -255,13 +255,13 @@ model {
   # Probability calculations for fixed or random trial/arm-level cutpoints
   probs_fez <- "
   for (k in 1:nt) {
-    for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + z[j]) }
+    for (j in 1:(Cmax - 1)) { prob[j,k] <- phi(A + d[k] + z[j]) }
   }"
   
   # Probability calculations for random treatment-level cutpoints
   probs_rez_tx <- "
   for (k in 1:nt) {
-    for (j in 1:(Cmax - 1)) { prob[j,k] <- 1 - phi(A - d[k] + zeta[k, j]) }
+    for (j in 1:(Cmax - 1)) { prob[j,k] <- phi(A + d[k] + zeta[k, j]) }
   }"
   
   # End of file
@@ -320,7 +320,7 @@ model {
   # Choose parameters of interest for JAGS to track
   params <- c(
     "d", "z", "mu",
-    if (effects == "random") "sd" else NULL,
+    if (effects == "random") c("sd", "delta", "zeta") else NULL,
     if (cutpoints == "fixed") NULL else "sd_z",
     if (length(reg) > 0 & any(reg_effects != "independent")) c(paste0("B_", reg), "mubar") else NULL,
     if (any(reg_effects != "common")) paste0("beta_", reg) else NULL,
@@ -385,7 +385,7 @@ model {
   set.seed(123)
   fit <- jags(
     data = data, parameters.to.save = params, inits = inits,
-    model.file = filename, n.chains = 2, n.iter = niter, n.burnin = niter/2, n.thin = 1
+    model.file = filename, n.chains = 2, n.iter = niter, n.burnin = niter/2, n.thin = ceiling(niter/20000)
   )
 
   # Send informative warning if any parameters have failed to converge
