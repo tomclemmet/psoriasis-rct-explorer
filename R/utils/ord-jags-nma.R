@@ -32,6 +32,9 @@ pso_jags <- function(
   }
   
   # Set default regression effects model
+  if (length(reg) > 0 && length(reg_scale) == 0) {
+    reg_scale <- rep(1, length(reg))
+  }
   if (length(reg) > 0 && length(reg_effects) == 0) {
     reg_effects <- rep("common", length(reg))
   }
@@ -57,7 +60,7 @@ model {
         "
   
   # Linear predictor theta with trial-specific baseline and treatment effect
-  theta <- "theta[i, k, j] <- mu[i] + delta[i, k] + "
+  theta <- "theta[i, k, j] <- mu[i] + delta[i, k] - "
   
   # Term for cutpoints depends on chosen model
   z <- "z[C[i, j + 1] - 1] "
@@ -166,7 +169,7 @@ model {
     z.aux[j] ~ dunif(0,5)                                                       # priors
     z[j] <- z[j - 1] + z.aux[j]
     for (i in 1:ns) {
-      zeta.aux[i, j] ~ dnorm(z.aux[j], tau_z)
+      zeta.aux[i, j] ~ dnorm(z.aux[j], tau_z) T(0, )
       zeta[i, j] <- zeta[i, j - 1] + zeta.aux[i, j]                             # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
     }
   }"
@@ -182,7 +185,7 @@ model {
     z[j] <- z[j - 1] + z.aux[j]
     for (i in 1:ns) {
       for (k in 1:na[i]) {
-        zeta.aux[i, k, j] ~ dnorm(z.aux[j], tau_z)
+        zeta.aux[i, k, j] ~ dnorm(z.aux[j], tau_z) T(0, )
         zeta[i, k, j] <- zeta[i, k, j - 1] + zeta.aux[i, k, j]                  # ensures z[j]~Uniform(z[j-1], z[j-1]+5)
       }
     }
@@ -249,19 +252,19 @@ model {
   
   # A ~ dnorm(1.097,123) 
   p0 ~ dbeta(113.2, 566.2)
-  A <- probit(1 - p0)
+  A <- probit(p0)
   # calculate prob of achieving PASI 50/75/90/100 on treatment k"
 
   # Probability calculations for fixed or random trial/arm-level cutpoints
   probs_fez <- "
   for (k in 1:nt) {
-    for (j in 1:(Cmax - 1)) { prob[j,k] <- phi(A + d[k] + z[j]) }
+    for (j in 1:(Cmax - 1)) { prob[j,k] <- phi(A + d[k] - z[j]) }
   }"
   
   # Probability calculations for random treatment-level cutpoints
   probs_rez_tx <- "
   for (k in 1:nt) {
-    for (j in 1:(Cmax - 1)) { prob[j,k] <- phi(A + d[k] + zeta[k, j]) }
+    for (j in 1:(Cmax - 1)) { prob[j,k] <- phi(A + d[k] - zeta[k, j]) }
   }"
   
   # End of file
