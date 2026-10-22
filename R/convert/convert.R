@@ -66,7 +66,8 @@ MAX_TIMEPOINT_WK <- 24
 EXCLUDE_STUDY_IDS <- c(
   30, 115, 116, 117, 233, 314, 392, 400,            # Single drug trials
   112,                                              # Population with inadequate response to ustekinumab
-  8                                                 # Izokibep trial (include when Ph3 added)
+  8,                                                # Izokibep trial (include when Ph3 added)
+  170                                               # Goldfarb 1988 - last remaining Acitretin trial, no efficacy data
 )
 
 # Baseline PASI is a "Psoriasis characteristics" outcome; always kept (the app
