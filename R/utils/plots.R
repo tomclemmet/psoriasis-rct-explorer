@@ -59,7 +59,7 @@ forest <- function(m) {
 
 # Forest plot for multiple models, option to display predicted probabilities or 
 # parameter values and filter for specific parameters
-forests <- function(..., lab = NA, grp = NA, prob = FALSE) {
+forests <- function(..., lab = NA, grp = NA) {
   mods <- list(...)
   
   # Handle case where a single list is passed
@@ -81,108 +81,59 @@ forests <- function(..., lab = NA, grp = NA, prob = FALSE) {
   
   df <- list()
   
-  if (!prob) {
+  for (i in 1:length(mods)) {
     
-    for (i in 1:length(mods)) {
-      
-      # For each model, filter unwanted drugs, then group and order parameters
-      df[[names(mods)[i]]] <- mods[[i]]$summary |>
-        filter(label %notin% c(
-          "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast",
-          "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab", "Zasocitinib"
-        ), param != "mubar") |>
-        mutate(
-          group = factor(case_when(
-            str_detect(param, "d\\[") ~ "Treatment effect",
-            str_detect(param, "m\\[") ~ "Class effect",
-            str_detect(param, "sd") ~ "Heterogeneity",
-            str_detect(param, "z\\[") ~ "Multinomial cutpoint",
-            str_detect(param, "B|beta") ~ "Regression coefficient"
-            ), level = c("Treatment effect", "Class effect", "Heterogeneity", 
-                         "Multinomial cutpoint", "Regression coefficient")),
-          label = if_else(is.na(label), param, label),
-          rank = if_else(group %in% c("Treatment effect", "Class effect"), mean, NA),
-          converged = Rhat < 1.1,
-          `2.5%` = if_else(!converged, NA, `2.5%`),
-          `97.5%` = if_else(!converged, NA, `97.5%`)
-        ) |>
-        group_by(group) |>
-        arrange(desc(rank), .by_group = TRUE)
-      df[[names(mods)[i]]]$label <- factor(df[[names(mods)[i]]]$label, levels = rev(df[[names(mods)[i]]]$label))
-    }
-    
-    # Select chosen parameter if specified
-    if (any(!is.na(lab))) {
-      df <- bind_rows(df, .id = "model") |> filter(label %in% lab)
-    } else {
-      df <- bind_rows(df, .id = "model")
-    }
-    
-    # Define model ordering for plot
-    if (any(df$model == "unadjusted")) {
-      df <- df |> mutate(model = factor(model, levels = c("unadjusted", sort(setdiff(unique(model), "unadjusted")))))
-    }
-      
-    # Select chosen group(s) if specified
-    if (any(!is.na(grp))) {
-      df <- df |> filter(group %in% grp)
-    }
-    
-    # Produce plot
-    ggplot(df, aes(y = label, x = mean)) +
-      geom_vline(xintercept = 0, linetype = 2) +
-      geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model, shape = converged), size = 0.2, position = position_dodge(0.5, reverse = TRUE)) +
-      facet_wrap(~ group, scales = "free", space = "free_y") +
-      theme_bw() +
-      scale_shape_manual(values = c("TRUE" = 15, "FALSE" = 4))
-    
-  } else {
-    # If probabilities chosen for plotting...
-    outcomes <- c("pasi50", "pasi75", "pasi90", "pasi100")
-    
-    for (i in 1:length(mods)) {
-      
-      # Rank by predicted PASI 50 rate
-      drug_rank <- mods[[i]]$results |> 
-        filter(str_starts(param, "prob")) |> 
-        mutate(drug = pasi_drugs[as.numeric(str_extract(param, "(?<=,).*?(?=])"))]) |> 
-        slice_head(n = 1, by = drug) |> 
-        arrange(mean)
-      
-      # Extract predicted probabilities, then label and rank accordingly
-      df[[names(mods)[i]]] <- mods[[i]]$results |>
-        filter(str_starts(param, "prob")) |> 
-        mutate(
-          drug = factor(
-            pasi_drugs[as.numeric(str_extract(param, "(?<=,).*?(?=])"))],
-            levels = drug_rank$drug
-          ),
-          outcome = factor(
-            outcomes[as.numeric(str_extract(param, "(?<=\\[).*?(?=,)"))],
-            levels = c("pasi50", "pasi75", "pasi90", "pasi100")
-          )
-        ) |> 
-        filter(drug %notin% c(
-          "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast",
-          "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab", "Zasocitinib"
-        ))
-      df[[names(mods)[i]]]$label <- factor(df[[names(mods)[i]]]$label, levels = rev(df[[names(mods)[i]]]$label))
-    }
-    
-    # Restrict to chosen parameter, if specified
-    if (!is.na(lab)) {
-      df <- bind_rows(df, .id = "model") |> filter(drug %in% lab)
-    } else {
-      df <- bind_rows(df, .id = "model")
-    }
-    
-    # Produce plot
-    ggplot(df, aes(y = drug, x = mean)) +
-      geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = outcome, shape = model), size = 0.2, position = position_dodge(0.5)) +
-      theme_bw() +
-      facet_wrap(~ outcome, scale = "free_x")
-    
+    # For each model, filter unwanted drugs, then group and order parameters
+    df[[names(mods)[i]]] <- mods[[i]]$summary |>
+      filter(label %notin% c(
+        "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast",
+        "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab", "Zasocitinib"
+      ), param != "mubar") |>
+      mutate(
+        group = factor(case_when(
+          str_detect(param, "d\\[") ~ "Treatment effect",
+          str_detect(param, "m\\[") ~ "Class effect",
+          str_detect(param, "sd") ~ "Heterogeneity",
+          str_detect(param, "z\\[") ~ "Multinomial cutpoint",
+          str_detect(param, "B|beta") ~ "Regression coefficient"
+          ), level = c("Treatment effect", "Class effect", "Heterogeneity", 
+                       "Multinomial cutpoint", "Regression coefficient")),
+        label = if_else(is.na(label), param, label),
+        rank = if_else(group %in% c("Treatment effect", "Class effect"), mean, NA),
+        converged = Rhat < 1.1,
+        `2.5%` = if_else(!converged, NA, `2.5%`),
+        `97.5%` = if_else(!converged, NA, `97.5%`)
+      ) |>
+      group_by(group) |>
+      arrange(desc(rank), .by_group = TRUE)
+    df[[names(mods)[i]]]$label <- factor(df[[names(mods)[i]]]$label, levels = rev(df[[names(mods)[i]]]$label))
   }
+  
+  # Select chosen parameter if specified
+  if (any(!is.na(lab))) {
+    df <- bind_rows(df, .id = "model") |> filter(label %in% lab)
+  } else {
+    df <- bind_rows(df, .id = "model")
+  }
+  
+  # Define model ordering for plot
+  if (any(df$model == "unadjusted")) {
+    df <- df |> mutate(model = factor(model, levels = c("unadjusted", sort(setdiff(unique(model), "unadjusted")))))
+  }
+    
+  # Select chosen group(s) if specified
+  if (any(!is.na(grp))) {
+    df <- df |> filter(group %in% grp)
+  }
+  
+  # Produce plot
+  ggplot(df, aes(y = label, x = mean)) +
+    geom_vline(xintercept = 0, linetype = 2) +
+    geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`, colour = model, shape = converged), size = 0.2, position = position_dodge(0.5, reverse = TRUE)) +
+    facet_wrap(~ group, scales = "free", space = "free_y") +
+    theme_bw() +
+    scale_shape_manual(values = c("TRUE" = 15, "FALSE" = 4))
+  
 }
 
 # Stacked bar chart for different leveks of PASI response
@@ -229,3 +180,6 @@ props_plot <- function(m) {
           plot.title = element_text(face = "bold")) +
     labs(title = "Predicted PASI Response", x = "Proportion")
 }
+
+
+
