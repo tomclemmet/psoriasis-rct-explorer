@@ -16,7 +16,7 @@ rezi_a <- pso_jags(
 rezt_u <- pso_jags(
   jags_inputs, niter = 20000, effects = "random", cutpoints = "treatment",
   reg = "timepoint", reg_mean = 16, reg_scale = 4,
-  reg_effects = c("independent", "common"), reg_level = c("class", "common")
+  reg_effects = c("independent"), reg_level = c("class")
 )
 
 rezt_a <- pso_jags(
