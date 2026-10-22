@@ -59,7 +59,7 @@ forest <- function(m) {
 
 # Forest plot for multiple models, option to display predicted probabilities or 
 # parameter values and filter for specific parameters
-forests <- function(..., lab = NA, grp = NA) {
+forests <- function(..., lab = NA, grp = NA, remove = NA) {
   mods <- list(...)
   
   # Handle case where a single list is passed
@@ -112,7 +112,9 @@ forests <- function(..., lab = NA, grp = NA) {
   # Select chosen parameter if specified
   if (any(!is.na(lab))) {
     df <- bind_rows(df, .id = "model") |> filter(label %in% lab)
-  } else {
+  } else if (any(!is.na(remove))) {
+    df <- bind_rows(df, .id = "model") |> filter(!(label %in% remove))
+  }
     df <- bind_rows(df, .id = "model")
   }
   
