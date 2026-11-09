@@ -114,7 +114,7 @@ forests <- function(..., lab = NA, grp = NA, remove = NA) {
     df <- bind_rows(df, .id = "model") |> filter(label %in% lab)
   } else if (any(!is.na(remove))) {
     df <- bind_rows(df, .id = "model") |> filter(!(label %in% remove))
-  }
+  } else {
     df <- bind_rows(df, .id = "model")
   }
   
