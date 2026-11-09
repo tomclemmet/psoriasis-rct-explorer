@@ -29,3 +29,14 @@ out <- list(rezi_u = process_jags(rezi_u), rezi_a=process_jags(rezi_a),
             reztu = process_jags(rezt_u), rezt_a = process_jags(rezt_a))
 
 saveRDS(out, "output/mu_test.rds")
+
+
+source("R/utils/plots.R")
+m <- readRDS("R/saved-results/mu_test_nt.rds")
+
+check_fits(m)
+devplot(m$rezi_u, m$rezi_a)
+devplot(m$rezi_u, m$rezi_a, output = "table") |> arrange(-diff)
+m$rezt_a
+
+forests(m)
