@@ -17,23 +17,45 @@ settings <- expand_grid(
 ) |> 
   filter(if_all(starts_with("reg_"), \(x) lengths(x) == lengths(reg)))
 
+names <- expand_grid(
+  effects = c("fe", "re"),
+  cutpoints = c("fez", "rezt", "rezi",  "rezi"),
+  class = c("ind", "cl"),
+  reg = c("unadj", "mu"),
+) |> 
+  mutate(name = paste(effects, cutpoints, class, reg, sep = "_")) |> 
+  pull(name)
+
 m <- list()
+names(m) <- names
 for (i in 1:nrow(settings)) {
   mu <- settings[[i, "reg"]][[1]][2] == "mu"
   m[[i]] <- pso_jags(
     jags_inputs,
-    niter = 100000, 
-    effects = settings[[i, "effects"]], 
+    niter = 100000,
+    effects = settings[[i, "effects"]],
     cutpoints = settings[[i, "cutpoints"]],
-    reg = settings[[i, "reg"]][[1]], 
-    reg_mean = settings[[i, "reg_mean"]][[1]], 
-    reg_scale = settings[[i, "reg_scale"]][[1]], 
-    reg_effects = settings[[i, "reg_effects"]][[1]], 
+    class = settings[[i, "class"]],
+    reg = settings[[i, "reg"]][[1]],
+    reg_mean = settings[[i, "reg_mean"]][[1]],
+    reg_scale = settings[[i, "reg_scale"]][[1]],
+    reg_effects = settings[[i, "reg_effects"]][[1]],
     reg_level = settings[[i, "reg_level"]][[1]]
   )
 }
 
 p <- lapply(m, jags_process)
 saveRDS(p, "output/htai.rds")
+
+p <- readRDS("C:/Users/p12916tc/Documents/Data/NMA/saved-results/htai.rds")
+
+compare_jags(p)
+
+
+
+
+
+
+
 
 
