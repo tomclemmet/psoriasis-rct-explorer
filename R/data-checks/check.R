@@ -33,13 +33,13 @@ here <- find_script_dir()
 sqlite_p <- NULL
 for (cand in c(
   if (!is.null(here)) file.path(here, "..", "app", "psoriasis-rcts.sqlite"),
-  "app/psoriasis-rcts.sqlite",
+  "pso-trial-explorer/psoriasis-rcts.sqlite",
   "psoriasis-rcts.sqlite"
 )) {
   if (file.exists(cand)) { sqlite_p <- normalizePath(cand); break }
 }
 if (is.null(sqlite_p))
-  stop("psoriasis-rcts.sqlite not found - run app/convert.R first.")
+  stop("psoriasis-rcts.sqlite not found - run pso-trial-explorer/convert.R first.")
 
 con <- dbConnect(SQLite(), sqlite_p, flags = SQLITE_RO)
 

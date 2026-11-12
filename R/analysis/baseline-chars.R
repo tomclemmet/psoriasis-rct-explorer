@@ -4,7 +4,7 @@ library(DBI)
 library(ggplot2)
 theme_set(theme_bw())
 
-con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 chars <- dbReadTable(con, "v_baseline")
 
 outcomes <- c(

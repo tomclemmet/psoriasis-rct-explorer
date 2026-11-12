@@ -13,7 +13,7 @@ suppressPackageStartupMessages({
 DERIVE_CHANGE_CORR <- 0.5  # assumed r(baseline, follow-up) for SD derivation
 
 DB_PATH <- file.path(dirname(sys.frame(1)$ofile %||% "."), "psoriasis-rcts.sqlite")
-if (!file.exists(DB_PATH)) DB_PATH <- "app/psoriasis-rcts.sqlite"
+if (!file.exists(DB_PATH)) DB_PATH <- "pso-trial-explorer/psoriasis-rcts.sqlite"
 if (!file.exists(DB_PATH)) stop("psoriasis-rcts.sqlite not found - run convert.R first.")
 
 source("db.R",     local = TRUE)

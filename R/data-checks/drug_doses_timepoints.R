@@ -6,7 +6,7 @@
 library(DBI)
 library(RSQLite)
 
-sqlite_p <- "app/psoriasis-rcts.sqlite"
+sqlite_p <- "pso-trial-explorer/psoriasis-rcts.sqlite"
 
 # Close anything stale from a previous run in this R session.
 if (exists("con", envir = globalenv(), inherits = FALSE)) {

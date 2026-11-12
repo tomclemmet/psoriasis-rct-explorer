@@ -10,7 +10,7 @@ library(metafor)
 options(mc.cores = parallel::detectCores())
 load("R/meta-analyse/meta-analysis.RData")
 lookup <- read.csv("R/meta-analyse/trt_class.csv")
-con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 
 # Extract data =================================================================
 
@@ -635,7 +635,7 @@ for (k in 1:length(drugs)) {
 }
 
 # Write results ================================================================
-con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 
 exc <- c("Izokibep", "Mirikizumab", "Phototherapy")
 

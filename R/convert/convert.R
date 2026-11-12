@@ -2,7 +2,7 @@
 # Convert RevPal.accdb -> psoriasis-rcts.sqlite as a normalised relational
 # database, then expose the wide SQL views the Shiny app reads (built in
 # views.R). Run from RStudio (open in the project) or the terminal:
-#   Rscript app/convert.R
+#   Rscript pso-trial-explorer/convert.R
 #
 # Output schema (one fact per row, no repeated text):
 #
@@ -68,6 +68,11 @@ EXCLUDE_STUDY_IDS <- c(
   112,                                              # Population with inadequate response to ustekinumab
   8,                                                # Izokibep trial (include when Ph3 added)
   170                                               # Goldfarb 1988 - last remaining Acitretin trial, no efficacy data
+  # 6,8,10,12,16,25,29,30,39,42,47,50,53,60,66,71,78,85,91,112,114,115,116,117, # Trials not in fahrbach
+  # 128,132,133,141,148,162,167,170,183,184,188,191,193,198,200,204,207,210,232,
+  # 233,235,236,239,240,245,256,261,267,278,280,283,287,290,291,293,296,305,310,
+  # 314,315,324,326,330,332,344,350,369,370,373,382,386,387,391,392,398,400,403,
+  # 409,412,436,438,439,442,446,459,460,461,464,484,497,501,512,521
 )
 
 # Baseline PASI is a "Psoriasis characteristics" outcome; always kept (the app
@@ -75,7 +80,7 @@ EXCLUDE_STUDY_IDS <- c(
 BASELINE_PASI_OUTCOME_ID <- 11L
 
 accdb    <- normalizePath("RevPal.accdb", mustWork = TRUE)
-sqlite_p <- "app/psoriasis-rcts.sqlite"
+sqlite_p <- "pso-trial-explorer/psoriasis-rcts.sqlite"
 
 if (file.exists(sqlite_p) && !file.remove(sqlite_p)) {
   stop("Could not remove existing ", sqlite_p,

@@ -3,6 +3,7 @@ library(dplyr)
 library(stringr)
 library(ggplot2)
 library(ggrepel)
+library(bayesplot)
 source("R/utils/jags-process.R")
 
 
