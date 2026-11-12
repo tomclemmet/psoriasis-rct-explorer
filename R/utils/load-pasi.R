@@ -4,7 +4,7 @@ library(tidyr)
 drug_class_lookup <- read.csv("R/trt_class.csv")
 
 # Load data
-con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 
 # List drugs for analysis (allows filtering)
 pasi_drugs <- dbReadTable(con, "v_pasi") |> 

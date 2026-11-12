@@ -10,7 +10,7 @@ theme_set(theme_bw())
 source("R/utils/load-chars.R")
 
 # Load data
-con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 
 my_chars <- c(
   "Age", "Sex (n male)", "Weight",  "BMI", "PASI", "Biologic agents", 

@@ -4,7 +4,7 @@ library(tidyr)
 library(ggplot2)
 theme_set(theme_classic())
 
-con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 
 # Extract PASI response data in long format
 pasi_long <- dbReadTable(con, "v_pasi") |> 

@@ -8,16 +8,16 @@ source Access file.
 
 ```
 .
-├── app/             the Shiny app (app.R) and the sqlite db it reads
+├── pso-trial-explorer/             the Shiny app (app.R) and the sqlite db it reads
 ├── R/
-│   ├── convert/      RevPal.accdb -> app/psoriasis-rcts.sqlite
+│   ├── convert/      RevPal.accdb -> pso-trial-explorer/psoriasis-rcts.sqlite
 │   ├── checks/        ad-hoc data-quality checks against the sqlite
 │   └── meta-analyse/  fits the meta-analysis models, writes results into the sqlite
 ├── JAGS/            JAGS model definitions used by R/meta-analyse
 └── claude.md        conventions for working in this repo
 ```
 
-`RevPal.accdb` and `app/psoriasis-rcts.sqlite` are git-ignored — supply your
+`RevPal.accdb` and `pso-trial-explorer/psoriasis-rcts.sqlite` are git-ignored — supply your
 own copy of the Access database and regenerate the sqlite file locally.
 
 ## Running
@@ -25,7 +25,7 @@ own copy of the Access database and regenerate the sqlite file locally.
 All scripts assume they're run from the project root.
 
 ```powershell
-Rscript R/convert/convert.R        # (re)build app/psoriasis-rcts.sqlite from RevPal.accdb
+Rscript R/convert/convert.R        # (re)build pso-trial-explorer/psoriasis-rcts.sqlite from RevPal.accdb
 Rscript -e "shiny::runApp('app')"  # launch the app
 ```
 

@@ -66,7 +66,7 @@ network_diagram <- function() {
 
   # --- Pull per-arm drug + patient counts for the selected trials ------------
 
-  con <- dbConnect(SQLite(), "app/psoriasis-rcts.sqlite", flags = SQLITE_RO)
+  con <- dbConnect(SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite", flags = SQLITE_RO)
   ref_filter <- if (is.null(REF_IDS)) "" else
     sprintf("WHERE s.study_id IN (%s)", paste(REF_IDS, collapse = ", "))
   td <- dbGetQuery(con, sprintf(

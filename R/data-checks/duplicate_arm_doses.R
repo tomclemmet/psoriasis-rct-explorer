@@ -4,7 +4,7 @@
 library(DBI)
 library(RSQLite)
 
-con <- dbConnect(SQLite(), "app/psoriasis-rcts.sqlite")
+con <- dbConnect(SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 
 arms <- dbGetQuery(con, "
   SELECT s.trial, a.arm_no, a.arm_name, d.drug_name, a.dose_amount, du.unit_name

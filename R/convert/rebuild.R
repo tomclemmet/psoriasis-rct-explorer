@@ -18,7 +18,7 @@ source("R/convert/convert.R")
 # load("R/meta-analyse/meta-analysis.RData")
 # 
 # # Write meta-analysis results to sqlite file
-# con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+# con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 # 
 # exc <- c("Izokibep", "Mirikizumab", "Phototherapy")
 # 

@@ -10,7 +10,7 @@ library(ggplot2)
 theme_set(theme_classic())
 classes <- read.csv("R/trt_class.csv")
 
-con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 
 # Extract PASI data and assign treatment ids
 pasi <- dbReadTable(con, "v_pasi") |> 

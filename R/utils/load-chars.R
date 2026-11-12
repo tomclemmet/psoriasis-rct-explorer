@@ -24,7 +24,7 @@ load_chars <- function(my_chars) {
     )
   }
 
-  con <- dbConnect(RSQLite::SQLite(), "app/psoriasis-rcts.sqlite")
+  con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
   
   pasi_ids <- dbReadTable(con, "v_pasi") |> 
     filter(!if_all(pasi50:pasi100, \(x) is.na(x))) |>
