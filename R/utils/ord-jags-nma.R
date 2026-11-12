@@ -31,6 +31,10 @@ pso_jags <- function(
     data$ncl <- NULL
   }
   
+  if ("mu" %in% reg) {
+    data$mubar_input = reg_mean[match("mu", reg)]
+  }
+  
   # Set default regression effects model
   if (length(reg) > 0 && length(reg_scale) == 0) {
     reg_scale <- rep(1, length(reg))
@@ -255,16 +259,22 @@ model {
   A <- probit(p0)
   # calculate prob of achieving PASI 50/75/90/100 on treatment k"
 
+  # Setting B_mu to zero if not included
+  B_mu <- "
+  for (k in 1:nt) { beta_mu[k] <- 0 }
+  mubar_input <- 0
+  "
+  
   # Probability calculations for fixed or random trial/arm-level cutpoints
   probs_fez <- "
   for (k in 1:nt) {
-    for (j in 1:(Cmax - 1)) { prob[j,k] <- phi(A + d[k] - z[j]) }
+    for (j in 1:(Cmax - 1)) { prob[j,k] <- phi(A + d[k] - z[j] + (beta_mu[k] - beta_mu[1]) * (A - mubar_input)) }
   }"
   
   # Probability calculations for random treatment-level cutpoints
   probs_rez_tx <- "
   for (k in 1:nt) {
-    for (j in 1:(Cmax - 1)) { prob[j,k] <- phi(A + d[k] - zeta[k, j]) }
+    for (j in 1:(Cmax - 1)) { prob[j,k] <- phi(A + d[k] - zeta[k, j] + (beta_mu[k] - beta_mu[1]) * (A - mubar_input)) }
   }"
   
   # End of file
@@ -297,7 +307,8 @@ model {
     if (consistency == "consistency") {if (class == "exchangeable") d_priors_class else d_priors} else d_priors_ume,
     if (length(reg) > 0) reg_priors,
     priors,
-    if (consistency == "consistency") {if (cutpoints != "treatment") probs_fez else probs_rez_tx} else NULL,
+    if (!("mu" %in% reg)) {B_mu},
+    if (consistency == "consistency") {if (cutpoints != "treatment") probs_fez else probs_rez_tx},
     end
   )
   
