@@ -46,7 +46,7 @@ process_jags <- function(mod) {
       as.data.frame(),
     
     trace = posterior::as_draws_df(mod$BUGSoutput$sims.array) |> 
-      select(starts_with("."), starts_with(c("d[", "z[", "sd", "B", "beta", "totresdev"))),
+      select(starts_with("."), starts_with(c("d[", "z[", "sd", "B", "beta", "totresdev", "prob"))),
     
     dev_table = mod$BUGSoutput$summary |>
       as_tibble(rownames = "param") |> 
