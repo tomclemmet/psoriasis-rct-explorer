@@ -23,6 +23,7 @@ diagram example/
 todo.txt
 claude.md
 JAGS/temp.jags
+JAGS/bivariate
 *.docx
 
 # OS / editor
