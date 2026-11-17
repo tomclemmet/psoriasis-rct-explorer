@@ -1,47 +1,68 @@
+# One read-only connection shared by the whole app process (the db is never
+# written to at runtime), closed when the app stops.
+DB_CON <- dbConnect(SQLite(), DB_PATH, flags = SQLITE_RO)
+onStop(function() dbDisconnect(DB_CON))
+
 read_db <- function(sql, params = list()) {
-  con <- dbConnect(SQLite(), DB_PATH, flags = SQLITE_RO)
-  on.exit(dbDisconnect(con), add = TRUE)
-  if (length(params)) dbGetQuery(con, sql, params = params) else dbGetQuery(con, sql)
+  if (length(params)) dbGetQuery(DB_CON, sql, params = params) else dbGetQuery(DB_CON, sql)
 }
+
+DB_TABLES <- dbListTables(DB_CON)
+
+# The per-arm views behind the data tables are small (a few hundred rows
+# each), so they're read once at startup and filtered in memory rather than
+# re-queried on every filter change. Sorted like the old SQL
+# "ORDER BY trial, arm_no, timepoint" (byte-order text, NULLs first).
+order_like_sql <- function(df, cols) {
+  keys <- unname(as.list(df[cols]))
+  df <- df[do.call(order, c(keys, list(na.last = FALSE, method = "radix"))), , drop = FALSE]
+  rownames(df) <- NULL
+  df
+}
+
+VIEW_DATA <- lapply(
+  c(v_pasi = "v_pasi", v_dlqi = "v_dlqi", v_safety = "v_safety"),
+  function(v) order_like_sql(read_db(sprintf("SELECT * FROM %s", v)),
+                             c("trial", "arm_no", "timepoint"))
+)
 
 query_view <- function(table, state) {
-  base_order <- "ORDER BY trial, arm_no, timepoint"
-  if (is.null(state)) {
-    return(read_db(sprintf("SELECT * FROM %s %s", table, base_order)))
+  df <- VIEW_DATA[[table]]
+  keep <- if (is.null(state)) {
+    rep(TRUE, nrow(df))
+  } else if (identical(state$kind, "node")) {
+    df$drug %in% state$drug
+  } else if (identical(state$kind, "edge")) {
+    both <- intersect(df$trial[df$drug %in% state$from],
+                      df$trial[df$drug %in% state$to])
+    df$drug %in% c(state$from, state$to) & df$trial %in% both
+  } else {
+    rep(TRUE, nrow(df))
   }
-  if (identical(state$kind, "node")) {
-    return(read_db(
-      sprintf("SELECT * FROM %s WHERE drug = ? %s", table, base_order),
-      params = list(state$drug)
-    ))
-  }
-  if (identical(state$kind, "edge")) {
-    return(read_db(
-      sprintf("SELECT * FROM %s
-               WHERE drug IN (?, ?)
-                 AND trial IN (
-                   SELECT trial FROM %s WHERE drug = ?
-                   INTERSECT
-                   SELECT trial FROM %s WHERE drug = ?
-                 )
-               %s", table, table, table, base_order),
-      params = list(state$from, state$to, state$from, state$to)
-    ))
-  }
-  read_db(sprintf("SELECT * FROM %s %s", table, base_order))
+  df <- df[keep, , drop = FALSE]
+  rownames(df) <- NULL
+  df
 }
 
-# Whether the precomputed meta-analysis view exists yet. It's built by
-# R/meta-analyse/meta-analysis.R, a separate (slow, JAGS-driven) step from
-# trial-estimates.R's v_trial_estimates -- right after reconverting the
-# Access db, trial estimates are often present while this isn't. fetch_ma()
-# and fetch_ma_axis_combos() fall back to a 0-row result in that case so
-# forest plots still render from trial estimates alone, with no diamonds.
-HAS_MA <- {
-  con <- dbConnect(SQLite(), DB_PATH, flags = SQLITE_RO)
-  on.exit(dbDisconnect(con), add = TRUE)
-  "v_meta_analysis" %in% dbListTables(con)
-}
+# Whether the meta-analysis view exists yet. It's built by
+# R/analysis/app-meta-analysis.R, a separate (slow, JAGS-driven) step from
+# R/convert/trial-estimates.R's v_trial_estimates -- right after reconverting
+# the Access db, trial estimates are often present while this isn't.
+# fetch_ma() and fetch_ma_axis_combos() then return 0-row results so forest
+# plots still render from trial estimates alone, with no diamonds.
+HAS_MA     <- "v_meta_analysis"   %in% DB_TABLES
+HAS_TRIALS <- "v_trial_estimates" %in% DB_TABLES
+
+# Meta-analysis results and per-trial estimates are read into memory once
+# and split by endpoint, so building a forest plot is a handful of data-frame
+# subsets rather than (previously) up to ~150 SQL round trips per modal.
+MA_ALL <- if (HAS_MA) read_db("SELECT * FROM v_meta_analysis") else NULL
+MA_BY_ENDPOINT <- if (HAS_MA) split(MA_ALL, MA_ALL$endpoint) else list()
+
+TRIALS_BY_ENDPOINT <- if (HAS_TRIALS) {
+  te <- read_db("SELECT * FROM v_trial_estimates")
+  split(te, te$endpoint)
+} else list()
 
 EMPTY_MA_RESULT <- data.frame(
   endpoint = character(), type = character(), effects = character(),
@@ -51,39 +72,42 @@ EMPTY_MA_RESULT <- data.frame(
   stringsAsFactors = FALSE
 )
 
+# Subset `df` to rows where each named column in `filters` matches its
+# value(s). NULL filters are skipped; a single NA matches missing (SQL "IS
+# NULL"). %in% rather than == so NA cells never match a non-NA value.
+filter_rows <- function(df, filters) {
+  keep <- rep(TRUE, nrow(df))
+  for (col in names(filters)) {
+    v <- filters[[col]]
+    if (is.null(v)) next
+    keep <- keep & if (length(v) == 1 && is.na(v)) is.na(df[[col]]) else df[[col]] %in% v
+  }
+  out <- df[keep, , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
+# Columns treated as "which model produced this row" axes, dynamically
+# discoverable and filterable rather than hardcoded — see MA_AXIS_COLUMNS in
+# app.R and the project memory: meta-analysis-modelling-seam.
+MA_DISTINCT_COLUMNS <- c("method", "likelihood", "metareg")
+
 # `axes` is a named list filtering "which model produced this row" columns
-# (see MA_DISTINCT_COLUMNS below) — e.g. list(likelihood = "multinomial",
-# method = "class_effects"). Column names are checked against that allowlist
-# since they're interpolated into the SQL (not bind parameters).
+# (see MA_DISTINCT_COLUMNS) — e.g. list(likelihood = "multinomial",
+# method = "class_effects").
 fetch_ma <- function(endpoint, type = NULL, effects = NULL,
                      comp_tx = NULL, ref_tx = NULL, measure = NULL, axes = list()) {
-  if (!HAS_MA) return(EMPTY_MA_RESULT)
-  conds  <- "WHERE endpoint = ?"
-  params <- list(endpoint)
-  if (!is.null(type))    { conds <- paste(conds, "AND type = ?");    params <- c(params, list(type)) }
-  if (!is.null(effects)) { conds <- paste(conds, "AND effects = ?"); params <- c(params, list(effects)) }
-  if (!is.null(comp_tx)) { conds <- paste(conds, "AND comp_tx = ?"); params <- c(params, list(comp_tx)) }
-  if (!is.null(ref_tx))  { conds <- paste(conds, "AND ref_tx = ?");  params <- c(params, list(ref_tx)) }
-  if (!is.null(measure)) { conds <- paste(conds, "AND measure = ?"); params <- c(params, list(measure)) }
-  for (col in names(axes)) {
-    stopifnot(col %in% MA_DISTINCT_COLUMNS)
-    if (is.na(axes[[col]])) {
-      conds <- paste(conds, sprintf("AND %s IS NULL", col))
-    } else {
-      conds  <- paste(conds, sprintf("AND %s = ?", col))
-      params <- c(params, list(axes[[col]]))
-    }
-  }
-  read_db(sprintf("SELECT * FROM v_meta_analysis %s", conds), params = params)
+  df <- MA_BY_ENDPOINT[[endpoint]]
+  if (is.null(df)) return(EMPTY_MA_RESULT)
+  stopifnot(all(names(axes) %in% MA_DISTINCT_COLUMNS))
+  filter_rows(df, c(list(type = type, effects = effects, comp_tx = comp_tx,
+                         ref_tx = ref_tx, measure = measure), axes))
 }
 
 fetch_trials <- function(endpoint, comp_tx = NULL, ref_tx = NULL, measure = NULL) {
-  conds  <- "WHERE endpoint = ?"
-  params <- list(endpoint)
-  if (!is.null(comp_tx)) { conds <- paste(conds, "AND comp_tx = ?"); params <- c(params, list(comp_tx)) }
-  if (!is.null(ref_tx))  { conds <- paste(conds, "AND ref_tx = ?");  params <- c(params, list(ref_tx)) }
-  if (!is.null(measure)) { conds <- paste(conds, "AND measure = ?"); params <- c(params, list(measure)) }
-  read_db(sprintf("SELECT * FROM v_trial_estimates %s", conds), params = params)
+  df <- TRIALS_BY_ENDPOINT[[endpoint]]
+  if (is.null(df)) return(data.frame())
+  filter_rows(df, list(comp_tx = comp_tx, ref_tx = ref_tx, measure = measure))
 }
 
 fetch_ma_directed <- function(endpoint, type, effects, comp, ref, measure, axes = list()) {
@@ -96,11 +120,6 @@ fetch_ma_directed <- function(endpoint, type, effects, comp, ref, measure, axes 
   NULL
 }
 
-# Columns treated as "which model produced this row" axes, dynamically
-# discoverable and filterable rather than hardcoded — see MA_AXIS_COLUMNS in
-# app.R and the project memory: meta-analysis-modelling-seam.
-MA_DISTINCT_COLUMNS <- c("method", "likelihood", "metareg")
-
 # Distinct combinations of several axis columns present for a set of
 # endpoints + a result type (one row per combination actually occurring in
 # the data, not the full cartesian product of each column's individual
@@ -108,13 +127,11 @@ MA_DISTINCT_COLUMNS <- c("method", "likelihood", "metareg")
 fetch_ma_axis_combos <- function(endpoint, type, columns, effects = NULL) {
   stopifnot(all(columns %in% MA_DISTINCT_COLUMNS))
   if (!HAS_MA) return(as.data.frame(setNames(rep(list(character()), length(columns)), columns)))
-  in_list  <- paste(rep("?", length(endpoint)), collapse = ", ")
-  cols_sql <- paste(columns, collapse = ", ")
-  sql <- sprintf(
-    "SELECT DISTINCT %s FROM v_meta_analysis WHERE type = ? AND endpoint IN (%s)%s",
-    cols_sql, in_list, if (is.null(effects)) "" else " AND effects = ?"
-  )
-  read_db(sql, params = c(list(type), as.list(endpoint), as.list(effects)))
+  df <- filter_rows(MA_ALL[c("endpoint", "type", "effects", columns)],
+                    list(endpoint = endpoint, type = type, effects = effects))
+  out <- unique(df[, columns, drop = FALSE])
+  rownames(out) <- NULL
+  out
 }
 
 coalesce0 <- function(x) ifelse(is.na(x), 0L, as.integer(x))
@@ -152,12 +169,9 @@ fetch_baselines <- function(study_id) {
 }
 
 fetch_trial_results <- function(study_id) {
-  list(
-    pasi   = read_db("SELECT * FROM v_pasi   WHERE ref_id = ? ORDER BY arm_no, timepoint",
-                     params = list(study_id)),
-    dlqi   = read_db("SELECT * FROM v_dlqi   WHERE ref_id = ? ORDER BY arm_no, timepoint",
-                     params = list(study_id)),
-    safety = read_db("SELECT * FROM v_safety WHERE ref_id = ? ORDER BY arm_no, timepoint",
-                     params = list(study_id))
-  )
+  lapply(c(pasi = "v_pasi", dlqi = "v_dlqi", safety = "v_safety"), function(v) {
+    df <- VIEW_DATA[[v]]
+    order_like_sql(df[df$ref_id %in% study_id, , drop = FALSE],
+                   c("arm_no", "timepoint"))
+  })
 }
