@@ -8,8 +8,8 @@ library(multinma)
 library(meta)
 library(metafor)
 options(mc.cores = parallel::detectCores())
-load("R/meta-analyse/meta-analysis.RData")
-lookup <- read.csv("R/meta-analyse/trt_class.csv")
+load("C:/Users/p12916tc/Documents/Data/NMA/saved-results/meta-analysis.RData")
+lookup <- read.csv("R/trt_class.csv")
 con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 
 # Extract data =================================================================
@@ -34,233 +34,42 @@ comparisons <- as.data.frame(t(combn(drugs, 2)))
 niter <- 2000
 
 # Network meta-analyses ========================================================
-source("R/meta-analyse/ma-utils.R")
-source("R/meta-analyse/wide_format.R")
-source("R/meta-analyse/pasi-jags-nma.R")
+source("R/utils/app-process.R")
+source("R/utils/load-pasi.R")
+source("R/utils/ord-jags-nma.R")
 
 ## PASI Response ---------------------------------------------------------------
 
 # JAGS .........................................................................
 
-pasi_ref <- metaprop(
-  event = pasi50,
-  n = n,
-  data = filter(data, drug == "Placebo", !is.na(pasi50))
-)
+pasi <- readRDS("C:/Users/p12916tc/Documents/Data/NMA/saved-results/htai-pasi.rds")
+results$pasi_fe_fez_ind_unadj <- nma_results(pasi$fe_fez_ind_unadj, label = "pasi", effects = "fixed", method = "fixed cutpoints")
+results$pasi_re_fez_ind_unadj <- nma_results(pasi$re_fez_ind_unadj, label = "pasi", effects = "random", method = "fixed cutpoints")
+results$pasi_fe_rezt_ind_unadj <- nma_results(pasi$fe_rezt_ind_unadj, label = "pasi", effects = "fixed", method = "treatment-level cutpoints")
+results$pasi_re_rezt_ind_unadj <- nma_results(pasi$re_rezt_ind_unadj, label = "pasi", effects = "random", method = "treatment-level cutpoints")
+results$pasi_fe_rezi_ind_unadj <- nma_results(pasi$fe_rezi_ind_unadj, label = "pasi", effects = "fixed", method = "trial-level cutpoints")
+results$pasi_re_rezi_ind_unadj <- nma_results(pasi$re_rezi_ind_unadj, label = "pasi", effects = "random", method = "trial-level cutpoints")
+results$pasi_fe_fez_ind_mu <- nma_results(pasi$fe_fez_ind_mu, label = "pasi", effects = "fixed", method = "fixed cutpoints & placebo adjustment")
+results$pasi_re_fez_ind_mu <- nma_results(pasi$re_fez_ind_mu, label = "pasi", effects = "random", method = "fixed cutpoints & placebo adjustment")
+results$pasi_fe_rezt_ind_mu <- nma_results(pasi$fe_rezt_ind_mu, label = "pasi", effects = "fixed", method = "treatment-level cutpoints & placebo adjustment")
+results$pasi_re_rezt_ind_mu <- nma_results(pasi$re_rezt_ind_mu, label = "pasi", effects = "random", method = "treatment-level cutpoints & placebo adjustment")
+results$pasi_fe_rezi_ind_mu <- nma_results(pasi$fe_rezi_ind_mu, label = "pasi", effects = "fixed", method = "trial-level cutpoints & placebo adjustment")
+results$pasi_re_rezi_ind_mu <- nma_results(pasi$re_rezi_ind_mu, label = "pasi", effects = "random", method = "trial-level cutpoints & placebo adjustment")
 
+dlqi <- readRDS("C:/Users/p12916tc/Documents/Data/NMA/saved-results/htai-dlqi.rds")
+results$dlqi_fe_fez_ind_unadj <- nma_results(dlqi$fe_fez_ind_unadj, label = "dlqi", effects = "fixed", method = "fixed cutpoints")
+results$dlqi_re_fez_ind_unadj <- nma_results(dlqi$re_fez_ind_unadj, label = "dlqi", effects = "random", method = "fixed cutpoints")
+results$dlqi_fe_rezt_ind_unadj <- nma_results(dlqi$fe_rezt_ind_unadj, label = "dlqi", effects = "fixed", method = "treatment-level cutpoints")
+results$dlqi_re_rezt_ind_unadj <- nma_results(dlqi$re_rezt_ind_unadj, label = "dlqi", effects = "random", method = "treatment-level cutpoints")
+results$dlqi_fe_rezi_ind_unadj <- nma_results(dlqi$fe_rezi_ind_unadj, label = "dlqi", effects = "fixed", method = "trial-level cutpoints")
+results$dlqi_re_rezi_ind_unadj <- nma_results(dlqi$re_rezi_ind_unadj, label = "dlqi", effects = "random", method = "trial-level cutpoints")
+results$dlqi_fe_fez_ind_mu <- nma_results(dlqi$fe_fez_ind_mu, label = "dlqi", effects = "fixed", method = "fixed cutpoints & placebo adjustment")
+results$dlqi_re_fez_ind_mu <- nma_results(dlqi$re_fez_ind_mu, label = "dlqi", effects = "random", method = "fixed cutpoints & placebo adjustment")
+results$dlqi_fe_rezt_ind_mu <- nma_results(dlqi$fe_rezt_ind_mu, label = "dlqi", effects = "fixed", method = "treatment-level cutpoints & placebo adjustment")
+results$dlqi_re_rezt_ind_mu <- nma_results(dlqi$re_rezt_ind_mu, label = "dlqi", effects = "random", method = "treatment-level cutpoints & placebo adjustment")
+results$dlqi_fe_rezi_ind_mu <- nma_results(dlqi$fe_rezi_ind_mu, label = "dlqi", effects = "fixed", method = "trial-level cutpoints & placebo adjustment")
+results$dlqi_re_rezi_ind_mu <- nma_results(dlqi$re_rezi_ind_mu, label = "dlqi", effects = "random", method = "trial-level cutpoints & placebo adjustment")
 
-pmod <- pso_jags(pasi_jags, niter = 4000, effects = "random", cutpoints = "trial")
-results$pasi <- nma_results(pmod, effects = "random", method = "REZ(i)")
-
-
-
-compare_jags(j) |> writexl::write_xlsx("output/nma_all.xlsx")
-devplot(j$re_rez_u_nc_con, j$re_rez_u_nc_ume, output = "plot", xlab = "Inconsistency (UME) model", ylab = "Consistency model", filter = "Izokibep") +
-  coord_cartesian(xlim = c(0, 10), ylim = c(0, 10))
-devplot(j$re_rez_u_nc_con, j$re_rez_u_nc_ume, output = "table", filter= "Izokibep") |> View()
-ggsave("output/devdev.png", height = 7, width = 7)
-lapply(j, \(x) {process_jags(x)$DIC}) |> as.data.frame()
-
-j |>
-  lapply(\(x) {process_jags(x)$summary}) |>
-  bind_rows(.id = "id") |>
-  filter(!is.na(drug), ! drug %in% c("Phototherapy", "Mirikizumab", "Placebo",
-                                     "Izokibep")) |>
-  left_join(lookup, by = "drug") |>
-  mutate(drug = forcats::fct_reorder(drug, mean, .fun = base::mean)) |>
-  ggplot(aes(x = mean, y = drug, colour = id)) +
-  geom_pointrange(aes(xmin = `2.5%`, xmax = `97.5%`),
-                  position = position_dodge(width = 0.7), shape = 15,
-                  size = 0.1) +
-  scale_colour_viridis_d(option = "turbo") +
-  theme_minimal() +
-  theme(legend.position = "top") +
-  facet_wrap(~ class, scales = "free_y")
-ggsave("output/forest.png", height = 7, width = 10)
-
-drug_rank <- s$base$results |> 
-  filter(str_starts(param, "prob")) |> 
-  mutate(drug = pasi_drugs[as.numeric(str_extract(param, "(?<=,).*?(?=])"))]) |> 
-  slice_head(n = 1, by = drug) |> 
-  arrange(mean)
-
-s$base$results |> 
-  filter(str_starts(param, "prob")) |> 
-  mutate(
-    drug = factor(
-      pasi_drugs[as.numeric(str_extract(param, "(?<=,).*?(?=])"))],
-      levels = drug_rank$drug
-    ),
-    outcome = factor(
-      outcomes[as.numeric(str_extract(param, "(?<=\\[).*?(?=,)"))],
-      levels = c("pasi50", "pasi75", "pasi90", "pasi100"),
-      labels = c("PASI 50-75", "PASI 75-90", "PASI 90-100", "PASI 100")
-    )
-  ) |> 
-  arrange(drug, desc(outcome)) |> 
-  mutate(.by = drug, mean = mean - lag(mean, default = 0), .after = mean) |> 
-  mutate(outcome = forcats::fct_rev(outcome)) |> 
-  filter(drug %notin% c(
-    "Icotrokinra", "Mirikizumab", "Netakimab", "Orismilast", "Roflumilast", 
-    "Phototherapy", "Sonelokimab", "Tofacitinib", "Xeligekimab")
-  ) |> 
-  ggplot(aes(x = mean, y = drug)) +
-  geom_col(aes(fill = outcome), position = position_stack(reverse = TRUE)) +
-  theme_classic() +
-  scale_fill_viridis_d() +
-  theme(legend.position = "right", axis.title.y = element_blank(), legend.title = element_blank(),
-        plot.title = element_text(face = "bold")) +
-  labs(title = "Predicted PASI Response", x = "Proportion")
-ggsave("output/props.svg", height = 5, width = 6)
-
-## multinma ....................................................................
-# 
-# pasi_net <- set_agd_arm(
-#   filter(data, !if_all(pasi50:pasi100, \(x) is.na(x))),
-#   study = ref_id,
-#   trt = drug,
-#   r =  multi(r0 = n,
-#              pasi50, pasi75, pasi90, pasi100,
-#              inclusive = TRUE,
-#              type = "ordered")
-#   )
-# 
-# pasi_fit_fe <- nma(
-#   pasi_net,
-#   trt_effects = "fixed",
-#   link = "probit",
-#   prior_intercept = normal(scale = 100),
-#   prior_trt = normal(scale = 10),
-#   prior_aux = flat(),
-#   iter = 500,
-#   chains = 2
-# )
-# 
-# pasi_fit_fe_nodesplit <- nma(
-#   pasi_net,
-#   consistency = "nodesplit",
-#   trt_effects = "fixed",
-#   link = "probit",
-#   prior_intercept = normal(scale = 100),
-#   prior_trt = normal(scale = 10),
-#   prior_aux = flat(),
-#   iter = 500,
-#   chains = 2
-# )
-# 
-# pasi_fit_fe_ume <- nma(
-#   pasi_net,
-#   consistency = "ume",
-#   trt_effects = "fixed",
-#   link = "probit",
-#   prior_intercept = normal(scale = 100),
-#   prior_trt = normal(scale = 10),
-#   prior_aux = flat(),
-#   iter = 500,
-#   chains = 2
-# )
-# 
-# pasi_fit_fe_baseline <- nma(
-#   pasi_net,
-#   trt_effects = "fixed",
-#   regression = ~ .mu,
-#   link = "probit",
-#   prior_intercept = normal(scale = 100),
-#   prior_trt = normal(scale = 10),
-#   prior_aux = flat(),
-#   iter = niter
-# )
-# 
-# results$pasi_fe <- nma_results(
-#   pasi_fit_fe, 
-#   base_dist = beta_dist_metaprop(pasi_ref, "random")
-# )
-# 
-# results$pasi_fe_baseline <- nma_results(
-#   pasi_fit_fe,
-#   base_dist = beta_dist_metaprop(pasi_ref, "random"),
-#   method = "baseline adjusted"
-# )
-# 
-# 
-# # Random effects
-# pasi_fit_re <- nma(
-#   pasi_net,
-#   trt_effects = "random",
-#   link = "probit",
-#   prior_intercept = normal(scale = 100),
-#   prior_trt = normal(scale = 10),
-#   prior_aux = flat(),
-#   iter = niter
-# )
-# 
-# pasi_fit_re_baseline <- nma(
-#   pasi_net,
-#   trt_effects = "random",
-#   regression = ~ .mu:.trt,
-#   link = "probit",
-#   prior_intercept = normal(scale = 100),
-#   prior_trt = normal(scale = 10),
-#   prior_aux = flat(),
-#   iter = niter
-# )
-# 
-# results$pasi_re <- nma_results(
-#   pasi_fit_re, 
-#   beta_dist_metaprop(pasi_ref, "random")
-# )
-# 
-## DLQI response ---------------------------------------------------------------
-
-dlqi_ref <- metaprop(
-  event = dlqi_0_1,
-  n = n,
-  data = filter(data, drug == "Placebo", !is.na(dlqi_0_1)),
-  sm = "PLOGIT",
-  method = "Inverse",
-  method.incr = "all",
-  incr = 0.5
-)
-
-dlqi_net <- set_agd_arm(
-  filter(data, !if_all(dlqi_0_1:dlqi_0, \(x) is.na(x))),
-  study = ref_id,
-  trt = drug,
-  r =  multi(r0 = n,
-             dlqi_0_1, dlqi_0,
-             inclusive = TRUE,
-             type = "ordered")
-)
-
-dlqi_fit_fe <- nma(
-  dlqi_net,
-  trt_effects = "fixed",
-  link = "probit",
-  prior_intercept = normal(scale = 100),
-  prior_trt = normal(scale = 10),
-  prior_aux = flat(),
-  iter = niter
-)
-
-results$dlqi_fe <- nma_results(
-  dlqi_fit_fe, 
-  beta_dist_metaprop(dlqi_ref, "random")
-)
-
-dlqi_fit_re <- nma(
-  dlqi_net,
-  trt_effects = "random",
-  link = "probit",
-  prior_intercept = normal(scale = 100),
-  prior_trt = normal(scale = 10),
-  prior_aux = flat(),
-  iter = niter
-)
-
-results$dlqi_re <- nma_results(
-  dlqi_fit_re, 
-  beta_dist_metaprop(dlqi_ref, "random")
-)
 
 ## Absolute change in PASI -----------------------------------------------------
 
@@ -398,17 +207,23 @@ results$abs_dlqi_re <- nma_results(
 ## Binary outcomes -------------------------------------------------------------
 
 bin_outcomes <- c(
-  "pasi50", "pasi75", "pasi90", "pasi100", "sae", "disc_any", "disc_ae", 
-  "serious_infection", "injection_site_rxn", "malignancy"
+  "pasi50", "pasi75", "pasi90", "pasi100", "dlqi_0_1", "dlqi_0", "sae", 
+  "disc_any", "disc_ae", "serious_infection", "injection_site_rxn", "malignancy"
 )
+bin_outcomes <- c("dlqi_0_1", "dlqi_0")
 
 bin_fit_fe <- list()
 bin_fit_re <- list()
 
 for (i in 1:length(bin_outcomes)) {
   
+  df <- data |> 
+    group_by(ref_id) |> 
+    filter(all(!is.na(.data[[bin_outcomes[i]]]))) |> 
+    ungroup()
+  
   bin_net <- set_agd_arm(
-    filter(data, !is.na(.data[[bin_outcomes[i]]])),
+    df,
     study = ref_id,
     trt = drug,
     r = .data[[bin_outcomes[i]]],
@@ -637,27 +452,24 @@ for (k in 1:length(drugs)) {
 # Write results ================================================================
 con <- dbConnect(RSQLite::SQLite(), "pso-trial-explorer/psoriasis-rcts.sqlite")
 
-exc <- c("Izokibep", "Mirikizumab", "Phototherapy")
-
-model_info <- bind_rows(results) |> 
-  mutate(endpoint_group = if_else(likelihood == "multinomial" & 
-                              str_detect(endpoint, "pasi|dlqi"),
-                            substr(endpoint, 1, 4), endpoint)) |> 
-  distinct(endpoint_group, type, likelihood, method, effects, dic) |> 
-  arrange(type != "network", likelihood != "multinomial") |> 
-  mutate(ma_id = row_number())
-
-results_table <- bind_rows(results) |> 
-  filter(comp_tx %notin% exc, ref_tx %notin% exc) |> 
+results_df <- bind_rows(results) |> 
   mutate(endpoint_group = if_else(likelihood == "multinomial" & 
                                     str_detect(endpoint, "pasi|dlqi"),
                                   substr(endpoint, 1, 4), endpoint)) |> 
-  left_join(model_info, by = c("endpoint_group", "type", "likelihood", "method", "effects", "dic"),
-            relationship = "many-to-one") |> 
+  arrange(type != "network", likelihood != "multinomial") |> 
+  group_by(endpoint_group, type, likelihood, method, effects, dic) |> 
+  mutate(ma_id = cur_group_id()) |> ungroup()
+
+model_info <- results_df |> 
+  distinct(ma_id, .keep_all = TRUE) |> 
+  mutate(metareg = if_else(likelihood == "multinomial", coalesce(str_extract(method, "(?<= & ).*$"), "unadjusted"), "unadjusted"),
+         method = if_else(likelihood == "multinomial", coalesce(str_extract(method, "^.*(?= & )"), method), method))
+
+model_estimates <- results_df |> 
   select(-c(type, likelihood, method, effects, dic, endpoint_group))
 
 dbWriteTable(con, name = "ma_models", value = model_info, overwrite = TRUE)
-dbWriteTable(con, name = "ma_results", value = results_table, overwrite = TRUE)
+dbWriteTable(con, name = "ma_results", value = model_estimates, overwrite = TRUE)
 
 create_view_sql <- "
   CREATE VIEW v_meta_analysis AS
@@ -669,4 +481,4 @@ dbExecute(con, "DROP VIEW IF EXISTS v_meta_analysis")
 dbExecute(con, create_view_sql)
 
 dbDisconnect(con)
-save.image("R/meta-analyse/meta-analysis.RData")
+save.image("C:/Users/p12916tc/Documents/Data/NMA/saved-results/meta-analysis.RData")
