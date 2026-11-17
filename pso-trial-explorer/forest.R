@@ -117,7 +117,7 @@ pooled_group_heading <- function(type, heading_value) {
 # stays as plain as possible ("FE" alone, or "Class effects, FE" once method
 # is also ambiguous). The tooltip header always spells out every axis in
 # full, regardless of what's collapsed into the heading on-chart.
-pooled_row_meta <- function(type, effects, heading_value, row_axis_values) {
+pooled_row_meta <- function(type, effects, heading_value, row_axis_values, sub_value = NA) {
   eff_abbrev <- switch(effects, fixed = "FE", random = "RE",
                        toupper(substr(as.character(effects), 1, 2)))
   eff_word   <- switch(effects, fixed = "Fixed effects", random = "Random effects",
@@ -130,7 +130,7 @@ pooled_row_meta <- function(type, effects, heading_value, row_axis_values) {
 
   scope_lc <- switch(type, network = "network", pairwise = "pairwise",
                      univariate = "pooled", tolower(as.character(type)))
-  axis_words <- unlist(lapply(c(list(heading_value), row_axis_values), function(v) {
+  axis_words <- unlist(lapply(c(list(heading_value), row_axis_values, list(sub_value)), function(v) {
     if (is.null(v) || !length(v) || is.na(v)) NULL else tolower(axis_display_label(v))
   }), use.names = FALSE)
   phrase <- paste(c(axis_words, scope_lc, "estimate"), collapse = " ")
@@ -156,7 +156,8 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   POOLED_GAP       <- 14
   POOLED_H         <- 22
   POOLED_HEADING_H <- 20
-  AXIS_PAD         <- 28
+  POOLED_SUBHEADING_H <- 18
+  AXIS_PAD        <- 28
   AXIS_LABEL_H <- if (length(axis_label) || length(dir_left) || length(dir_right)) 50 else 0
   BOTTOM_PAD   <- 6
   LEFT_MARGIN  <- 220
@@ -176,9 +177,14 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
   # read "Binomial, Multinomial" — a fixed display convention, unlike the
   # row/toggle axes which prefer MA_AXIS_DEFAULT.
   ma_heading_col <- MA_AXIS_COLUMNS[1]
-  ma_row_cols    <- if (length(MA_AXIS_COLUMNS) > 1) MA_AXIS_COLUMNS[-1] else character(0)
+  # "metareg" is shown as a subheading inside each heading block rather than
+  # in the row labels.
+  ma_sub_col     <- intersect("metareg", MA_AXIS_COLUMNS)
+  ma_row_cols    <- setdiff(MA_AXIS_COLUMNS[-1], ma_sub_col)
   n_pooled_groups <- 0L
+  n_pooled_subs   <- 0L
   pooled_group_start <- logical(0)
+  pooled_sub_start   <- logical(0)
   if (n_pooled) {
     axis_sort_rank <- function(values, ordered_vals) {
       ifelse(is.na(values), 0L, match(values, ordered_vals))
@@ -189,7 +195,7 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
       unname(type_rank[pooled$type]),
       axis_sort_rank(pooled[[ma_heading_col]], heading_ordered)
     )
-    for (rc in ma_row_cols) {
+    for (rc in c(ma_sub_col, ma_row_cols)) {
       row_ordered <- order_axis_values(rc, pooled[[rc]][!is.na(pooled[[rc]])])
       sort_keys[[length(sort_keys) + 1L]] <- axis_sort_rank(pooled[[rc]], row_ordered)
     }
@@ -199,6 +205,12 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
     group_key <- paste(pooled$type, ifelse(is.na(pooled[[ma_heading_col]]), "", pooled[[ma_heading_col]]))
     pooled_group_start <- c(TRUE, group_key[-1] != group_key[-length(group_key)])
     n_pooled_groups <- sum(pooled_group_start)
+
+    sub_val <- if (length(ma_sub_col)) pooled[[ma_sub_col]] else rep(NA_character_, nrow(pooled))
+    sub_key <- paste(group_key, ifelse(is.na(sub_val), "", sub_val))
+    pooled_sub_start <- !is.na(sub_val) &
+      c(TRUE, sub_key[-1] != sub_key[-length(sub_key)])
+    n_pooled_subs <- sum(pooled_sub_start)
   }
 
   row_heights <- if (!is.null(rows$row_h))     rows$row_h     else rep(ROW_H, n_trials)
@@ -206,7 +218,8 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
 
   trials_body_h <- sum(row_heights) + sum(gaps_above)
   body_h    <- trials_body_h +
-    (if (n_pooled) POOLED_GAP + n_pooled_groups * POOLED_HEADING_H + n_pooled * POOLED_H else 0)
+    (if (n_pooled) POOLED_GAP + n_pooled_groups * POOLED_HEADING_H +
+       n_pooled_subs * POOLED_SUBHEADING_H + n_pooled * POOLED_H else 0)
   height    <- HEADER_PAD + body_h + AXIS_PAD + AXIS_LABEL_H + BOTTOM_PAD
 
   xlim  <- xlim %||% forest_xlimits(scale, rows, pooled)
@@ -338,6 +351,14 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
           LEFT_MARGIN - 10, y_run - POOLED_HEADING_H / 2 + 4,
           esc(pooled_group_heading(type_i, heading_i)))
       }
+      sub_i <- if (length(ma_sub_col)) pooled[[ma_sub_col]][i] else NA_character_
+      if (pooled_sub_start[i]) {
+        y_run <- y_run + POOLED_SUBHEADING_H
+        parts[length(parts) + 1L] <- sprintf(
+          '<text class="ma-pooled-subheading" x="%g" y="%g">%s</text>',
+          LEFT_MARGIN - 10, y_run - POOLED_SUBHEADING_H / 2 + 4,
+          esc(cap1(tolower(axis_display_label(sub_i)))))
+      }
       yc <- y_run + POOLED_H / 2
 
       xL_raw <- xfn(pooled$lo[i]); xR_raw <- xfn(pooled$hi[i])
@@ -349,7 +370,7 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
 
       row_axis_i <- setNames(lapply(ma_row_cols, function(col)
         if (!is.null(pooled[[col]])) pooled[[col]][i] else NA_character_), ma_row_cols)
-      meta   <- pooled_row_meta(type_i, effects_i, heading_i, row_axis_i)
+      meta   <- pooled_row_meta(type_i, effects_i, heading_i, row_axis_i, sub_i)
       klass    <- meta$klass
       kind_lbl <- meta$label
       pts    <- forest_diamond_points(xL, xE, xR, yc, 7)

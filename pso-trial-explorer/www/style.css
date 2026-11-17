@@ -266,6 +266,8 @@ table.dataTable tr.trial-band > td { background-color: #f3f5f8; }
 .ma-forest .ma-pooled-label { font-weight: 400; }
 .ma-forest .ma-pooled-heading { fill: #1a1f2c; font-size: 13px; font-weight: 700;
                                   text-anchor: end; }
+.ma-forest .ma-pooled-subheading { fill: #5a6478; font-size: 12px; font-weight: 600;
+                                     font-style: italic; text-anchor: end; }
 .ma-forest .ma-axislabel { fill: #1a1f2c; font-size: 12px;
                             text-anchor: middle; font-weight: 500; }
 .ma-forest .ma-dir       { fill: #5a6478; font-size: 11px;

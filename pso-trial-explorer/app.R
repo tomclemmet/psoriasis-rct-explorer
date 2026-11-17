@@ -944,11 +944,11 @@ HAS_TRIALS <- {
 # multinomial/normal/logit); `method` = effect-structure variant (standard/
 # class_effects/...), orthogonal to likelihood — see project memory:
 # meta-analysis-modelling-seam.
-MA_AXIS_COLUMNS <- c("likelihood", "method")
+MA_AXIS_COLUMNS <- c("likelihood", "metareg", "method")
 
 # Preferred value per axis when more than one is available and the caller
 # hasn't explicitly selected one yet (e.g. modal just opened).
-MA_AXIS_DEFAULT <- c(likelihood = "multinomial", method = "standard")
+MA_AXIS_DEFAULT <- list(likelihood = "multinomial", metareg = "unadjusted")
 
 # Optional friendly display names for axis values; anything absent here still
 # gets a readable label via title-casing.
@@ -1002,11 +1002,12 @@ restrict_axis_values <- function(col, all_vals, combos, selection) {
   keep <- rep(TRUE, nrow(combos))
   for (ec in earlier) {
     v <- selection[[ec]]
-    if (!is.null(v) && !is.na(v)) keep <- keep & (combos[[ec]] == v)
+    if (!is.null(v) && !is.na(v)) keep <- keep & (combos[[ec]] %in% v)
   }
   avail <- order_axis_values(col, combos[[col]][keep])
-  vals  <- intersect(all_vals, avail)
-  if (!length(vals)) all_vals else vals
+  # May be empty (e.g. metareg under a likelihood that has none): the toggle
+  # is then simply not shown.
+  intersect(all_vals, avail)
 }
 
 # Discover every distinct MA_AXIS_COLUMNS combination actually present for
@@ -1117,20 +1118,42 @@ build_forest_inputs <- function(state, tab_id, outcome, axis_selection = list())
     # axes actually have more than one value to choose from for this endpoint
     # — e.g. nothing today for most endpoints, "Multinomial" once likelihood
     # is ambiguous, "Multinomial, Class effects" once method is too.
-    st         <- axis_state(outcome$code, "network", axis_selection)
-    axis_args  <- axis_filter_args(st$active)
-    model_lbl  <- axis_summary_label(st$active, st$multi)
-    lbl_prefix <- if (!is.null(model_lbl)) paste0(model_lbl, " ") else ""
+    # Axes are resolved separately for FE and RE: the selected value is used
+    # where that effects type has it, otherwise the first one available, so
+    # e.g. a fixed-only "standard" method and random-only "trial"/"treatment"
+    # methods still both show.
+    st <- axis_state(outcome$code, "network", axis_selection)
 
-    df_re <- fetch_network_vs_placebo("random", axis_args)
+    resolve_for <- function(eff) {
+      sub <- fetch_ma_axis_combos(outcome$code, "network", MA_AXIS_COLUMNS, effects = eff)
+      res <- list()
+      for (col in MA_AXIS_COLUMNS) {
+        vals <- order_axis_values(col, sub[[col]])
+        res[[col]] <- pick_axis_value(vals, col, axis_selection[[col]]) %||% NA_character_
+        # Later axes only consider combinations matching the earlier picks
+        # (an NA pick, e.g. no metareg for binomial, matches NA rows).
+        sub <- sub[sub[[col]] %in% res[[col]], , drop = FALSE]
+      }
+      res
+    }
+    act_re <- resolve_for("random")
+    act_fe <- resolve_for("fixed")
+    prefix_for <- function(act) {
+      lbl <- axis_summary_label(act, st$multi)
+      if (!is.null(lbl)) paste0(lbl, " ") else ""
+    }
+    pre_re <- prefix_for(act_re)
+    pre_fe <- prefix_for(act_fe)
+
+    df_re <- fetch_network_vs_placebo("random", axis_filter_args(act_re))
     if (!nrow(df_re)) {
       return(list(empty_reason =
-        sprintf("No %srandom effects network model available for this endpoint.", lbl_prefix)))
+        sprintf("No %srandom effects network model available for this endpoint.", pre_re)))
     }
-    df_fe <- fetch_network_vs_placebo("fixed", axis_args)
+    df_fe <- fetch_network_vs_placebo("fixed", axis_filter_args(act_fe))
     if (!nrow(df_fe)) {
       return(list(empty_reason =
-        sprintf("No %sfixed effects network model available for this endpoint.", lbl_prefix)))
+        sprintf("No %sfixed effects network model available for this endpoint.", pre_fe)))
     }
 
     # Keep only drugs present in both models, sort best-first for response
@@ -1139,8 +1162,7 @@ build_forest_inputs <- function(state, tab_id, outcome, axis_selection = list())
     common <- intersect(df_re$comp_tx, df_fe$comp_tx)
     if (!length(common)) {
       return(list(empty_reason =
-        sprintf("No drug has both %sfixed and random effects network estimates for this endpoint.",
-                lbl_prefix)))
+        "No drug has both fixed and random effects network estimates for this endpoint."))
     }
     df_re  <- df_re[match(common, df_re$comp_tx), , drop = FALSE]
     df_fe  <- df_fe[match(common, df_fe$comp_tx), , drop = FALSE]
@@ -1154,11 +1176,11 @@ build_forest_inputs <- function(state, tab_id, outcome, axis_selection = list())
     DRUG_GAP <- 8L
     fe_gaps  <- c(0L, rep(DRUG_GAP, n_drugs - 1L))
     fe_tt <- mapply(function(drug, est, lo, hi, dic)
-      ma_tooltip(sprintf("%s — %snetwork estimate, fixed effects", drug, lbl_prefix), est, lo, hi,
+      ma_tooltip(sprintf("%s — %snetwork estimate, fixed effects", drug, pre_fe), est, lo, hi,
                  extra = dic_extra(dic), digits = 2),
       df_fe$comp_tx, df_fe$mean, df_fe$lower, df_fe$upper, df_fe$dic)
     re_tt <- mapply(function(drug, est, lo, hi, dic)
-      ma_tooltip(sprintf("%s — %snetwork estimate, random effects", drug, lbl_prefix), est, lo, hi,
+      ma_tooltip(sprintf("%s — %snetwork estimate, random effects", drug, pre_re), est, lo, hi,
                  extra = dic_extra(dic), digits = 2),
       df_re$comp_tx, df_re$mean, df_re$lower, df_re$upper, df_re$dic)
     rows <- data.frame(
@@ -1193,7 +1215,7 @@ build_forest_inputs <- function(state, tab_id, outcome, axis_selection = list())
                 axis_label = axis_label,
                 dir_left = dir_left, dir_right = dir_right,
                 n_drugs = n_drugs,
-                response_method = model_lbl))
+                response_method = axis_summary_label(act_re, st$multi)))
   }
 
   if (identical(state$kind, "edge")) {
@@ -2050,6 +2072,7 @@ server <- function(input, output, session) {
     div(class = "ma-method-toggle",
         lapply(toggles, function(col) {
           vals <- restrict_axis_values(col, choices[[col]], combos, sel)
+          if (length(vals) < 2) return(NULL)
           cur  <- sel[[col]]
           radioButtons(paste0("ma_axis_", col), label = NULL,
                        choices = setNames(vals, vapply(vals, axis_display_label, "")),
@@ -2100,6 +2123,16 @@ server <- function(input, output, session) {
     if (is.null(state)) {
       st             <- axis_state(outcome_codes, "network")
       axis_choices   <- st$values
+      # Only offer a toggle for an axis where FE or RE alone has a real
+      # choice. Values that each exist under just one effects type (e.g. a
+      # fixed-only and a random-only method) are both shown in the plot, so
+      # toggling between them would do nothing.
+      for (col in MA_AXIS_COLUMNS) {
+        real_choice <- any(vapply(c("fixed", "random"), function(eff) {
+          length(unique(fetch_ma_axis_combos(outcome_codes, "network", col, effects = eff)[[col]])) > 1
+        }, logical(1)))
+        if (!real_choice) axis_choices[col] <- list(NULL)
+      }
       axis_selection <- st$active
       axis_combos    <- fetch_ma_axis_combos(outcome_codes, "network", MA_AXIS_COLUMNS)
     } else {
