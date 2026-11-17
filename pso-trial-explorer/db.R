@@ -67,8 +67,12 @@ fetch_ma <- function(endpoint, type = NULL, effects = NULL,
   if (!is.null(measure)) { conds <- paste(conds, "AND measure = ?"); params <- c(params, list(measure)) }
   for (col in names(axes)) {
     stopifnot(col %in% MA_DISTINCT_COLUMNS)
-    conds  <- paste(conds, sprintf("AND %s = ?", col))
-    params <- c(params, list(axes[[col]]))
+    if (is.na(axes[[col]])) {
+      conds <- paste(conds, sprintf("AND %s IS NULL", col))
+    } else {
+      conds  <- paste(conds, sprintf("AND %s = ?", col))
+      params <- c(params, list(axes[[col]]))
+    }
   }
   read_db(sprintf("SELECT * FROM v_meta_analysis %s", conds), params = params)
 }
@@ -95,22 +99,22 @@ fetch_ma_directed <- function(endpoint, type, effects, comp, ref, measure, axes 
 # Columns treated as "which model produced this row" axes, dynamically
 # discoverable and filterable rather than hardcoded — see MA_AXIS_COLUMNS in
 # app.R and the project memory: meta-analysis-modelling-seam.
-MA_DISTINCT_COLUMNS <- c("method", "likelihood")
+MA_DISTINCT_COLUMNS <- c("method", "likelihood", "metareg")
 
 # Distinct combinations of several axis columns present for a set of
 # endpoints + a result type (one row per combination actually occurring in
 # the data, not the full cartesian product of each column's individual
 # values) — drives dynamic multi-axis discovery in app.R.
-fetch_ma_axis_combos <- function(endpoint, type, columns) {
+fetch_ma_axis_combos <- function(endpoint, type, columns, effects = NULL) {
   stopifnot(all(columns %in% MA_DISTINCT_COLUMNS))
   if (!HAS_MA) return(as.data.frame(setNames(rep(list(character()), length(columns)), columns)))
   in_list  <- paste(rep("?", length(endpoint)), collapse = ", ")
   cols_sql <- paste(columns, collapse = ", ")
   sql <- sprintf(
-    "SELECT DISTINCT %s FROM v_meta_analysis WHERE type = ? AND endpoint IN (%s)",
-    cols_sql, in_list
+    "SELECT DISTINCT %s FROM v_meta_analysis WHERE type = ? AND endpoint IN (%s)%s",
+    cols_sql, in_list, if (is.null(effects)) "" else " AND effects = ?"
   )
-  read_db(sql, params = c(list(type), as.list(endpoint)))
+  read_db(sql, params = c(list(type), as.list(endpoint), as.list(effects)))
 }
 
 coalesce0 <- function(x) ifelse(is.na(x), 0L, as.integer(x))
