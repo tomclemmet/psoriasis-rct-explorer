@@ -55,47 +55,46 @@ for (i in 1:nrow(settings)) {
   )
 }
 
-p <- lapply(m, jags_process)
+p <- lapply(m, process_jags)
 names(p) <- names
 saveRDS(p, "output/htai-pasi.rds")
 
-# p <- readRDS("C:/Users/p12916tc/Documents/Data/NMA/saved-results/htai.rds")
-# 
-# p2 <- lapply(p, \(x) {
-#   x$summary <- x$summary |> 
-#     mutate(
-#       label = case_when(
-#         param == "beta_timepoint[1]" ~ "beta_timepoint[placebo]",
-#         param == "beta_timepoint[2]" ~ "beta_timepoint[bio_il1223]",
-#         param == "beta_timepoint[3]" ~ "beta_timepoint[bio_il17]",
-#         param == "beta_timepoint[4]" ~ "beta_timepoint[bio_il23]",
-#         param == "beta_timepoint[5]" ~ "beta_timepoint[bio_tnf]",
-#         param == "beta_timepoint[6]" ~ "beta_timepoint[non-biologic]",
-#         .default = label
-#       )
-#     ) |> 
-#     filter(!str_starts(param, "beta_mu"), param != "B_timepoint")
-#   
-#   # x$results <- x$results |> 
-#   #   mutate(
-#   #     label = case_when(
-#   #       param == "beta_timepoint[1]" ~ "beta_timepoint[placebo]",
-#   #       param == "beta_timepoint[2]" ~ "beta_timepoint[bio_il1223]",
-#   #       param == "beta_timepoint[3]" ~ "beta_timepoint[bio_il17]",
-#   #       param == "beta_timepoint[4]" ~ "beta_timepoint[bio_il23]",
-#   #       param == "beta_timepoint[5]" ~ "beta_timepoint[bio_tnf]",
-#   #       param == "beta_timepoint[6]" ~ "beta_timepoint[non-biologic]",
-#   #       .default = "label"
-#   #     )
-#   #   ) |> 
-#   #   filter(!str_starts(param, "beta_mu"), param != "B_timepoint")
-#   x
-# })
-# compare_jags(p2) |> write.csv("output/htai.csv")
-# 
-# 
-# forests(p2)
-# ggsave("output/htai.png", height = 30, width = 10)
+p <- readRDS("C:/Users/p12916tc/Documents/Data/NMA/saved-results/htai-pasi.rds")
+
+p2 <- lapply(p, \(x) {
+  x$summary <- x$summary |>
+    mutate(
+      label = case_when(
+        param == "beta_timepoint[1]" ~ "beta_timepoint[placebo]",
+        param == "beta_timepoint[2]" ~ "beta_timepoint[bio_il1223]",
+        param == "beta_timepoint[3]" ~ "beta_timepoint[bio_il17]",
+        param == "beta_timepoint[4]" ~ "beta_timepoint[bio_il23]",
+        param == "beta_timepoint[5]" ~ "beta_timepoint[bio_tnf]",
+        param == "beta_timepoint[6]" ~ "beta_timepoint[non-biologic]",
+        .default = label
+      )
+    ) |>
+    filter(!str_starts(param, "beta_mu"), param != "B_timepoint")
+
+  # x$results <- x$results |>
+  #   mutate(
+  #     label = case_when(
+  #       param == "beta_timepoint[1]" ~ "beta_timepoint[placebo]",
+  #       param == "beta_timepoint[2]" ~ "beta_timepoint[bio_il1223]",
+  #       param == "beta_timepoint[3]" ~ "beta_timepoint[bio_il17]",
+  #       param == "beta_timepoint[4]" ~ "beta_timepoint[bio_il23]",
+  #       param == "beta_timepoint[5]" ~ "beta_timepoint[bio_tnf]",
+  #       param == "beta_timepoint[6]" ~ "beta_timepoint[non-biologic]",
+  #       .default = "label"
+  #     )
+  #   ) |>
+  #   filter(!str_starts(param, "beta_mu"), param != "B_timepoint")
+  x
+})
+compare_jags(p2) |> write.csv("output/htai-pasi.csv")
+
+forests(p2)
+ggsave("output/htai-pasi.png", height = 30, width = 10)
  
 source("R/utils/load-dlqi.R")
 
@@ -140,7 +139,28 @@ for (i in 1:nrow(settings)) {
   )
 }
 
-dp <- lapply(d, jags_process)
+dp <- lapply(d, process_jags)
 names(dp) <- names
 saveRDS(dp, "output/htai-dlqi.rds")
 
+dp <- readRDS("C:/Users/p12916tc/Documents/Data/NMA/saved-results/htai-dlqi.rds")
+
+dp2 <- lapply(dp, \(x) {
+  x$summary <- x$summary |>
+    mutate(
+      label = case_when(
+        param == "beta_timepoint[1]" ~ "beta_timepoint[placebo]",
+        param == "beta_timepoint[2]" ~ "beta_timepoint[bio_il1223]",
+        param == "beta_timepoint[3]" ~ "beta_timepoint[bio_il17]",
+        param == "beta_timepoint[4]" ~ "beta_timepoint[bio_il23]",
+        param == "beta_timepoint[5]" ~ "beta_timepoint[bio_tnf]",
+        param == "beta_timepoint[6]" ~ "beta_timepoint[non-biologic]",
+        .default = label
+      )
+    ) |>
+    filter(!str_starts(param, "beta_mu"), param != "B_timepoint")
+  x
+})
+compare_jags(dp2) |> write.csv("output/htai-dlqi.csv")
+forests(dp2)
+ggsave("output/htai-dlqi.png", height = 30, width = 10)
