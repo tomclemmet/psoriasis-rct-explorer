@@ -8,19 +8,23 @@ library(ggplot2)
 nma_results <- function(m, base_dist=NA, method = "standard", effects = NA, label=NA, t=NA, reft=NA) {
   
   results <- list()
-  thresholds <- c("pasi50", "pasi75", "pasi90", "pasi100")
+  if (label == "pasi") {
+    thresholds <- c("pasi50", "pasi75", "pasi90", "pasi100")
+  } else if (label == "dlqi") {
+    thresholds <- c("dlqi_0_1", "dlqi_0")
+  }
   
-  if (any(class(m) == "rjags")) {
+  if (any(class(m) == "jags_nma_fit")) {
     
-    dic <- process_jags(m)$DIC
+    dic <- m$DIC
     
     # Generate MCMC traces for response rates
-    rates <- process_jags(m)$trace |> 
+    rates <- m$trace |> 
       select(starts_with(c("prob", "."))) |> 
       # Convert to long format
       pivot_longer(starts_with("prob"), names_to = "param", values_to = "trace") |> 
       # Extract drug name
-      mutate(drug = pasi_id_lookup$drug[as.numeric(str_extract(param, pattern = "(?<=,\\s?)\\d+(?=\\])"))],
+      mutate(drug = id_lookup$drug[as.numeric(str_extract(param, pattern = "(?<=,\\s?)\\d+(?=\\])"))],
              endpoint = thresholds[as.numeric(str_extract(param, pattern = "(?<=prob\\[)\\d+(?=,)"))]) |> 
       suppressWarnings() 
     
