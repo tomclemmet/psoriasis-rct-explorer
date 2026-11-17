@@ -12,7 +12,7 @@ DERIVE_CHANGE_CORR <- 0.5  # assumed r(baseline, follow-up) for SD derivation
 
 # runApp() sets the working directory to this folder.
 DB_PATH <- "psoriasis-rcts.sqlite"
-if (!file.exists(DB_PATH)) stop("psoriasis-rcts.sqlite not found - run convert.R first.")
+if (!file.exists(DB_PATH)) stop("psoriasis-rcts.sqlite not found - run the database build script first.")
 
 source("db.R",     local = TRUE)
 source("forest.R", local = TRUE)
@@ -2183,15 +2183,19 @@ server <- function(input, output, session) {
                comparison by clicking an edge or node on the diagram, or entering 
                terms in the search box. Click anywhere in the diagram or delete 
                the search term to clear the current filter."),
+        
+        tags$p("View further details for each trial, including baseline characteristics,
+               risk of bias assessments reproduced from a Cochrane review, and 
+               references, by clicking on the trial name in the table."),
                
         tags$p("The meta-analysis button appears at the top right of the table and
                can be used to produce forest plots summarising the results of 
                meta-analyses of the data."),
         tags$ul(
           tags$li("If no filter is selected, the app will show a forest plot of 
-                network meta-analysis results for all treatments , with options 
+                network meta-analysis results for all treatments, with options 
                 to select different model types if available"),
-          tags$li("If a specific comparison has been selected, the app will show a
+          tags$li("If a specific intervention/comparison has been selected, the app will show a
                 forest plot with the results from each trial and the meta-analysis 
                 estimates")
         ),
@@ -2200,9 +2204,10 @@ server <- function(input, output, session) {
                Cochrane living systematic review (",
                tags$a("Sbidian et al., 2025", 
                       href = "https://doi.org/10.1002/14651858.CD011535.pub7",
-                      target = "_blank", rel = "noopener", .noWS = "after"),
+                      target = "_blank", rel = "noopener",
+                      .noWS = c("before", "after")),
                "). Trials were included in the network if they reported one of 
-               the outccomes of interest for one of the interventions of interest, 
+               the outcomes of interest for one of the interventions of interest, 
                as specified in the ",
                tags$a("PROSPERO protocol", 
                       href = "https://www.crd.york.ac.uk/PROSPERO/view/CRD420261306630",
@@ -2250,13 +2255,13 @@ server <- function(input, output, session) {
                                     tags$li("Brodalumab (210 mg Q2W)"),
                                     tags$li("Ixekizumab (80 mg Q2W then Q4W)"),
                                     tags$li("Secukinumab (300 mg Q2W/Q4W)"),
-                                    tags$li("Ixokibep (any dose - not yet approved)", tags$sup("**")),
-                                    tags$li("Netakimab (Ph III dose - not yet aproved)"),
+                                    tags$li("Izokibep (any dose - not yet approved)", tags$sup("**")),
+                                    tags$li("Netakimab (Ph III dose - not yet approved)"),
                                     tags$li("Sonelokimab (any dose - not yet approved)"),
                                     tags$li("Xeligekimab (Ph III dose - not yet approved)"))),
                     tags$li("IL 23 inhibitors",
                             tags$ul(tags$li("Guselkimab (100 mg Q8W)"),
-                                    tags$li("Risankizmab (150 mg Q12W)"),
+                                    tags$li("Risankizumab (150 mg Q12W)"),
                                     tags$li("Tildrakizumab (100/200 mg Q12W)"),
                                     tags$li("Icotrokinra (Ph III dose - not yet approved)")))
                   )
@@ -2300,8 +2305,24 @@ server <- function(input, output, session) {
         tags$p("Artificial intelligence tools were used to develop the
                interface of this app but not for the data extraction or to develop
                the statistical code used in the meta-analyses."),
+        tags$h4("Author"),
+        tags$p(class = "author-links",
+               "Developed by Thomas Clemmet, University of Manchester",
+               tags$br(),
+               tags$a(icon("orcid"), class = "author-orcid", title = "ORCID",
+                      `aria-label` = "ORCID",
+                      href = "https://orcid.org/0009-0009-4497-0926",
+                      target = "_blank", rel = "noopener"),
+               tags$a(icon("github"), class = "author-github", title = "GitHub",
+                      `aria-label` = "GitHub",
+                      href = "https://github.com/tomclemmet",
+                      target = "_blank", rel = "noopener"),
+               tags$a(icon("linkedin"), class = "author-linkedin",
+                      title = "LinkedIn", `aria-label` = "LinkedIn",
+                      href = "https://www.linkedin.com/in/thomasclemmet/",
+                      target = "_blank", rel = "noopener")),
         tags$h4("Contact"),
-        tags$p("If you have a question about the app or run into an problem, please
+        tags$p("If you have a question about the app or run into a problem, please
                 raise an issue on ",
                tags$a("GitHub",
                       href = "https://github.com/tomclemmet/psoriasis-rct-explorer",
