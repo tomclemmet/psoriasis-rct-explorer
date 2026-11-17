@@ -13,6 +13,7 @@ h1, h2, h3, h4, h5 { font-weight: 600; letter-spacing: -0.01em; }
    the bottom border runs edge-to-edge. */
 .title-bar {
   background: #ffffff;
+  border-top: 4px solid #660099;   /* University of Manchester purple */
   border-bottom: 1px solid #e3e6ea;
   padding: 10px 24px;
   margin: 0 -15px 12px -15px;
@@ -58,7 +59,7 @@ h1, h2, h3, h4, h5 { font-weight: 600; letter-spacing: -0.01em; }
 
 .title-actions { display: flex; align-items: center; gap: 8px; }
 .title-actions .btn { padding: 4px 12px; font-size: 13px; }
-#nma { background: #fafbfc; border: 1px solid #e3e6ea; border-radius: 6px; }
+#nma { background: #fafbfc; border-radius: 6px; }
 .endpoint-picker,
 .drug-search { margin: 0; padding: 6px 0; background: #ffffff;
                height: 46px; box-sizing: border-box; }
@@ -128,7 +129,6 @@ html, body { height: 100%; overflow: hidden; }
   background: #ffffff; padding: 9px 4px;
   min-height: 52px; box-sizing: border-box;
   font-size: 16px; font-weight: 500; color: #1a1f2c;
-  border-bottom: 1px solid #e3e6ea;
   display: flex; align-items: center; gap: 12px;
 }
 .view-summary-text { flex: 1 1 auto; min-width: 0; }
@@ -219,6 +219,28 @@ table.dataTable tr.trial-band > td { background-color: #f3f5f8; }
                            max-height: 70vh; overflow-y: auto; }
 .about-modal .modal-body h4 { margin-top: 18px; color: #1F4E8C; }
 .about-modal .modal-body h4:first-child { margin-top: 0; }
+/* Author profile links with brand icons. */
+/* Fixed-width, centred slots so the differently sized glyphs sit evenly. */
+.about-modal .author-links a { display: inline-block; width: 24px;
+                               margin-left: 4px; text-align: center;
+                               font-size: 18px; line-height: 1;
+                               vertical-align: middle;
+                               text-decoration: none; }
+.about-modal .author-links a:first-of-type { margin-left: 0; }
+.about-modal .author-links a:hover { opacity: 0.75; text-decoration: none; }
+.about-modal .author-links .author-orcid    { color: #A6CE39; }
+.about-modal .author-links .author-github   { color: #181717; }
+.about-modal .author-links .author-linkedin { color: #0A66C2; }
+/* Collapsible lists: draw our own chevron, since the native marker can be
+   suppressed by the surrounding styles. */
+.about-modal details > summary { list-style: none; cursor: pointer; }
+.about-modal details > summary::-webkit-details-marker { display: none; }
+.about-modal details > summary::before {
+  content: "\25B6"; display: inline-block; font-size: 11px; margin-right: 8px;
+  color: #1F4E8C; transition: transform 0.15s;
+}
+.about-modal details[open] > summary::before { transform: rotate(90deg); }
+.about-modal details > summary h5 { margin: 10px 0; }
 /* Meta-analysis modal: a touch wider than About for forest plots. */
 .ma-modal .modal-dialog { width: 92%; max-width: 1100px; }
 .ma-modal .modal-body { max-height: 75vh; overflow-y: auto;
@@ -266,7 +288,7 @@ table.dataTable tr.trial-band > td { background-color: #f3f5f8; }
 .ma-forest .ma-pooled-label { font-weight: 400; }
 .ma-forest .ma-pooled-heading { fill: #1a1f2c; font-size: 13px; font-weight: 700;
                                   text-anchor: end; }
-.ma-forest .ma-pooled-subheading { fill: #5a6478; font-size: 12px; font-weight: 600;
+.ma-forest .ma-pooled-subheading { fill: #1F4E8C; font-size: 13px; font-weight: 700;
                                      font-style: italic; text-anchor: end; }
 .ma-forest .ma-axislabel { fill: #1a1f2c; font-size: 12px;
                             text-anchor: middle; font-weight: 500; }
