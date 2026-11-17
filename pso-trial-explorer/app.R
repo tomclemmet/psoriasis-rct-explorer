@@ -4,16 +4,14 @@ suppressPackageStartupMessages({
   library(RSQLite)
   library(DT)
   library(visNetwork)
-  library(jsonlite)
-
 })
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
 DERIVE_CHANGE_CORR <- 0.5  # assumed r(baseline, follow-up) for SD derivation
 
-DB_PATH <- file.path(dirname(sys.frame(1)$ofile %||% "."), "psoriasis-rcts.sqlite")
-if (!file.exists(DB_PATH)) DB_PATH <- "pso-trial-explorer/psoriasis-rcts.sqlite"
+# runApp() sets the working directory to this folder.
+DB_PATH <- "psoriasis-rcts.sqlite"
 if (!file.exists(DB_PATH)) stop("psoriasis-rcts.sqlite not found - run convert.R first.")
 
 source("db.R",     local = TRUE)
@@ -72,12 +70,6 @@ MA_EXCLUDED_DRUGS <- c(
   "Phototherapy" = "it is not an approved or investigational systemic therapy for psoriasis"
 )
 
-# Drugs to hide entirely from the network diagram - no node, no edges, and
-# their trial arms don't count toward other drugs' patient/trial totals.
-# Unlike MA_EXCLUDED_DRUGS, these don't appear at all (not even as a node
-# you can click).
-NETWORK_EXCLUDED_DRUGS <- c()
-
 CLASS_ARC_ORDER <- c("il17", "il23", "il12_23", "tnf",
                      "targeted small molecule", "conventional")
 
@@ -132,7 +124,6 @@ lighten <- function(hex, amount = 0.45) {
 
 build_network_data <- function(td, ref_max_n = NA_real_) {
   td <- td[!is.na(td$drug) & nzchar(td$drug) & !is.na(td$trial), , drop = FALSE]
-  td <- td[!(td$drug %in% NETWORK_EXCLUDED_DRUGS), , drop = FALSE]
   # One row per (trial, arm) keeps the patient count from being multi-counted
   # if the same arm produced several rows in the source view.
   td <- unique(td[, c("trial", "ref_id", "arm_no", "drug", "n_arm"),
@@ -262,12 +253,6 @@ if (file.exists(ROB_PATH)) {
                     stringsAsFactors = FALSE)
   rob_by_trial <- split(.rob, .rob$Study)
 }
-
-# Pre-render one citations-HTML string per study_id at startup, then
-# attribute-escape it for embedding in data-citations="...". A trial
-# typically appears in dozens of rows (one per arm × timepoint), so doing
-# this per-row in fmt_trial() was the hot path slowing table renders.
-# Built lazily below once fmt_citations() is defined.
 
 # Reformat one author entry from "Griffiths,C.E." to "Griffiths CE".
 .fmt_one_author <- function(a) {
@@ -411,9 +396,10 @@ build_arm_header <- function(drug, dose_label) {
 # Fill in the change column when both baseline and follow-up are reported
 # but the study didn't report change directly. Returns the (possibly
 # updated) change vector and a logical flag per row marking derived cells.
-# Only the mean is derived: the SD of the difference depends on the
-# within-arm baseline/follow-up correlation, which is rarely reported, so
-# SDs of derived cells are left blank rather than guessed.
+# The mean is follow-up - baseline; the SD of the difference depends on the
+# within-arm baseline/follow-up correlation, which is rarely reported, so it
+# is approximated assuming DERIVE_CHANGE_CORR (and left NA when either SD is
+# missing).
 derive_change <- function(baseline, follow, change,
                           baseline_sd = NULL, follow_sd = NULL) {
   cd  <- rep(FALSE, length(change))
@@ -431,9 +417,9 @@ derive_change <- function(baseline, follow, change,
   list(change = change, change_derived = cd, change_sd_derived = csd)
 }
 
-# fmt_mean_sd, but derived cells are rendered without an SD (we don't have
-# one) and tagged with a trailing asterisk so the table caption can explain
-# them. Non-derived cells render exactly as fmt_mean_sd would.
+# fmt_mean_sd, but derived cells use the derived SD (when there is one) and
+# are tagged with a trailing asterisk so the table caption can explain them.
+# Non-derived cells render exactly as fmt_mean_sd would.
 fmt_mean_sd_marked <- function(mean, sd, derived, derived_sd = NULL, digits = 1) {
   sd_eff <- sd
   if (!is.null(derived_sd)) {
@@ -803,8 +789,7 @@ for (.tid in names(endpoint_groups)) {
   group_td[[.tid]] <- list()
   for (.gid in names(endpoint_groups[[.tid]]$groups)) {
     .grp <- endpoint_groups[[.tid]]$groups[[.gid]]
-    .raw <- read_db(sprintf("SELECT * FROM %s", .grp$table))
-    group_td[[.tid]][[.gid]] <- group_survivors[[.tid]][[.gid]](.raw)
+    group_td[[.tid]][[.gid]] <- group_survivors[[.tid]][[.gid]](VIEW_DATA[[.grp$table]])
   }
 }
 
@@ -866,27 +851,23 @@ for (.tid in names(endpoint_groups)) {
   }
 }
 
-# Preserved for downstream lookups (filter-state click handlers, etc.).
-nodes_df <- master_network$nodes
-edges_df <- master_network$edges
-
 # Typeahead choices for the drug/comparison search box (one instance per
 # tab, see ui()): single drugs from the master network's nodes, head-to-head
 # comparisons from its edges. Values are prefixed so the server can tell
 # which kind was picked without re-parsing drug names.
-search_choices <- list(
-  Drug = setNames(paste0("node::", nodes_df$id), nodes_df$id),
+search_choices <- with(master_network, list(
+  Drug = setNames(paste0("node::", nodes$id), nodes$id),
   Comparison = setNames(
-    paste0("edge::", edges_df$from, "__", edges_df$to),
-    paste(edges_df$from, "vs", edges_df$to)
+    paste0("edge::", edges$from, "__", edges$to),
+    paste(edges$from, "vs", edges$to)
   )
-)
+))
 
 # ---------------------------------------------------------------------------
 # Meta-analysis catalogue. Maps each (tab_id, group_id) in `endpoint_groups`
-# to the precomputed MA outcomes drawn in the modal. `scale` controls the
-# x-axis treatment ("rr" = log scale, ref line at 1; "md" = linear, ref 0;
-# "prop" = 0..1, no ref line). `label` is the plot title.
+# to the precomputed MA outcomes drawn in the modal. `label` is the plot
+# title. The x-axis scale is chosen in build_forest_inputs() ("md" = linear,
+# ref line at 0; "prop" = 0..1, no ref line).
 # ---------------------------------------------------------------------------
 ma_catalog <- list(
   pasi = list(
@@ -926,16 +907,6 @@ ma_catalog <- list(
     )
   )
 )
-
-# Whether there's anything at all to show in the meta-analysis modal --
-# v_trial_estimates is the minimum (built by trial-estimates.R, right after
-# convert.R). HAS_MA (db.R) tracks the separate, slower meta-analysis step
-# and gates only the pooled diamonds, not the modal itself.
-HAS_TRIALS <- {
-  con <- dbConnect(SQLite(), DB_PATH, flags = SQLITE_RO)
-  on.exit(dbDisconnect(con), add = TRUE)
-  "v_trial_estimates" %in% dbListTables(con)
-}
 
 # Columns in meta_analysis/v_meta_analysis treated as independent,
 # discoverable "which model produced this row" axes. A new value written into
@@ -1066,11 +1037,10 @@ pooled_diamonds <- function(endpoint, type, fetch_one) {
     for (eff in c("fixed", "random")) {
       r <- fetch_one(type, eff, axes)
       if (is.null(r)) next
-      kind <- paste(c(type, unlist(axes, use.names = FALSE), eff), collapse = "-")
-      row <- data.frame(kind = kind, est = r$mean, lo = r$lower, hi = r$upper, dic = r$dic,
+      row <- data.frame(est = r$mean, lo = r$lower, hi = r$upper, dic = r$dic,
                         type = type, effects = eff, stringsAsFactors = FALSE)
       for (col in MA_AXIS_COLUMNS) row[[col]] <- if (multi[[col]]) axes[[col]] else NA_character_
-      out[[kind]] <- row
+      out[[length(out) + 1L]] <- row
     }
   }
   out
@@ -1325,8 +1295,8 @@ build_forest_inputs <- function(state, tab_id, outcome, axis_selection = list())
       dir_left  <- sprintf("← favours %s", ref)
       dir_right <- sprintf("favours %s →", comp)
     } else {
-      # Continuous: lower CFB difference favours comp (less change = better?
-      # Actually lower PASI/DLQI is better so more negative diff_cfb favours comp).
+      # Continuous: lower PASI/DLQI is better, so a more negative difference
+      # in change from baseline favours comp.
       dir_left  <- sprintf("← favours %s", comp)
       dir_right <- sprintf("favours %s →", ref)
     }
@@ -1569,12 +1539,6 @@ ui <- fluidPage(
       if (mq.addEventListener) mq.addEventListener('change', sync);
       else mq.addListener(sync);
       window.addEventListener('load', sync);
-      // Belt-and-braces: some devtools/CDP-driven viewport changes (device
-      // toolbars, automated resizing) reflow CSS media queries live but
-      // don't reliably dispatch a resize or matchMedia 'change' event. A
-      // cheap poll guarantees this self-corrects within half a second
-      // regardless of whether the browser fired anything.
-      setInterval(sync, 400);
     })();
   "))),
   tags$head(
@@ -1586,10 +1550,11 @@ ui <- fluidPage(
               href = paste0("https://fonts.googleapis.com/css2?",
                             "family=Inter:wght@400;500;600;700&display=swap"))
   ),
-  tags$head(tags$link(rel = "stylesheet", href = "style.css")),
+  tags$head(tags$link(rel = "stylesheet", href = paste0("style.css?v=", as.integer(file.mtime("www/style.css")))
+  )),
   div(class = "title-bar",
       div(class = "title-heading",
-          titlePanel("Psoriasis Clinical Trial Explorer (working version 0.1.1)")),
+          titlePanel("Psoriasis Clinical Trial Explorer")),
       div(class = "title-actions",
           downloadButton("download_db", "Download data",
                          class = "btn btn-default"),
@@ -1777,10 +1742,10 @@ server <- function(input, output, session) {
         # Drop DT's default `stripe` class — banding is applied per-trial in
         # rowCallback below, not per-row.
         class     = "row-border hover order-column",
-        escape    = -1,  # Only the Trial column (col 1) contains HTML (an
-                        # <a href="https://doi.org/..."> link when a DOI is
-                        # known); fmt_trial() escapes the visible trial name
-                        # itself. Every other column stays escaped.
+        escape    = -1,  # Only the Trial column (col 1) contains HTML (the
+                        # .trial-pop link that opens the trial modal);
+                        # fmt_trial() escapes the visible trial name itself.
+                        # Every other column stays escaped.
         options  = list(
           pageLength = 25,
           autoWidth  = FALSE,
@@ -1907,7 +1872,7 @@ server <- function(input, output, session) {
   # Edge click -> head-to-head pair filter
   observeEvent(input$nma_edge, {
     req(input$nma_edge)
-    e <- edges_df[edges_df$id == input$nma_edge, , drop = FALSE]
+    e <- master_network$edges[master_network$edges$id == input$nma_edge, , drop = FALSE]
     if (!nrow(e)) return()
     filter_state(list(kind = "edge", from = e$from[1], to = e$to[1]))
   })
@@ -1931,19 +1896,24 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE)
 
   # Meta-analysis modal. All forest plots are rendered as plain inline SVG
-  # at modal-open time -- no Shiny output bindings, no ggplot, no ggiraph.
-  # No-filter view shows a network meta-analysis vs Placebo with a
-  # user-controlled FE/RE switch; edge/node views still draw both FE and RE
-  # diamonds together (no switch).
+  # (see forest_svg()). The no-filter view shows network estimates vs
+  # Placebo, FE and RE per drug, with toggles for any model axis (likelihood,
+  # metareg, method) that has more than one value; edge/node views draw every
+  # available model as its own pooled diamond.
   ma_ctx <- reactiveValues(active = FALSE, tab_id = NULL, state = NULL,
-                           gid = NULL, outcomes = NULL, state_lbl = NULL,
-                           group_lbl = NULL, axis_choices = list(),
+                           gid = NULL, outcomes = NULL, axis_choices = list(),
                            axis_selection = list(), axis_combos = NULL)
 
-  # Fetch forest-plot inputs for one outcome under the active state.
+  # Fetch forest-plot inputs for one outcome under the active state. Errors
+  # are logged and shown in the plot block rather than masquerading as
+  # missing data.
   fetch_plot_inputs <- function(state, tab_id, outc, axis_selection = list()) {
     tryCatch(build_forest_inputs(state, tab_id, outc, axis_selection),
-            error = function(e) NULL)
+             error = function(e) {
+               warning(sprintf("Forest plot for %s failed: %s", outc$code, conditionMessage(e)),
+                       call. = FALSE)
+               list(empty_reason = paste("Error building this plot:", conditionMessage(e)))
+             })
   }
 
   # Render one already-fetched outcome's plot block. `xlim`, when supplied,
@@ -1958,7 +1928,8 @@ server <- function(input, output, session) {
                  div(class = "ma-empty",
                      "No meta-analysable data for this comparison.")))
     }
-    # Sparse-network sentinel from the no-filter NMA branch.
+    # Explanation for an empty plot (no model available, excluded drug, or an
+    # error caught in fetch_plot_inputs()).
     if (!is.null(inputs$empty_reason)) {
       return(div(class = "ma-plot-block",
                  div(class = "ma-plot-title", outc$label),
@@ -2011,7 +1982,10 @@ server <- function(input, output, session) {
     forest_xlimits(scales[1], combined_rows, combined_pooled)
   }
 
-  # Reactively rendered plot area. Driven by ma_ctx (set on modal open).
+  # Reactively rendered plot area. Driven by ma_ctx (set on modal open). The
+  # db is read-only, so the rendered plots depend only on the cache key and
+  # are cached app-wide: reopening a modal or flipping back to a previously
+  # seen axis selection is instant, for every user session.
   output$ma_plot_area <- renderUI({
     req(ma_ctx$active, ma_ctx$tab_id, ma_ctx$gid, ma_ctx$outcomes)
     tab_id         <- ma_ctx$tab_id
@@ -2023,7 +1997,13 @@ server <- function(input, output, session) {
     shared_xlim <- group_shared_xlim(all_inputs)
     Map(function(outc, inputs) render_plot_block(outc, inputs, xlim = shared_xlim),
        outcomes, all_inputs)
-  })
+  }) |>
+    bindCache({
+      req(ma_ctx$active, ma_ctx$tab_id, ma_ctx$gid)
+      sel <- ma_ctx$axis_selection
+      list(ma_ctx$tab_id, ma_ctx$gid, ma_ctx$state,
+           if (length(sel)) sel[order(names(sel))] else list())
+    }, cache = "app")
 
   # One observer per potential axis toggle input (MA_AXIS_COLUMNS is small and
   # fixed at startup, so static `paste0("ma_axis_", column)` input ids are
@@ -2091,7 +2071,7 @@ server <- function(input, output, session) {
         title = tagList(modal_close_x(), "Meta-analysis"), easyClose = TRUE,
         footer = NULL, class = "ma-modal",
         tags$p("No precomputed trial-estimate tables found. Run ",
-               tags$code("Rscript R/meta-analyse/trial-estimates.R"),
+               tags$code("Rscript R/convert/trial-estimates.R"),
                " after ", tags$code("convert.R"),
                " to build them, then reload the app.")
       ))
@@ -2108,18 +2088,21 @@ server <- function(input, output, session) {
       return(invisible(NULL))
     }
 
+    outcome_codes <- vapply(outcomes, `[[`, "", "code")
+    node_measure  <- if (all(grepl("^abs_", outcome_codes))) "change from baseline"
+                     else if (identical(tab_id, "safety")) "event rate"
+                     else "response rate"
     state_lbl <- if (is.null(state)) "Network meta-analysis vs Placebo"
                  else if (identical(state$kind, "edge"))
                    sprintf("%s vs %s", state$from, state$to)
                  else if (identical(state$kind, "node"))
-                   sprintf("Pooled response rate, %s", state$drug)
+                   sprintf("Univariate %s, %s", node_measure, state$drug)
                  else "All drugs"
     group_lbl <- endpoint_groups[[tab_id]]$groups[[gid]]$label %||% gid
 
     # Axis toggle(s): only meaningful for the no-filter (network-vs-Placebo)
     # view — edge/node views already show every available combination as its
     # own diamond (see pooled_diamonds()), so there's nothing to pick there.
-    outcome_codes <- vapply(outcomes, `[[`, "", "code")
     if (is.null(state)) {
       st             <- axis_state(outcome_codes, "network")
       axis_choices   <- st$values
@@ -2146,8 +2129,6 @@ server <- function(input, output, session) {
     ma_ctx$state          <- state
     ma_ctx$gid            <- gid
     ma_ctx$outcomes       <- outcomes
-    ma_ctx$state_lbl      <- state_lbl
-    ma_ctx$group_lbl      <- group_lbl
     ma_ctx$axis_choices   <- axis_choices
     ma_ctx$axis_selection <- axis_selection
     ma_ctx$axis_combos    <- axis_combos
@@ -2186,45 +2167,148 @@ server <- function(input, output, session) {
       class = "about-modal",
       tags$div(
         tags$h4("Overview"),
-        tags$p("This app can be used to explore the results from randomised 
-               controlled trials in psoriasis. Data for psoriasis area and
-               severity index (PASI), Dermatology Life Quality Index (DLQI),
-               and safety are included. Use the network diagram on the left
-               to choose the drug or the comparison you are interested in and
-               the tables will update automatically."),
-        tags$h4("Study selection"),
-        tags$p("The studies reported in this app were identified as 
-               randomised controlled trials for systemic treatments for
-               moderate-to-severe psoriasis by a Cochrane living review ",
-               tags$a("(Sbidian et al., 2025)", 
+        tags$p("This R shiny app can be used to explore the results from randomised 
+               controlled trials of systemic therapies for psoriasis and view the
+               results of meta-analyses of these data."),
+               
+        tags$p("The network diagram summarises the evidence contained in the app. 
+               The size of each node represents the pooled sample size across 
+               trials, and the width of each edge represents the number of times 
+               that a pair of interventions have been compared. Use the tabs and 
+               the dropdown menu to select an outcome and the diagram will update
+               automatically."),
+               
+        tags$p("The table displays trial results, with one row for each trial arm. 
+               Filter the information displayed to a specific intervention or 
+               comparison by clicking an edge or node on the diagram, or entering 
+               terms in the search box. Click anywhere in the diagram or delete 
+               the search term to clear the current filter."),
+               
+        tags$p("The meta-analysis button appears at the top right of the table and
+               can be used to produce forest plots summarising the results of 
+               meta-analyses of the data."),
+        tags$ul(
+          tags$li("If no filter is selected, the app will show a forest plot of 
+                network meta-analysis results for all treatments , with options 
+                to select different model types if available"),
+          tags$li("If a specific comparison has been selected, the app will show a
+                forest plot with the results from each trial and the meta-analysis 
+                estimates")
+        ),
+        tags$h4("Data"),
+        tags$p("Potentially relevant clinical trials were identified using a
+               Cochrane living systematic review (",
+               tags$a("Sbidian et al., 2025", 
                       href = "https://doi.org/10.1002/14651858.CD011535.pub7",
                       target = "_blank", rel = "noopener", .noWS = "after"),
-               ". "),
-        tags$h4("Data extraction"),
-        tags$p("Data were extracted from the identified studies by a single
-               researcher. The data is stored in a sqlite database, which can
-               be downloaded. For full details of the data extraction, see 
-               the full protocol on ",
-               tags$a("PROSPERO", 
+               "). Trials were included in the network if they reported one of 
+               the outccomes of interest for one of the interventions of interest, 
+               as specified in the ",
+               tags$a("PROSPERO protocol", 
                       href = "https://www.crd.york.ac.uk/PROSPERO/view/CRD420261306630",
                       target = "_blank", rel = "noopener", .noWS = "after"),
-               "."
-               ),
-        tags$h4("Network diagram"),
-        tags$p("The network diagram shows the drugs and comparisons available
-               for the selected endpoints. Nodes are sized according to sample 
-               size; edges are sized according to number of trials."),
-        tags$h4("Use of AI"),
-        tags$p("Artificial intelligence tools were used to develop the
-               interface of this app, but not for the data extraction or for
-               the statistical code used in the meta-analyses."),
-        tags$h4("Contact"),
-        tags$p("If you have a question about the app, please raise an issue 
-               on the ",
+               ". The data used to inform this app can be downloaded as a .sqlite
+               file using the button in the top right."),
+        tags$details(
+          tags$summary(tags$h5("Outcomes of interest", style = "display: inline-block; cursor: pointer;")),
+          tags$p("Only data from randomised comparisons at the end of the induction 
+               period (8-24 weeks) were included."),
+          tags$ul(
+            tags$li("PASI 50/75/90/100 response"),
+            tags$li("Absolute PASI"),
+            tags$li("DLQI 0/1 or DLQI 0 response"),
+            tags$li("Absolute DLQI"),
+            tags$li("Discontinuation (due to AE or any reason)"),
+            tags$li("Adverse events (serious AEs, serious infections, malignancies, and injection site reactions")
+          )
+        ),
+        tags$details(
+          tags$summary(tags$h5("Interventions of interest", style = "display: inline-block; cursor: pointer;")),
+        tags$ul(
+          tags$li("Conventional systemic therapies",
+                  tags$ul(tags$li("Acitretin (25-75 mg QD)", tags$sup("*")),
+                          tags$li("Fumaric acid esters (maximum 720 mg QD)"),
+                          tags$li("Ciclosporin (2.5-5 mg/kg/day)"),
+                          tags$li("Methotrexate (7.5-25 g QW)"))),
+          tags$li("Targeted small-molecule therapies",
+                  tags$ul(tags$li("Apremilast (30 mg BID)"),
+                          tags$li("Deucravacitinib (6 mg QD)"),
+                          tags$li("Orismilast (any dose - not yet approved)"),
+                          tags$li("Roflumilast (any dose - not yet approved)"),
+                          tags$li("Zasocitinib (Ph III dose - not yet approved)"))),
+          tags$li("Biologic therapies",
+                  tags$ul(
+                    tags$li("TNF inhibitors",
+                            tags$ul(tags$li("Adalimumab (40 mg Q2W)"),
+                                    tags$li("Certolizumab (200 mg Q2W)"),
+                                    tags$li("Etanercept (25-50 mg QW)"),
+                                    tags$li("Infliximab (5 mg/kg IV Q8W or 120 mg SC Q2W)"))),
+                    tags$li("Il 12/23 inhibitors",
+                            tags$ul(tags$li("Ustekinumab (45/90 mg Q12W)"))),
+                    tags$li("IL 17 inhibitors",
+                            tags$ul(tags$li("Bimekizumab (320 mg Q4W then Q8W)"),
+                                    tags$li("Brodalumab (210 mg Q2W)"),
+                                    tags$li("Ixekizumab (80 mg Q2W then Q4W)"),
+                                    tags$li("Secukinumab (300 mg Q2W/Q4W)"),
+                                    tags$li("Ixokibep (any dose - not yet approved)", tags$sup("**")),
+                                    tags$li("Netakimab (Ph III dose - not yet aproved)"),
+                                    tags$li("Sonelokimab (any dose - not yet approved)"),
+                                    tags$li("Xeligekimab (Ph III dose - not yet approved)"))),
+                    tags$li("IL 23 inhibitors",
+                            tags$ul(tags$li("Guselkimab (100 mg Q8W)"),
+                                    tags$li("Risankizmab (150 mg Q12W)"),
+                                    tags$li("Tildrakizumab (100/200 mg Q12W)"),
+                                    tags$li("Icotrokinra (Ph III dose - not yet approved)")))
+                  )
+          ),
+        ),
+        tags$p(tags$sup("*"), " No acitretin trials were eligible for inclusion 
+                                in the analysis"),
+        tags$p(tags$sup("**"), " One relevant izokibep trial was identified, but did 
+                                 not include sufficient data for efficacy 
+                                 estimates to converge, so was not included in this analysis")
+        
+        ),
+        
+        tags$h4("Methods"),
+        tags$p("Binary outcomes are presented in the app as absolute probabilities
+               or risk differences, and continuous outcomes are presented as changes
+               from baseline. Several different types of meta-analysis are included:",
+               tags$ul(
+                 tags$li("Univariate estimates synthesise outcomes for one intervention
+                         across trials without considering comparisons"),
+                 tags$li("Pairwise estimates synthesise outcomes for one comparison
+                         across trials"),
+                 tags$li("Network estimates synthesise outcomes using the whole 
+                         network of comparisons. For ordinal outcomes like PASI 
+                         50/75/90/100 there are two main approaches:",
+                         tags$ul(tags$li("Binomial estimates taking each level of 
+                                         response separately"),
+                                 tags$li("Multinomial estimates incorporating data
+                                         for all levels of response in a single model. 
+                                         These are also reported with 
+                                         and without adjustment for placebo response and with
+                                         different cutpoint parametrisations.")))
+               )),
+        tags$p("Analysis was conducted in R using the R2jags, multinma, and meta packages. 
+               For further details see the ",
                tags$a("GitHub repository", 
                       href = "https://github.com/tomclemmet/psoriasis-rct-explorer",
                       target = "_blank", rel = "noopener", .noWS = "after"), 
-               ".")
+               "."),
+        tags$h4("Use of AI"),
+        tags$p("Artificial intelligence tools were used to develop the
+               interface of this app but not for the data extraction or to develop
+               the statistical code used in the meta-analyses."),
+        tags$h4("Contact"),
+        tags$p("If you have a question about the app or run into an problem, please
+                raise an issue on ",
+               tags$a("GitHub",
+                      href = "https://github.com/tomclemmet/psoriasis-rct-explorer",
+                      target = "_blank", rel = "noopener", .noWS = "after"),
+               "."),
+        tags$h4("Version"),
+        tags$p("Version 1.0, 17 November 2026")
       )
     ))
   })

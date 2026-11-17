@@ -15,11 +15,10 @@ ma_tooltip <- function(label, est, lo, hi, extra = NULL, digits = 2) {
   paste(parts, collapse = "\n")
 }
 
+# `scale` is "md" (linear, reference line at 0) or "prop" (0..1, no
+# reference line).
 forest_ticks <- function(scale, xmin, xmax) {
-  if (identical(scale, "rr")) {
-    candidates <- c(0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100)
-    candidates[candidates >= xmin & candidates <= xmax]
-  } else if (identical(scale, "prop")) {
+  if (identical(scale, "prop")) {
     span <- xmax - xmin
     step <- if      (span <= 0.10) 0.02
             else if (span <= 0.20) 0.05
@@ -36,38 +35,20 @@ forest_ticks <- function(scale, xmin, xmax) {
 }
 
 forest_tick_label <- function(scale, v) {
-  if (identical(scale, "rr"))    sub("\\.0$", "", formatC(v, format = "g"))
-  else if (identical(scale, "prop")) sprintf("%g", v)
-  else                            formatC(v, format = "g")
+  if (identical(scale, "prop")) sprintf("%g", v)
+  else                          formatC(v, format = "g")
 }
 
-forest_xscale <- function(scale, xmin, xmax, plot_left, plot_w) {
-  if (identical(scale, "rr")) {
-    lmin <- log10(xmin); lmax <- log10(xmax)
-    function(x) plot_left + (log10(pmax(x, xmin / 10)) - lmin) /
-                            (lmax - lmin) * plot_w
-  } else {
-    function(x) plot_left + (x - xmin) / (xmax - xmin) * plot_w
-  }
+forest_xscale <- function(xmin, xmax, plot_left, plot_w) {
+  function(x) plot_left + (x - xmin) / (xmax - xmin) * plot_w
 }
 
 forest_xlimits <- function(scale, rows, pooled) {
   vals <- c(rows$lo, rows$hi)
   if (!is.null(pooled) && nrow(pooled)) vals <- c(vals, pooled$lo, pooled$hi)
   vals <- vals[is.finite(vals)]
-  if (!length(vals)) return(switch(scale, rr = c(0.1, 10), prop = c(0, 1),
-                                   c(-1, 1)))
-  if (identical(scale, "rr")) {
-    candidates <- c(0.01, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200)
-    lo <- min(vals, 1); hi <- max(vals, 1)
-    lr  <- log10(hi) - log10(lo)
-    pad <- max(lr * 0.05, 0.05)
-    lo  <- 10 ^ (log10(lo) - pad)
-    hi  <- 10 ^ (log10(hi) + pad)
-    lo <- max(candidates[candidates <= lo], 0.01)
-    hi <- min(candidates[candidates >= hi], 200)
-    c(lo, hi)
-  } else if (identical(scale, "prop")) {
+  if (!length(vals)) return(if (identical(scale, "prop")) c(0, 1) else c(-1, 1))
+  if (identical(scale, "prop")) {
     hi_data <- max(vals)
     if (hi_data <= 0.5) {
       pad <- max(hi_data * 0.10, 0.02)
@@ -104,8 +85,8 @@ cap1 <- function(s) { substr(s, 1, 1) <- toupper(substr(s, 1, 1)); s }
 # estimates").
 pooled_group_heading <- function(type, heading_value) {
   scope_lc <- switch(type, network = "network", pairwise = "pairwise",
-                     univariate = "pooled", tolower(as.character(type)))
-  prefix <- if (!is.null(heading_value) && !is.na(heading_value))
+                     univariate = "univariate", tolower(as.character(type)))
+  prefix <-if (!is.null(heading_value) && !is.na(heading_value))
     paste0(tolower(axis_display_label(heading_value)), " ") else ""
   cap1(sprintf("%s%s estimates", prefix, scope_lc))
 }
@@ -129,7 +110,7 @@ pooled_row_meta <- function(type, effects, heading_value, row_axis_values, sub_v
   label <- paste(c(row_words, eff_abbrev), collapse = ", ")
 
   scope_lc <- switch(type, network = "network", pairwise = "pairwise",
-                     univariate = "pooled", tolower(as.character(type)))
+                     univariate = "univariate", tolower(as.character(type)))
   axis_words <- unlist(lapply(c(list(heading_value), row_axis_values, list(sub_value)), function(v) {
     if (is.null(v) || !length(v) || is.na(v)) NULL else tolower(axis_display_label(v))
   }), use.names = FALSE)
@@ -142,7 +123,7 @@ pooled_row_meta <- function(type, effects, heading_value, row_axis_values, sub_v
   )
 }
 
-forest_svg <- function(rows, pooled, scale = "rr", width = 880,
+forest_svg <- function(rows, pooled, scale = "md", width = 880,
                        axis_label = NULL, dir_left = NULL, dir_right = NULL,
                        xlim = NULL) {
   esc <- function(x) htmltools::htmlEscape(x, attribute = FALSE)
@@ -224,10 +205,10 @@ forest_svg <- function(rows, pooled, scale = "rr", width = 880,
 
   xlim  <- xlim %||% forest_xlimits(scale, rows, pooled)
   xmin  <- xlim[1]; xmax <- xlim[2]
-  xfn   <- forest_xscale(scale, xmin, xmax, PLOT_LEFT, PLOT_W)
+  xfn   <- forest_xscale(xmin, xmax, PLOT_LEFT, PLOT_W)
   ticks <- forest_ticks(scale, xmin, xmax)
 
-  ref_line <- switch(scale, rr = 1, md = 0, prop = NA_real_)
+  ref_line <- if (identical(scale, "prop")) NA_real_ else 0
   plot_bottom <- HEADER_PAD + body_h
   plot_top    <- HEADER_PAD - 4
 
