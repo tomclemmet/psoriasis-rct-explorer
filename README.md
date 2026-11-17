@@ -1,33 +1,20 @@
 # Psoriasis RCT Explorer
 
-An R/Shiny app for browsing extracted psoriasis-RCT data (PASI, DLQI, safety
-outcomes) and its meta-analysis results, over a SQLite database built from a
-source Access file.
+Repository for a network meta-analysis project in psoriasis, including R and JAGS code used to analyse data and an interactive R shiny app to present the results, available at [shiny.its.manchester.ac.uk/pso-trial-explorer/](https://shiny.its.manchester.ac.uk/pso-trial-explorer/). Trial results and meta-analysis estimates are stored in a sqlite database that is queried by the Shiny app. For further details see the about section of the Shiny app.
 
 ## Layout
 
 ```
 .
-├── pso-trial-explorer/             the Shiny app (app.R) and the sqlite db it reads
-├── R/
-│   ├── convert/      RevPal.accdb -> pso-trial-explorer/psoriasis-rcts.sqlite
-│   ├── checks/        ad-hoc data-quality checks against the sqlite
-│   └── meta-analyse/  fits the meta-analysis models, writes results into the sqlite
-├── JAGS/            JAGS model definitions used by R/meta-analyse
-└── claude.md        conventions for working in this repo
+├───pso-trial-explorer/            The R shiny app containing data extraction from trials and meta-analysis results
+├───JAGS/                          JAGS code used in the multinomial network meta-analyses
+└───R/
+    ├───analysis/                  Meta-analysis code
+    │   ├───bivariate/             Bivariate network meta-analysis code (in development)
+    │   └───metaregression/        Meta-regression analyses
+    ├───convert/                   Code to process raw data into the correct format for the Shiny app
+    ├───data-checks/               Checks for the data extraction
+    └───utils/                     Helper functions for data processing, plots, and model fitting
 ```
 
-`RevPal.accdb` and `pso-trial-explorer/psoriasis-rcts.sqlite` are git-ignored — supply your
-own copy of the Access database and regenerate the sqlite file locally.
 
-## Running
-
-All scripts assume they're run from the project root.
-
-```powershell
-Rscript R/convert/convert.R        # (re)build pso-trial-explorer/psoriasis-rcts.sqlite from RevPal.accdb
-Rscript -e "shiny::runApp('app')"  # launch the app
-```
-
-The meta-analysis scripts in `R/meta-analyse/` are run manually and
-separately, writing their results back into the same sqlite file.
